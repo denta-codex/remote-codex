@@ -1,0 +1,7 @@
+all:
+  hosts:
+    grace-agent:
+      ansible_connection: local
+      expected_hostname: grace
+      expected_user: agent
+      remote_codex_phone: motorola-razr-ultra-2025-2.taila198f.ts.net

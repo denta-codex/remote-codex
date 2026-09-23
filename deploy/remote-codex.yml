@@ -1,0 +1,126 @@
+---
+- name: Remote Codex preview, deployment, or phone delivery
+  hosts: all
+  gather_facts: false
+  vars:
+    repo: "{{ playbook_dir | dirname }}"
+    remote_codex_action: preview
+    secret_dir: /home/agent/.local/share/remote-codex
+    route_host: grace.taila198f.ts.net:443
+  tasks:
+    - name: Validate selected action
+      ansible.builtin.assert:
+        that: remote_codex_action in ['preview', 'deploy', 'deliver']
+    - name: Verify executing identity
+      ansible.builtin.command: id -un
+      register: identity
+      changed_when: false
+      check_mode: false
+    - name: Verify host
+      ansible.builtin.command: hostname
+      register: host
+      changed_when: false
+      check_mode: false
+    - name: Refuse unintended endpoint
+      ansible.builtin.assert:
+        that:
+          - identity.stdout == expected_user
+          - host.stdout == expected_hostname
+    - name: Describe exact requested action
+      ansible.builtin.debug:
+        msg: "{{ remote_codex_action }}: Grace loopback 127.0.0.1:8787, persistent private Serve, phone {{ remote_codex_phone }}. Preview performs no deployment."
+    - name: Validate prepared release checksums
+      ansible.builtin.command:
+        argv: [sha256sum, --check, SHA256SUMS]
+        chdir: "{{ repo }}/dist"
+      changed_when: false
+      check_mode: false
+      when: remote_codex_action != 'preview'
+    - name: Deploy forwarder and persistent private route
+      when: remote_codex_action == 'deploy'
+      block:
+        - name: Read existing Serve configuration
+          ansible.builtin.command: tailscale serve status --json
+          register: serve
+          changed_when: false
+          check_mode: false
+        - name: Preserve unrelated Serve routes and refuse replacing an existing root
+          ansible.builtin.assert:
+            that:
+              - "(serve.stdout | from_json).get('Web', {}).get(route_host, {}).get('Handlers', {}).get('/', {}) in [{}, {'Proxy': 'http://127.0.0.1:8787'}]"
+              - "'/codex' not in (serve.stdout | from_json).get('Web', {}).get(route_host, {}).get('Handlers', {})"
+              - "'/codex/rpc' not in (serve.stdout | from_json).get('Web', {}).get(route_host, {}).get('Handlers', {})"
+        - name: Prepare owned service and workspace directories
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            mode: '0700'
+          loop:
+            - /home/agent/.local/libexec
+            - /home/agent/.config/systemd/user
+            - "{{ secret_dir }}"
+            - /home/agent/Documents/RemoteCodex
+        - name: Provision connection credential only if absent
+          ansible.builtin.shell: |
+            umask 077
+            openssl rand -hex 32 > "{{ secret_dir }}/connection-token"
+          args:
+            creates: "{{ secret_dir }}/connection-token"
+          no_log: true
+        - name: Install validated forwarder
+          ansible.builtin.copy:
+            src: "{{ repo }}/dist/remote-codex-forwarder"
+            dest: /home/agent/.local/libexec/remote-codex-forwarder
+            mode: '0700'
+          notify: Restart forwarder
+        - name: Install user service
+          ansible.builtin.template:
+            src: remote-codex-forwarder.service.j2
+            dest: /home/agent/.config/systemd/user/remote-codex-forwarder.service
+            mode: '0600'
+          notify: Restart forwarder
+        - name: Enable forwarder
+          when: not ansible_check_mode
+          ansible.builtin.systemd_service:
+            name: remote-codex-forwarder.service
+            scope: user
+            enabled: true
+            state: started
+            daemon_reload: true
+        - name: Flush service restart before verification
+          when: not ansible_check_mode
+          ansible.builtin.meta: flush_handlers
+        - name: Verify unauthenticated connection is rejected
+          ansible.builtin.uri:
+            url: http://127.0.0.1:8787/codex/rpc
+            status_code: 401
+          when: not ansible_check_mode
+        - name: Configure persistent Tailscale Serve without resetting other routes
+          ansible.builtin.command:
+            argv: [tailscale, serve, --bg, --https=443, --set-path=/, 'http://127.0.0.1:8787']
+          when: (serve.stdout | from_json).get('Web', {}).get(route_host, {}).get('Handlers', {}).get('/', {}).get('Proxy', '') != 'http://127.0.0.1:8787'
+        - name: Confirm service persistence prerequisite
+          ansible.builtin.command: loginctl show-user agent --property=Linger --value
+          register: linger
+          changed_when: false
+          check_mode: false
+        - name: Require lingering for unattended service startup
+          ansible.builtin.assert:
+            that: linger.stdout == 'yes'
+            fail_msg: Enable user lingering for agent before claiming reboot persistence.
+    - name: Deliver prepared APK to the explicit phone
+      ansible.builtin.command:
+        argv: [tailscale, file, cp, "{{ repo }}/dist/remote-codex-0.1.0.apk", "{{ remote_codex_phone }}:"]
+      when: remote_codex_action == 'deliver'
+    - name: Report delivery honestly
+      ansible.builtin.debug:
+        msg: Delivered; awaiting Android installation confirmation.
+      when: remote_codex_action == 'deliver' and not ansible_check_mode
+  handlers:
+    - name: Restart forwarder
+      when: not ansible_check_mode
+      ansible.builtin.systemd_service:
+        name: remote-codex-forwarder.service
+        scope: user
+        daemon_reload: true
+        state: restarted

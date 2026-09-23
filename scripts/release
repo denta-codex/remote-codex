@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+scripts/check
+export JAVA_HOME="${JAVA_HOME:-$(mise where java@temurin-17.0.20+8)}"
+export ANDROID_HOME="${ANDROID_HOME:-/home/agent/Android/Sdk}"
+export PATH="$JAVA_HOME/bin:$PATH"
+signing_dir="${REMOTE_CODEX_SIGNING_DIR:-/home/agent/.local/share/remote-codex/signing}"
+export REMOTE_CODEX_KEYSTORE="$signing_dir/release.p12"
+export REMOTE_CODEX_STORE_PASSWORD="$(cat "$signing_dir/password")"
+android/gradlew -p android --no-daemon :app:assembleRelease :app:lintRelease
+unset REMOTE_CODEX_STORE_PASSWORD
+apk=android/app/build/outputs/apk/release/app-release.apk
+signer="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+actual="$($signer verify --print-certs "$apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
+expected="$(cat docs/signing-certificate.sha256)"
+[[ "$actual" == "$expected" ]] || { echo 'Unexpected signing certificate' >&2; exit 1; }
+badging="$("$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$apk")"
+[[ "$badging" == *"package: name='dev.codexops.client'"* ]] || { echo 'Unexpected package identity' >&2; exit 1; }
+if [[ "$badging" == *application-debuggable* ]]; then echo 'Release is debuggable' >&2; exit 1; fi
+mkdir -p dist
+cp "$apk" dist/remote-codex-0.1.0.apk
+(cd forwarder && go build -trimpath -o ../dist/remote-codex-forwarder ./cmd/forwarder)
+(cd dist && sha256sum remote-codex-0.1.0.apk remote-codex-forwarder > SHA256SUMS)
+echo 'Signed APK and forwarder ready in dist/. Nothing deployed or delivered.'

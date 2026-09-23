@@ -1,0 +1,1 @@
+<resources><style name="Theme.RemoteCodex" parent="android:style/Theme.Material.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:windowLightStatusBar">false</item><item name="android:colorAccent">#B6F568</item></style></resources>

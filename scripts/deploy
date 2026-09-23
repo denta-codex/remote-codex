@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+exec mise exec pipx:ansible-core@2.21.4 -- ansible-playbook deploy/remote-codex.yml "$@"

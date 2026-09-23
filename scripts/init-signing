@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# One durable identity for this new package. Existing files are never replaced.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+export JAVA_HOME="${JAVA_HOME:-$(mise where java@temurin-17.0.20+8)}"
+signing_dir="${REMOTE_CODEX_SIGNING_DIR:-/home/agent/.local/share/remote-codex/signing}"
+umask 077
+mkdir -p "$signing_dir"
+if [[ -e "$signing_dir/release.p12" || -e "$signing_dir/password" ]]; then
+  echo 'Signing material already exists; refusing to regenerate.' >&2; exit 1
+fi
+openssl rand -hex 32 > "$signing_dir/password"
+export REMOTE_CODEX_STORE_PASSWORD="$(cat "$signing_dir/password")"
+"$JAVA_HOME/bin/keytool" -genkeypair -keystore "$signing_dir/release.p12" -storetype PKCS12 -alias remote-codex -keyalg RSA -keysize 3072 -validity 10000 -dname 'CN=Remote Codex Personal Release' -storepass:env REMOTE_CODEX_STORE_PASSWORD >/dev/null
+"$JAVA_HOME/bin/keytool" -exportcert -keystore "$signing_dir/release.p12" -alias remote-codex -storepass:env REMOTE_CODEX_STORE_PASSWORD | openssl dgst -sha256 -r | cut -d' ' -f1 > docs/signing-certificate.sha256
+unset REMOTE_CODEX_STORE_PASSWORD
+echo 'Durable signing identity created outside the repository; public fingerprint recorded.'

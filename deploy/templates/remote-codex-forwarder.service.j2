@@ -1,0 +1,20 @@
+[Unit]
+Description=Remote Codex authenticated loopback forwarder
+After=network.target
+
+[Service]
+ExecStart=/home/agent/.local/libexec/remote-codex-forwarder
+Environment=CODEX_SOCKET=/home/agent/.codex/app-server-control/app-server-control.sock
+Environment=REMOTE_CODEX_LISTEN=127.0.0.1:8787
+Environment=REMOTE_CODEX_TOKEN_FILE=/home/agent/.local/share/remote-codex/connection-token
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=default.target
