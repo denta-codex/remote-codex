@@ -1,5 +1,27 @@
 # Validation
 
+## September 24, 2026 — project workspace/worktree execution selection
+
+- Added a workspace selector that appears only after the existing
+  `NewTaskOptions` contract contains a selected project/root. Current workspace
+  execution retains that root; isolated execution creates a detached worktree
+  from local `origin/HEAD` under the connected account's Codex home.
+- Added pure JVM coverage for destination planning, invalid selections, selected
+  `project/read` validation, detached Git argv, exact worktree reconciliation, and
+  the narrower projectless sandbox policy.
+- Ten fixture-backed Android tests passed on this worktree's disposable Android 16
+  emulator. New cases cover current-checkout and worktree RPC wiring, plus
+  deliberately lost `git worktree add` and `thread/start` responses. Reconnect
+  observed the deterministic registered worktree/task, did not repeat either
+  creation, and proceeded to one input submission. The credential-gated live
+  connection test remained skipped as designed.
+- `scripts/check` passed, including Go race/vet and isolated stock lifecycle tests,
+  Kotlin/JVM tests, Android debug build, lint, and instrumentation APK assembly.
+- No live deployment, physical-phone delivery, or worktree cleanup was performed.
+  Project browsing remains an integration dependency of the separate Projects
+  feature; it must populate `projectId` and an absolute selected root in
+  `workingDirectory`.
+
 ## September 23, 2026 — 0.1.3 live Android connection fix
 
 - Razr 0.1.2 remained disconnected after the shutdown fix. Credential-free HTTPS

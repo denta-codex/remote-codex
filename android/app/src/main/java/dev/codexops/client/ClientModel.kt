@@ -25,6 +25,7 @@ constructor(
         GraceHost.copy(endpoint = endpoint, expectedCodexHome = expectedHome)
     private val local: ClientStore = LocalStore(app)
     private val rpc: RemoteSession = StockRemoteSession(allowLoopbackTest)
+    private val workspaces = StockWorkspaceAdapter(rpc)
     private val timeline = Timeline()
     private val _state = MutableStateFlow(ScreenState(host = host))
     val state = _state.asStateFlow()
@@ -364,7 +365,18 @@ constructor(
     }
 
     override fun updateNewTaskOptions(options: NewTaskOptions) {
-        _state.update { it.copy(newTaskOptions = options) }
+        val normalized =
+            when {
+                options.projectId == null ->
+                    options.copy(
+                        workingDirectory = null,
+                        executionTarget = ExecutionTarget.Projectless,
+                    )
+                options.executionTarget == ExecutionTarget.Projectless ->
+                    options.copy(executionTarget = ExecutionTarget.CurrentWorkspace)
+                else -> options
+            }
+        _state.update { it.copy(newTaskOptions = normalized) }
     }
 
     override fun older() {
@@ -404,148 +416,393 @@ constructor(
 
     override fun send() {
         val before = _state.value
-        if (!before.ready || before.busy || before.draft.isBlank() || before.journal != null) return
+        if (
+            !before.ready ||
+                before.busy ||
+                before.draft.isBlank() ||
+                before.journal != null ||
+                before.thread == null && !before.newTaskOptions.hasExecutionDestination()
+        )
+            return
+        val operation = UUID.randomUUID().toString()
+        val plan =
+            if (before.thread == null)
+                try {
+                    WorkspacePlans.create(before.newTaskOptions, operation, host.expectedCodexHome)
+                } catch (e: IllegalArgumentException) {
+                    _state.update { it.copy(error = e.message ?: "Choose a workspace") }
+                    return
+                }
+            else null
         _state.update { it.copy(busy = true, error = null) }
         viewModelScope.launch {
             val originalKey = before.thread ?: "new"
-            val operation = UUID.randomUUID().toString()
-            var journal =
+            val journal =
                 obj(
                     "operation" to s(operation),
                     "text" to s(before.draft),
-                    "stage" to s("preparing"),
-                    "cwd" to s("/home/agent/Documents/RemoteCodex/$operation"),
+                    "stage" to s(if (plan == null) "taskReady" else "validatingWorkspace"),
+                    "cwd" to plan?.workingDirectory?.let(::s),
+                    "sourceCwd" to plan?.sourceDirectory?.let(::s),
+                    "worktreeRoot" to plan?.worktreeRoot?.let(::s),
+                    "executionTarget" to plan?.target?.name?.let(::s),
+                    "projectId" to plan?.projectId?.let(::s),
                     "threadId" to before.thread?.let(::s),
                 )
-            var key = originalKey
-            suspend fun record(stage: String) {
-                journal = JsonObject(journal + ("stage" to s(stage)))
-                local.put("journal/$key", journal.toString())
-                _state.update { it.copy(journal = journal) }
-            }
-            try {
-                record("preparing")
-                var id = before.thread
-                if (id == null) {
-                    val mkdir =
-                        rpc.call(
-                            "command/exec",
-                            obj(
-                                "command" to
-                                    JsonArray(
-                                        listOf(
-                                            s("mkdir"),
-                                            s("-p"),
-                                            s("-m"),
-                                            s("0700"),
-                                            s("--"),
-                                            s(journal.str("cwd")),
-                                        )
-                                    ),
-                                "cwd" to s("/home/agent/Documents/RemoteCodex"),
-                                "sandboxPolicy" to
-                                    obj(
-                                        "type" to s("workspaceWrite"),
-                                        "writableRoots" to
-                                            JsonArray(
-                                                listOf(s("/home/agent/Documents/RemoteCodex"))
-                                            ),
-                                        "networkAccess" to JsonPrimitive(false),
-                                    ),
-                                "timeoutMs" to JsonPrimitive(10000),
-                                "outputBytesCap" to JsonPrimitive(2048),
-                            ),
-                        )
-                    check(mkdir.str("exitCode") == "0") {
-                        "Could not prepare the conversation directory"
+            local.put("journal/$originalKey", journal.toString())
+            _state.update { it.copy(journal = journal) }
+            executeSubmission(journal, originalKey, before.activeTurn)
+        }
+    }
+
+    private suspend fun executeSubmission(
+        initialJournal: JsonObject,
+        initialKey: String,
+        expectedTurn: String? = null,
+    ) {
+        var journal = initialJournal
+        var key = initialKey
+        suspend fun record(stage: String, vararg values: Pair<String, JsonElement>) {
+            journal =
+                JsonObject(
+                    journal.filterKeys { it !in setOf("failure", "uncertain") } +
+                        values.toMap() +
+                        ("stage" to s(stage))
+                )
+            local.put("journal/$key", journal.toString())
+            _state.update { it.copy(journal = journal, error = null) }
+        }
+        suspend fun failure(message: String, uncertain: Boolean) {
+            journal =
+                JsonObject(
+                    journal +
+                        ("failure" to s(message)) +
+                        ("uncertain" to JsonPrimitive(uncertain))
+                )
+            local.put("journal/$key", journal.toString())
+            _state.update { it.copy(journal = journal, error = message) }
+        }
+
+        try {
+            var stage = journal.str("stage")
+            var id = journal.str("threadId").ifEmpty { null }
+            if (id == null && stage == "validatingWorkspace") {
+                val target = ExecutionTarget.valueOf(journal.str("executionTarget"))
+                val plan = journal.toWorkspacePlan(target)
+                if (target != ExecutionTarget.Projectless) workspaces.validateSelectedProject(plan)
+                when (target) {
+                    ExecutionTarget.Projectless -> {
+                        record("creatingDirectory")
+                        workspaces.createProjectlessDirectory(journal.str("cwd"))
+                        record("workspaceReady")
                     }
-                    record("creating")
-                    val result =
-                        rpc.call(
-                            "thread/start",
-                            obj(
-                                "cwd" to s(journal.str("cwd")),
-                                "historyMode" to s("paginated"),
-                                "ephemeral" to JsonPrimitive(false),
-                                "threadSource" to s("agent_created_thread"),
-                                "projectId" to JsonNull,
-                            ),
-                        )
-                    id = result.map("thread").str("id")
-                    check(id.isNotEmpty())
-                    check(result.map("thread").str("projectId").isEmpty()) {
-                        "Unexpected project assignment; no message sent"
+                    ExecutionTarget.CurrentWorkspace -> record("workspaceReady")
+                    ExecutionTarget.NewWorktree -> {
+                        val commit = workspaces.resolveDefaultCommit(journal.str("sourceCwd"))
+                        record("creatingWorktreeRoot", "commit" to s(commit))
+                        workspaces.createDirectory(journal.str("worktreeRoot"))
+                        record("worktreeRootReady")
                     }
-                    journal = JsonObject(journal + ("threadId" to s(id)))
-                    // Persist the known ID under the original key before moving the record.
-                    local.put("journal/new", journal.toString())
-                    key = id
-                    local.put("journal/$key", journal.toString())
-                    local.put("draft/$key", before.draft)
-                    local.remove("journal/new")
-                    local.remove("draft/new")
-                    _state.update { it.copy(thread = id, title = before.draft.take(80)) }
                 }
+                stage = journal.str("stage")
+            }
+            if (id == null && stage == "worktreeRootReady") {
+                record("creatingWorktree")
+                workspaces.createDetachedWorktree(
+                    journal.str("sourceCwd"),
+                    journal.str("cwd"),
+                    journal.str("commit"),
+                )
+                record("workspaceReady")
+                stage = journal.str("stage")
+            }
+            if (id == null && stage == "workspaceReady") {
+                record("creatingTask")
+                val projectId = journal.str("projectId").ifEmpty { null }
+                val result =
+                    rpc.call(
+                        "thread/start",
+                        obj(
+                            "cwd" to s(journal.str("cwd")),
+                            "historyMode" to s("paginated"),
+                            "ephemeral" to JsonPrimitive(false),
+                            "threadSource" to s("agent_created_thread"),
+                            "projectId" to (projectId?.let(::s) ?: JsonNull),
+                        ),
+                    )
+                val thread = result.map("thread")
+                val createdId = thread.str("id")
+                if (createdId.isEmpty())
+                    throw WorkspaceSetupFailure("The task response did not include an ID", true)
+                id = createdId
+                if (thread.str("projectId").ifEmpty { null } != projectId) {
+                    throw WorkspaceSetupFailure(
+                        "The task did not retain the selected project; no message was sent"
+                    )
+                }
+                journal =
+                    JsonObject(
+                        journal.filterKeys { it !in setOf("failure", "uncertain") } +
+                            ("threadId" to s(id)) +
+                            ("stage" to s("taskReady"))
+                    )
+                // Save the authoritative ID before moving the journal to its task key.
+                local.put("journal/$key", journal.toString())
+                key = id
+                local.put("journal/$key", journal.toString())
+                local.put("draft/$key", journal.str("text"))
+                local.remove("journal/new")
+                local.remove("draft/new")
+                _state.update {
+                    it.copy(
+                        thread = id,
+                        title = journal.str("text").take(80),
+                        journal = journal,
+                    )
+                }
+                stage = "taskReady"
+            }
+            if (id != null && stage == "taskReady") {
                 record("sending")
-                val input = JsonArray(listOf(obj("type" to s("text"), "text" to s(before.draft))))
+                val input =
+                    JsonArray(listOf(obj("type" to s("text"), "text" to s(journal.str("text")))))
                 rpc.call(
-                    if (before.activeTurn == null) "turn/start" else "turn/steer",
+                    if (expectedTurn == null) "turn/start" else "turn/steer",
                     obj(
                         "threadId" to s(id),
                         "input" to input,
-                        "clientUserMessageId" to s(operation),
-                        "expectedTurnId" to before.activeTurn?.let(::s),
+                        "clientUserMessageId" to s(journal.str("operation")),
+                        "expectedTurnId" to expectedTurn?.let(::s),
                     ),
                 )
                 record("accepted")
                 local.remove("journal/$key")
                 local.remove("draft/$key")
-                _state.update { it.copy(draft = "", journal = null) }
-                // Refresh only after acceptance; a failed history read must never become a resend.
-                if (timeline.values().isEmpty()) _state.update { it.copy(error = null) }
-            } catch (e: Exception) {
-                if (e is RpcRejected) {
-                    local.remove("journal/$key")
-                    _state.update {
-                        it.copy(
-                            journal = null,
-                            error = "Server rejected the operation: ${e.message}",
-                        )
-                    }
-                } else {
-                    _state.update {
-                        it.copy(
-                            error = "Delivery uncertain. Inspect the task before sending again.",
-                            journal = journal,
-                        )
-                    }
-                }
-            } finally {
-                _state.update { it.copy(busy = false) }
-                if (foreground && !_state.value.ready) connect()
+                _state.update { it.copy(draft = "", journal = null, error = null) }
             }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: WorkspaceSetupFailure) {
+            if (journal.str("stage") == "validatingWorkspace" && !e.uncertain) {
+                local.remove("journal/$key")
+                _state.update { it.copy(journal = null, error = e.userMessage) }
+            } else failure(e.userMessage, e.uncertain)
+        } catch (e: RpcRejected) {
+            if (journal.str("stage") == "sending") {
+                local.remove("journal/$key")
+                _state.update {
+                    it.copy(journal = null, error = "Server rejected the message. It was not sent.")
+                }
+            } else {
+                failure(
+                    when (journal.str("stage")) {
+                        "creatingTask" -> "Task creation was rejected. The workspace was retained."
+                        "creatingWorktree" -> "Worktree creation was rejected. Check the retained destination."
+                        else -> "Workspace preparation was rejected by the host."
+                    },
+                    false,
+                )
+            }
+        } catch (_: Exception) {
+            failure(
+                when (journal.str("stage")) {
+                    "creatingDirectory", "creatingWorktreeRoot", "creatingWorktree" ->
+                        "Workspace preparation is uncertain. Reconnect to inspect the retained destination."
+                    "creatingTask" ->
+                        "Task creation is uncertain. Reconnect to inspect the workspace before retrying."
+                    else -> "Delivery is uncertain. Inspect the task before sending again."
+                },
+                true,
+            )
+        } finally {
+            _state.update { it.copy(busy = false) }
+            if (foreground && !_state.value.ready) connect()
         }
     }
 
-    private suspend fun recoverNew() {
-        val journal = _state.value.journal ?: return
-        val known = journal.str("threadId")
-        val found =
-            if (known.isNotEmpty()) known
-            else
+    private fun JsonObject.toWorkspacePlan(target: ExecutionTarget) =
+        WorkspacePlan(
+            target = target,
+            projectId = str("projectId").ifEmpty { null },
+            sourceDirectory = str("sourceCwd").ifEmpty { null },
+            workingDirectory = str("cwd"),
+            worktreeRoot = str("worktreeRoot").ifEmpty { null },
+        )
+
+    private suspend fun recoverNew(userInitiated: Boolean = false) {
+        var journal = _state.value.journal ?: return
+        if (!_state.value.ready || _state.value.busy) return
+        _state.update { it.copy(busy = true, error = null) }
+        suspend fun record(stage: String, message: String? = null, uncertain: Boolean? = null) {
+            val values = journal.filterKeys { it !in setOf("failure", "uncertain") }.toMutableMap()
+            values["stage"] = s(stage)
+            if (message != null) values["failure"] = s(message)
+            if (uncertain != null) values["uncertain"] = JsonPrimitive(uncertain)
+            journal = JsonObject(values)
+            local.put("journal/new", journal.toString())
+            _state.update { it.copy(journal = journal, error = message) }
+        }
+        try {
+            val stage = journal.str("stage")
+            val wasUncertain = journal.str("uncertain") == "true"
+            when (stage) {
+                "validatingWorkspace" ->
+                    if (journal.str("failure").isEmpty() || userInitiated)
+                        executeSubmission(journal, "new")
+                "creatingDirectory" -> {
+                    if (workspaces.directoryExists(journal.str("cwd"))) {
+                        record("workspaceReady")
+                        executeSubmission(journal, "new")
+                    } else if (userInitiated && !wasUncertain) {
+                        record("validatingWorkspace")
+                        executeSubmission(journal, "new")
+                    } else
+                        record(
+                            stage,
+                            "The conversation directory was not found. Nothing was retried automatically.",
+                            true,
+                        )
+                }
+                "creatingWorktreeRoot" -> {
+                    if (workspaces.directoryExists(journal.str("worktreeRoot"))) {
+                        record("worktreeRootReady")
+                        executeSubmission(journal, "new")
+                    } else if (userInitiated && !wasUncertain) {
+                        record("validatingWorkspace")
+                        executeSubmission(journal, "new")
+                    } else
+                        record(
+                            stage,
+                            "The worktree destination was not found. Nothing was retried automatically.",
+                            true,
+                        )
+                }
+                "creatingWorktree" -> {
+                    if (
+                        workspaces.worktreeExists(
+                            journal.str("sourceCwd"),
+                            journal.str("cwd"),
+                        )
+                    ) {
+                        record("workspaceReady")
+                        executeSubmission(journal, "new")
+                    } else if (userInitiated && !wasUncertain) {
+                        record("worktreeRootReady")
+                        executeSubmission(journal, "new")
+                    } else
+                        record(
+                            stage,
+                            "Git does not report the expected worktree. Nothing was retried automatically.",
+                            true,
+                        )
+                }
+                "worktreeRootReady", "workspaceReady" ->
+                    if (journal.str("failure").isEmpty() || userInitiated)
+                        executeSubmission(journal, "new")
+                "creatingTask" -> {
+                    val found = findPreparedTask(journal)
+                    if (found != null) {
+                        journal = adoptRecoveredTask(journal, found)
+                        executeSubmission(journal, found)
+                    } else
+                        record(
+                            stage,
+                            "No matching task was found. Task creation was not retried; inspect the host before discarding this record.",
+                            true,
+                        )
+                }
+                "taskReady" -> {
+                    val found = journal.str("threadId")
+                    if (found.isNotEmpty()) {
+                        journal = adoptRecoveredTask(journal, found)
+                        executeSubmission(journal, found)
+                    }
+                }
+                "sending", "accepted" -> {
+                    val known = journal.str("threadId")
+                    val found = if (known.isNotEmpty()) known else findPreparedTask(journal)
+                    if (!found.isNullOrEmpty()) {
+                        local.put(
+                            "journal/$found",
+                            JsonObject(journal + ("threadId" to s(found))).toString(),
+                        )
+                        local.put("draft/$found", journal.str("text"))
+                        local.remove("journal/new")
+                        local.remove("draft/new")
+                        loadTask(found)
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            val message = "Could not inspect the saved setup. Check the connection and try again."
+            val failed =
+                JsonObject(
+                    journal +
+                        ("failure" to s(message)) +
+                        ("uncertain" to JsonPrimitive(true))
+                )
+            local.put("journal/new", failed.toString())
+            _state.update { it.copy(journal = failed, error = message) }
+        } finally {
+            _state.update { it.copy(busy = false) }
+        }
+    }
+
+    private suspend fun adoptRecoveredTask(journal: JsonObject, id: String): JsonObject {
+        val adopted =
+            JsonObject(
+                journal.filterKeys { it !in setOf("failure", "uncertain") } +
+                    ("threadId" to s(id)) +
+                    ("stage" to s("taskReady"))
+            )
+        local.put("journal/$id", adopted.toString())
+        local.put("draft/$id", adopted.str("text"))
+        local.remove("journal/new")
+        local.remove("draft/new")
+        _state.update {
+            it.copy(
+                thread = id,
+                title = adopted.str("text").take(80),
+                journal = adopted,
+            )
+        }
+        return adopted
+    }
+
+    private suspend fun findPreparedTask(journal: JsonObject): String? {
+        var cursor: String? = null
+        repeat(10) {
+            val page =
                 rpc.call(
-                        "thread/list",
-                        obj("cwd" to s(journal.str("cwd")), "limit" to JsonPrimitive(10)),
-                    )
-                    .list("data")
-                    .singleOrNull()
-                    ?.str("id")
-        if (!found.isNullOrEmpty()) {
-            local.put("journal/$found", JsonObject(journal + ("threadId" to s(found))).toString())
-            local.put("draft/$found", journal.str("text"))
-            local.remove("journal/new")
-            local.remove("draft/new")
-            loadTask(found)
+                    "thread/list",
+                    obj(
+                        "cwd" to s(journal.str("cwd")),
+                        "limit" to JsonPrimitive(100),
+                        "cursor" to cursor?.let(::s),
+                    ),
+                )
+            val projectId = journal.str("projectId")
+            val matches =
+                page.list("data").filter {
+                    it.str("cwd") == journal.str("cwd") &&
+                        it.str("projectId") == projectId
+                }
+            if (matches.size > 1) return null
+            if (matches.size == 1) return matches.single().str("id").ifEmpty { null }
+            val next = page.cursor() ?: return null
+            if (next == cursor) return null
+            cursor = next
+        }
+        return null
+    }
+
+    override fun recoverPreparation() {
+        val before = _state.value
+        if (!before.ready || before.busy || before.journal == null) return
+        if (before.thread != null) {
+            viewModelScope.launch { guarded { loadTask(before.thread) } }
+        } else {
+            viewModelScope.launch { recoverNew(userInitiated = true) }
         }
     }
 

@@ -41,7 +41,13 @@ data class NewTaskOptions(
     val approvalPolicy: String? = null,
     val collaborationMode: String? = null,
     val attachments: List<ComposerAttachment> = emptyList(),
-)
+) {
+    fun hasExecutionDestination(): Boolean =
+        projectId == null && executionTarget == ExecutionTarget.Projectless ||
+            projectId != null &&
+                !workingDirectory.isNullOrBlank() &&
+                executionTarget != ExecutionTarget.Projectless
+}
 
 data class ScreenState(
     val page: String = "home",
@@ -99,6 +105,8 @@ interface ConversationActions {
     fun draft(value: String)
 
     fun send()
+
+    fun recoverPreparation()
 
     fun stop()
 
