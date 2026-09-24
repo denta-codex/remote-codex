@@ -76,7 +76,10 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
                 ) {
                     CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
                     Text(
-                        if (st.busy) "Updating…" else "Working on ${st.host.displayName}",
+                        if (st.busy && st.journal != null)
+                            StockWorkspaceAdapter.progress(st.journal.str("stage"))
+                        else if (st.busy) "Updating…"
+                        else "Working on ${st.host.displayName}",
                         fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -94,23 +97,39 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
                 Card {
                     Column(Modifier.padding(16.dp)) {
                         Text(
-                            if (journal.str("stage") == "accepted") "Message accepted"
-                            else "Delivery needs review",
+                            when {
+                                st.busy -> StockWorkspaceAdapter.progress(journal.str("stage")).trimEnd('…')
+                                journal.str("failure").isNotEmpty() -> "Setup needs attention"
+                                journal.str("stage") == "accepted" -> "Message accepted"
+                                else -> "Operation needs review"
+                            },
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
-                            "This operation will not be sent again automatically. Check the task on ${st.host.displayName} before unlocking the composer.",
+                            journal.str("failure").ifEmpty {
+                                "This operation will not be sent again automatically. Check the task on ${st.host.displayName} before discarding its record."
+                            },
                             Modifier.padding(vertical = 8.dp),
                             fontSize = 13.sp,
                         )
                         SelectionContainer {
                             Text(
-                                "Task: ${journal.str("threadId").ifEmpty { "ID not received" }}\nWorkspace: ${journal.str("cwd")}",
+                                "Task: ${journal.str("threadId").ifEmpty { "ID not received" }}\nWorkspace: ${journal.str("cwd").ifEmpty { "Existing task" }}",
                                 fontSize = 11.sp,
                             )
                         }
-                        TextButton(onClick = { confirmUnlock = true }) {
-                            Text("I've checked the task…")
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (!st.busy && st.ready) {
+                                TextButton(
+                                    onClick = actions::recoverPreparation,
+                                    modifier = Modifier.testTag("check-setup"),
+                                ) {
+                                    Text("Check and continue")
+                                }
+                            }
+                            TextButton(onClick = { confirmUnlock = true }) {
+                                Text("Discard record…")
+                            }
                         }
                     }
                 }
@@ -174,10 +193,10 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
     if (confirmUnlock)
         AlertDialog(
             onDismissRequest = { confirmUnlock = false },
-            title = { Text("Unlock the composer?") },
+            title = { Text("Discard the saved record?") },
             text = {
                 Text(
-                    "Only continue after checking whether ${st.host.displayName} already received this message. Sending it again could duplicate the work."
+                    "Only discard it after checking the task and workspace on ${st.host.displayName}. Starting again could duplicate a task or leave another worktree behind."
                 )
             },
             confirmButton = {
@@ -185,7 +204,7 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
                     confirmUnlock = false
                     actions.unlockAfterReview()
                 }) {
-                    Text("Unlock")
+                    Text("Discard")
                 }
             },
             dismissButton = {

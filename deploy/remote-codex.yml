@@ -129,7 +129,7 @@
             fail_msg: Enable user lingering for agent before claiming reboot persistence.
     - name: Deliver prepared APK to the explicit phone
       ansible.builtin.command:
-        argv: [tailscale, file, cp, "{{ repo }}/dist/remote-codex-0.1.3.apk", "{{ remote_codex_phone }}:"]
+        argv: [tailscale, file, cp, "{{ repo }}/dist/remote-codex-0.1.5.apk", "{{ remote_codex_phone }}:"]
       become: true
       when: remote_codex_action == 'deliver'
     - name: Report delivery honestly

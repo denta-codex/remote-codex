@@ -7,14 +7,14 @@ Codex app server, over WSS and Tailscale.
 
 - `android/app`: Compose interface, assistant entry point, local storage.
 - `android/core`: stock RPC, event dispatch and conversation reconciliation.
-- `forwarder`: authenticated Go loopback WebSocket proxy to the existing Unix socket.
+- `forwarder`: authenticated Rust loopback WebSocket proxy to the existing Unix socket.
 - `deploy`: project-owned Ansible, systemd and persistent Tailscale Serve configuration.
 - `protocol`: schemas captured from stock 0.154.0; no generation required on startup.
 - `docs`: architecture, verification and physical-device acceptance.
 
 ## Build
 
-Use the existing Mise JDK 17 and Android SDK 36; no toolchain installer is needed.
+Use the existing Mise JDK 17, Rust 1.95 and Android SDK 36 toolchains.
 
 ```sh
 scripts/check
@@ -25,7 +25,7 @@ scripts/release
 ## Parallel worktree development
 
 Codex worktrees run `scripts/setup-worktree` automatically. The setup validates
-the existing managed JDK, Android SDK, Go and Codex toolchains, writes the ignored
+the existing managed JDK, Android SDK, Rust and Codex toolchains, writes the ignored
 Android SDK location, and creates a shared clean Android 16 base AVD when needed.
 It does not install or replace toolchains.
 

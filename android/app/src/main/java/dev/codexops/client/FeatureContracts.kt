@@ -77,6 +77,23 @@ data class CollaborationModePreset(
     }
 }
 
+data class CodexProject(
+    val id: String,
+    val name: String,
+    val roots: List<String>,
+) {
+    val primaryRoot: String?
+        get() = roots.firstOrNull()
+}
+
+sealed interface TaskProjectFilter {
+    data object All : TaskProjectFilter
+
+    data object Projectless : TaskProjectFilter
+
+    data class Project(val id: String) : TaskProjectFilter
+}
+
 /** Shared new-task choices. Null values deliberately retain the server default. */
 data class NewTaskOptions(
     val projectId: String? = null,
@@ -87,7 +104,13 @@ data class NewTaskOptions(
     val approvalPolicy: String? = null,
     val collaborationMode: String? = null,
     val attachments: List<ComposerAttachment> = emptyList(),
-)
+) {
+    fun hasExecutionDestination(): Boolean =
+        projectId == null && executionTarget == ExecutionTarget.Projectless ||
+            projectId != null &&
+                !workingDirectory.isNullOrBlank() &&
+                executionTarget != ExecutionTarget.Projectless
+}
 
 data class ScreenState(
     val page: String = "home",
@@ -95,6 +118,8 @@ data class ScreenState(
     val connection: String = "Offline",
     val ready: Boolean = false,
     val configured: Boolean = false,
+    val projects: List<CodexProject> = emptyList(),
+    val projectFilter: TaskProjectFilter = TaskProjectFilter.All,
     val tasks: List<JsonObject> = emptyList(),
     val listCursor: String? = null,
     val query: String = "",
@@ -106,8 +131,11 @@ data class ScreenState(
     val draft: String = "",
     val newTaskOptions: NewTaskOptions = NewTaskOptions(),
     val collaborationModes: List<CollaborationModePreset> = emptyList(),
-    val defaultModel: String? = null,
+    val models: List<ServerModelOption> = emptyList(),
+    val modelCatalogStatus: ModelCatalogStatus = ModelCatalogStatus.Unavailable,
+    val modelCatalogMessage: String? = null,
     val threadModel: String? = null,
+    val threadReasoningEffort: String? = null,
     val activeTurn: String? = null,
     val decisions: List<Decision> = emptyList(),
     val busy: Boolean = false,
@@ -117,7 +145,7 @@ data class ScreenState(
 )
 
 fun ScreenState.collaborationModel(): String? =
-    newTaskOptions.model ?: threadModel ?: defaultModel
+    newTaskOptions.model ?: threadModel ?: models.firstOrNull(ServerModelOption::isDefault)?.id
 
 interface AppNavigation {
     fun connect()
@@ -131,6 +159,8 @@ interface HomeActions {
     fun query(value: String)
 
     fun archived(value: Boolean)
+
+    fun projectFilter(value: TaskProjectFilter)
 
     fun moreTasks()
 
@@ -146,6 +176,8 @@ interface SettingsActions {
 interface ConversationActions {
     fun updateNewTaskOptions(options: NewTaskOptions)
 
+    fun refreshModels()
+
     fun older()
 
     fun draft(value: String)
@@ -153,6 +185,8 @@ interface ConversationActions {
     fun send()
 
     fun implementPlan(planKey: String)
+
+    fun recoverPreparation()
 
     fun stop()
 

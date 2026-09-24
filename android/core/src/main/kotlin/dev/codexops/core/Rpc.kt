@@ -1,12 +1,22 @@
 package dev.codexops.core
 
+import java.net.URI
+import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.serialization.json.*
-import okhttp3.*
+import org.java_websocket.WebSocket
+import org.java_websocket.client.WebSocketClient
+import org.java_websocket.drafts.Draft
+import org.java_websocket.drafts.Draft_6455
+import org.java_websocket.enums.HandshakeState
+import org.java_websocket.enums.Opcode
+import org.java_websocket.extensions.IExtension
+import org.java_websocket.framing.CloseFrame
+import org.java_websocket.handshake.ClientHandshake
+import org.java_websocket.handshake.ServerHandshake
 
 val wire = Json { ignoreUnknownKeys = true }
 
@@ -32,17 +42,37 @@ class ConnectionLost : Exception("Connection lost; a submitted operation may hav
 class ConnectionFailure(val httpStatus: Int?, val transport: String) :
     Exception("Connection failed: ${httpStatus ?: transport}")
 
+private const val CONNECT_TIMEOUT_MS = 10_000
+private const val RPC_MESSAGE_MAX_BYTES = 100 * 1024 * 1024
+private const val OUTBOUND_FRAGMENT_BYTES = 256 * 1024
+private val rejectedStatus =
+    Regex("^Invalid status code received: ([0-9]{3}) Status line: HTTP/1\\.[01] ([0-9]{3})(?: .*)?$")
+
+private fun rejectedHttpStatus(message: String?): Int? {
+    val match = message?.let(rejectedStatus::matchEntire) ?: return null
+    val reported = match.groupValues[1].toIntOrNull() ?: return null
+    val statusLine = match.groupValues[2].toIntOrNull() ?: return null
+    return reported.takeIf { it == statusLine && it in 100..599 }
+}
+
+private class StatusDraft(private val status: (Int) -> Unit) :
+    Draft_6455(emptyList<IExtension>(), RPC_MESSAGE_MAX_BYTES) {
+    override fun acceptHandshakeAsClient(
+        request: ClientHandshake,
+        response: ServerHandshake,
+    ): HandshakeState {
+        status(response.httpStatus.toInt())
+        return super.acceptHandshakeAsClient(request, response)
+    }
+
+    override fun copyInstance(): Draft = StatusDraft(status)
+}
+
 class Rpc(private val allowLoopbackTest: Boolean = false) {
     val events = Channel<JsonObject>(1024)
-    private val client =
-        OkHttpClient.Builder()
-            .pingInterval(20, TimeUnit.SECONDS)
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(0, TimeUnit.SECONDS)
-            .build()
     private val next = AtomicLong()
     private val pending = ConcurrentHashMap<String, CompletableDeferred<JsonObject>>()
-    @Volatile private var socket: WebSocket? = null
+    @Volatile private var socket: WebSocketClient? = null
     private var opened = CompletableDeferred<Unit>()
     private val guard = Any()
     @Volatile
@@ -59,75 +89,91 @@ class Rpc(private val allowLoopbackTest: Boolean = false) {
         val epoch = generation
         opened = CompletableDeferred()
         val ready = opened
-        val request = Request.Builder().url(url).header("Authorization", "Bearer $token").build()
-        socket =
-            client.newWebSocket(
-                request,
-                object : WebSocketListener() {
-                    override fun onOpen(webSocket: WebSocket, response: Response) {
-                        if (generation == epoch) ready.complete(Unit) else webSocket.cancel()
-                    }
+        var handshakeStatus: Int? = null
+        val webSocket =
+            object :
+                WebSocketClient(
+                    URI(url),
+                    StatusDraft { handshakeStatus = it },
+                    mapOf("Authorization" to "Bearer $token"),
+                    CONNECT_TIMEOUT_MS,
+                ) {
+                override fun onWebsocketHandshakeReceivedAsClient(
+                    connection: WebSocket,
+                    request: ClientHandshake,
+                    response: ServerHandshake,
+                ) {
+                    handshakeStatus = response.httpStatus.toInt()
+                    super.onWebsocketHandshakeReceivedAsClient(connection, request, response)
+                }
 
-                    override fun onMessage(webSocket: WebSocket, text: String) {
-                        if (generation != epoch) return
-                        try {
-                            val message = wire.parseToJsonElement(text).jsonObject
-                            // Request IDs are independent in the two directions.
-                            if (message.str("method").isNotEmpty()) {
-                                if (
-                                    !events
-                                        .trySend(
-                                            JsonObject(message + ("_epoch" to JsonPrimitive(epoch)))
-                                        )
-                                        .isSuccess
-                                )
-                                    failed(epoch)
-                            } else {
-                                val waiter = pending.remove(message["id"].toString()) ?: return
-                                val error = message["error"] as? JsonObject
-                                if (error != null)
-                                    waiter.completeExceptionally(
-                                        RpcRejected(
-                                            error.str("code").toIntOrNull() ?: -1,
-                                            error.str("message"),
-                                        )
+                override fun onOpen(handshake: ServerHandshake) {
+                    if (generation == epoch) ready.complete(Unit)
+                    else closeConnection(CloseFrame.NORMAL, "")
+                }
+
+                override fun onMessage(text: String) {
+                    if (generation != epoch || text.toByteArray(Charsets.UTF_8).size > RPC_MESSAGE_MAX_BYTES)
+                        return failed(epoch)
+                    try {
+                        val message = wire.parseToJsonElement(text).jsonObject
+                        // Request IDs are independent in the two directions.
+                        if (message.str("method").isNotEmpty()) {
+                            if (
+                                !events
+                                    .trySend(
+                                        JsonObject(message + ("_epoch" to JsonPrimitive(epoch)))
                                     )
-                                else waiter.complete(message["result"] as? JsonObject ?: obj())
-                            }
-                        } catch (_: Exception) {
-                            failed(epoch)
+                                    .isSuccess
+                            )
+                                failed(epoch)
+                        } else {
+                            val waiter = pending.remove(message["id"].toString()) ?: return
+                            val error = message["error"] as? JsonObject
+                            if (error != null)
+                                waiter.completeExceptionally(
+                                    RpcRejected(
+                                        error.str("code").toIntOrNull() ?: -1,
+                                        error.str("message"),
+                                    )
+                                )
+                            else waiter.complete(message["result"] as? JsonObject ?: obj())
                         }
-                    }
-
-                    override fun onFailure(
-                        webSocket: WebSocket,
-                        t: Throwable,
-                        response: Response?,
-                    ) {
-                        if (generation != epoch) return
-                        ready.completeExceptionally(
-                            ConnectionFailure(response?.code, t.javaClass.simpleName)
-                        )
+                    } catch (_: Exception) {
                         failed(epoch)
                     }
+                }
 
-                    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                        failed(epoch)
-                    }
+                override fun onMessage(bytes: ByteBuffer) {
+                    failed(epoch)
+                }
 
-                    override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                        webSocket.close(code, null)
-                        failed(epoch)
-                    }
-                },
-            )
+                override fun onClose(code: Int, reason: String, remote: Boolean) {
+                    handshakeStatus = handshakeStatus ?: rejectedHttpStatus(reason)
+                    if (!ready.isCompleted)
+                        ready.completeExceptionally(ConnectionFailure(handshakeStatus, "Closed"))
+                    failed(epoch)
+                }
+
+                override fun onError(error: Exception) {
+                    if (generation != epoch) return
+                    handshakeStatus = handshakeStatus ?: rejectedHttpStatus(error.message)
+                    ready.completeExceptionally(
+                        ConnectionFailure(handshakeStatus, error.javaClass.simpleName)
+                    )
+                    failed(epoch)
+                }
+            }
+        webSocket.connectionLostTimeout = 20
+        socket = webSocket
+        webSocket.connect()
         try {
             withTimeout(15000) { ready.await() }
             val result =
                 call(
                     "initialize",
                     obj(
-                        "clientInfo" to obj("name" to s("remote-codex"), "version" to s("0.1.3")),
+                        "clientInfo" to obj("name" to s("remote-codex"), "version" to s("0.1.5")),
                         "capabilities" to obj("experimentalApi" to JsonPrimitive(true)),
                     ),
                 )
@@ -166,7 +212,28 @@ class Rpc(private val allowLoopbackTest: Boolean = false) {
     }
 
     private fun send(message: JsonObject) {
-        if (socket?.send(message.toString()) != true) throw ConnectionLost()
+        val active = socket
+        if (active?.isOpen != true) throw ConnectionLost()
+        val bytes = message.toString().toByteArray(Charsets.UTF_8)
+        if (bytes.size > RPC_MESSAGE_MAX_BYTES) throw IllegalArgumentException("RPC message too large")
+        try {
+            var start = 0
+            while (start < bytes.size) {
+                var end = minOf(start + OUTBOUND_FRAGMENT_BYTES, bytes.size)
+                if (end < bytes.size) {
+                    while (end > start && bytes[end].toInt() and 0xC0 == 0x80) end--
+                }
+                check(end > start)
+                active.sendFragmentedFrame(
+                    Opcode.TEXT,
+                    ByteBuffer.wrap(bytes, start, end - start),
+                    end == bytes.size,
+                )
+                start = end
+            }
+        } catch (_: Exception) {
+            throw ConnectionLost()
+        }
     }
 
     private fun failed(epoch: Long) {
@@ -180,7 +247,7 @@ class Rpc(private val allowLoopbackTest: Boolean = false) {
     fun close() {
         synchronized(guard) {
             generation++
-            socket?.cancel()
+            socket?.closeConnection(CloseFrame.NORMAL, "")
             socket = null
             opened.completeExceptionally(ConnectionLost())
             pending.values.forEach { it.completeExceptionally(ConnectionLost()) }
@@ -190,8 +257,6 @@ class Rpc(private val allowLoopbackTest: Boolean = false) {
 
     fun dispose() {
         close()
-        client.dispatcher.executorService.shutdown()
-        client.connectionPool.evictAll()
         events.close()
     }
 }

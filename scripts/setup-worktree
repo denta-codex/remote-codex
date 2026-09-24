@@ -19,7 +19,14 @@ runtime_root="${XDG_RUNTIME_DIR:-/tmp}/remote-codex-emulators"
 [[ -x "$emulator" ]] || { echo "Android emulator not found at $emulator" >&2; exit 1; }
 [[ -f "$platform" ]] || { echo 'Android SDK platform 36 is missing' >&2; exit 1; }
 [[ -f "$image" ]] || { echo 'Android 36 Google APIs x86_64 system image is missing' >&2; exit 1; }
-command -v go >/dev/null || { echo 'Go is missing from PATH' >&2; exit 1; }
+mise where rust@1.95.0 >/dev/null 2>&1 || {
+    echo 'Managed Rust 1.95.0 is missing; install it with mise install rust@1.95.0' >&2
+    exit 1
+}
+mise x rust@1.95.0 -- rustc --version | rg -q '^rustc 1\.95\.' || {
+    echo 'Managed Rust toolchain is not Rust 1.95' >&2
+    exit 1
+}
 command -v codex >/dev/null || { echo 'Codex is missing from PATH' >&2; exit 1; }
 command -v flock >/dev/null || { echo 'flock is missing from PATH' >&2; exit 1; }
 
@@ -61,4 +68,4 @@ rg -q '^target=android-36$' "$avd_path/config.ini" || { echo "$avd_name targets 
 rg -q '^abi.type=x86_64$' "$avd_path/config.ini" || { echo "$avd_name uses the wrong ABI" >&2; exit 1; }
 rg -q '^tag.id=google_apis$' "$avd_path/config.ini" || { echo "$avd_name uses the wrong system image" >&2; exit 1; }
 
-echo "Worktree ready: JDK 17, Android SDK 36, Go, Codex, and $avd_name."
+echo "Worktree ready: JDK 17, Android SDK 36, Rust 1.95, Codex, and $avd_name."
