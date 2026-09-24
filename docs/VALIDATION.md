@@ -1,5 +1,21 @@
 # Validation
 
+## September 24, 2026 — integrated 0.1.4 Android release
+
+- Merged the Projects, workspace/worktree execution, and server-backed model
+  controls feature branches into `main`, resolving their shared composer, client
+  state machine, recovery journal, and fixture-server changes as one architecture.
+- `scripts/check` passed after integration. The worktree-owned Android 16 emulator
+  then ran all 15 fixture-backed tests without failures; the credential-gated live
+  connection test was skipped as designed. The disposable emulator was stopped.
+- `scripts/release` passed its repeated checks, release lint, package identity,
+  non-debuggable, and signing-certificate verification. The signed APK is version
+  0.1.4 / code 5. SHA-256:
+  `f68029bf91861702f76c0f9d0ebbe2e6059d9187ccf8306fdd7ffb618fea6e98`.
+- Taildrop delivery completed to the active
+  `motorola-razr-ultra-2025-2` Tailscale node. Installation remains an explicit
+  user step; no ADB installation or live deployment was performed.
+
 ## September 24, 2026 — projects and workspace execution parity
 
 - Checked the stock 0.154.0 schemas for paginated `project/list`, nullable
