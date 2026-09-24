@@ -83,6 +83,11 @@ constructor(
                         it.copy(
                             connection = "Connecting…",
                             ready = false,
+                            collaborationModes = emptyList(),
+                            defaultModel = null,
+                            threadModel = null,
+                            newTaskOptions =
+                                it.newTaskOptions.copy(collaborationMode = null),
                             error = null,
                             configured = true,
                         )
@@ -95,8 +100,38 @@ constructor(
                         require(init.str("codexHome") == host.expectedCodexHome) {
                             "Unexpected Codex account"
                         }
+                        val modes =
+                            try {
+                                CollaborationModePreset.parse(
+                                    rpc.call("collaborationMode/list", obj())
+                                )
+                            } catch (_: RpcRejected) {
+                                // This experimental method is the capability check. A server that
+                                // rejects it gets no mode UI or client-simulated fallback.
+                                emptyList()
+                            }
+                        val defaultModel =
+                            if (modes.isEmpty()) null
+                            else
+                                try {
+                                    rpc.call(
+                                            "model/list",
+                                            obj("limit" to JsonPrimitive(100)),
+                                        )
+                                        .list("data")
+                                        .firstOrNull { it.str("isDefault") == "true" }
+                                        ?.str("model")
+                                        ?.ifBlank { null }
+                                } catch (_: RpcRejected) {
+                                    null
+                                }
                         _state.update {
-                            it.copy(connection = "Connected to ${host.displayName}", ready = true)
+                            it.copy(
+                                connection = "Connected to ${host.displayName}",
+                                ready = true,
+                                collaborationModes = modes,
+                                defaultModel = defaultModel,
+                            )
                         }
                         refreshList()
                         val id = _state.value.thread
@@ -118,6 +153,8 @@ constructor(
                         _state.update {
                             it.copy(
                                 ready = false,
+                                collaborationModes = emptyList(),
+                                defaultModel = null,
                                 connection = "Disconnected",
                                 error = when {
                                     e is ConnectionFailure && e.httpStatus == 401 ->
@@ -253,6 +290,7 @@ constructor(
                     historyCursor = null,
                     draft = draft,
                     newTaskOptions = NewTaskOptions(),
+                    threadModel = null,
                     journal = journal,
                     error = null,
                     attention = false,
@@ -297,6 +335,8 @@ constructor(
                 entries = emptyList(),
                 activeTurn = null,
                 historyCursor = null,
+                newTaskOptions = NewTaskOptions(),
+                threadModel = null,
                 error = null,
                 busy = true,
                 attention = false,
@@ -348,6 +388,7 @@ constructor(
                             thread.str("preview").take(80).ifBlank { "Conversation" }
                         },
                     historyCursor = history.cursor(),
+                    threadModel = thread.str("model").ifBlank { null },
                     attention = thread.map("status")["activeFlags"].toString().contains("waiting"),
                 )
             }
@@ -405,6 +446,34 @@ constructor(
     override fun send() {
         val before = _state.value
         if (!before.ready || before.busy || before.draft.isBlank() || before.journal != null) return
+        submit(before.draft, before.newTaskOptions.collaborationMode, clearDraft = true)
+    }
+
+    override fun implementPlan(planKey: String) {
+        val before = _state.value
+        val plan = before.entries.lastOrNull { it.kind != "reasoning" }
+        if (
+            plan?.key != planKey ||
+                plan.kind != "plan" ||
+                !plan.completed ||
+                before.activeTurn != null ||
+                before.collaborationModes.none {
+                    it.mode == "default" &&
+                        it.turnSetting(before.collaborationModel()) != null
+                }
+        )
+            return
+        submit("Implement the proposed plan.", "default", clearDraft = false)
+    }
+
+    private fun submit(text: String, selectedMode: String?, clearDraft: Boolean) {
+        val before = _state.value
+        if (!before.ready || before.busy || text.isBlank() || before.journal != null) return
+        val mode =
+            selectedMode?.let { selection ->
+                before.collaborationModes.singleOrNull { it.mode == selection } ?: return
+            }
+        val modeSetting = mode?.turnSetting(before.collaborationModel()) ?: if (mode == null) null else return
         _state.update { it.copy(busy = true, error = null) }
         viewModelScope.launch {
             val originalKey = before.thread ?: "new"
@@ -412,10 +481,11 @@ constructor(
             var journal =
                 obj(
                     "operation" to s(operation),
-                    "text" to s(before.draft),
+                    "text" to s(text),
                     "stage" to s("preparing"),
                     "cwd" to s("/home/agent/Documents/RemoteCodex/$operation"),
                     "threadId" to before.thread?.let(::s),
+                    "collaborationMode" to mode?.mode?.let(::s),
                 )
             var key = originalKey
             suspend fun record(stage: String) {
@@ -481,13 +551,13 @@ constructor(
                     local.put("journal/new", journal.toString())
                     key = id
                     local.put("journal/$key", journal.toString())
-                    local.put("draft/$key", before.draft)
+                    local.put("draft/$key", if (clearDraft) text else before.draft)
                     local.remove("journal/new")
                     local.remove("draft/new")
-                    _state.update { it.copy(thread = id, title = before.draft.take(80)) }
+                    _state.update { it.copy(thread = id, title = text.take(80)) }
                 }
                 record("sending")
-                val input = JsonArray(listOf(obj("type" to s("text"), "text" to s(before.draft))))
+                val input = JsonArray(listOf(obj("type" to s("text"), "text" to s(text))))
                 rpc.call(
                     if (before.activeTurn == null) "turn/start" else "turn/steer",
                     obj(
@@ -495,12 +565,23 @@ constructor(
                         "input" to input,
                         "clientUserMessageId" to s(operation),
                         "expectedTurnId" to before.activeTurn?.let(::s),
+                        "collaborationMode" to
+                            modeSetting?.takeIf { before.activeTurn == null },
                     ),
                 )
                 record("accepted")
                 local.remove("journal/$key")
-                local.remove("draft/$key")
-                _state.update { it.copy(draft = "", journal = null) }
+                if (clearDraft) local.remove("draft/$key")
+                _state.update {
+                    it.copy(
+                        draft = if (clearDraft) "" else it.draft,
+                        journal = null,
+                        newTaskOptions =
+                            if (!clearDraft && mode != null)
+                                it.newTaskOptions.copy(collaborationMode = mode.mode)
+                            else it.newTaskOptions,
+                    )
+                }
                 // Refresh only after acceptance; a failed history read must never become a resend.
                 if (timeline.values().isEmpty()) _state.update { it.copy(error = null) }
             } catch (e: Exception) {
@@ -625,6 +706,13 @@ constructor(
         if (method == "thread/status/changed")
             _state.update {
                 it.copy(attention = p.map("status")["activeFlags"].toString().contains("waiting"))
+            }
+        if (method == "thread/settings/updated")
+            _state.update {
+                it.copy(
+                    threadModel =
+                        p.map("threadSettings").str("model").ifBlank { it.threadModel }
+                )
             }
         if (method == "turn/completed") _state.update { it.copy(attention = false) }
         publish()

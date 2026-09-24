@@ -30,6 +30,15 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
     val scroll = rememberLazyListState()
     var followLatest by remember { mutableStateOf(true) }
     val messages = st.entries.filter { it.kind != "reasoning" }
+    val actionablePlan =
+        messages.lastOrNull()?.takeIf {
+            it.kind == "plan" &&
+                it.completed &&
+                st.collaborationModes.any { preset ->
+                    preset.mode == "default" &&
+                        preset.turnSetting(st.collaborationModel()) != null
+                }
+        }
     // Reverse layout anchors new history at the latest message, even when that
     // message is taller than the viewport. Stable keys preserve reading position.
     LaunchedEffect(scroll) {
@@ -106,7 +115,18 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
         items(st.decisions.reversed(), key = { it.key }) { decision ->
             DecisionCard(decision, st, actions)
         }
-        items(messages.asReversed(), key = { it.key }) { entry -> Message(entry) }
+        items(messages.asReversed(), key = { it.key }) { entry ->
+            Message(
+                entry = entry,
+                canImplement =
+                    entry.key == actionablePlan?.key &&
+                        st.ready &&
+                        !st.busy &&
+                        st.activeTurn == null &&
+                        st.journal == null,
+                onImplement = { actions.implementPlan(entry.key) },
+            )
+        }
         if (st.historyCursor != null)
             item(key = "history") {
                 TextButton(onClick = actions::older, modifier = Modifier.fillMaxWidth()) {
@@ -171,7 +191,7 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
 }
 
 @Composable
-private fun Message(entry: Entry) {
+private fun Message(entry: Entry, canImplement: Boolean, onImplement: () -> Unit) {
     var expanded by rememberSaveable(entry.key) { mutableStateOf(false) }
     if (entry.kind == "userMessage")
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -189,8 +209,29 @@ private fun Message(entry: Entry) {
                 }
             }
         }
-    else if (entry.kind == "agentMessage" || entry.kind == "plan")
+    else if (entry.kind == "agentMessage")
         SelectionContainer { Markdown(entry.text.take(100000)) }
+    else if (entry.kind == "plan")
+        Card(
+            modifier = Modifier.fillMaxWidth().testTag("plan-card"),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        ) {
+            Column(
+                Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text("Plan", fontWeight = FontWeight.SemiBold)
+                SelectionContainer { Markdown(entry.text.take(100000)) }
+                if (canImplement)
+                    Button(
+                        onClick = onImplement,
+                        modifier = Modifier.testTag("implement-plan"),
+                    ) {
+                        Text("Implement")
+                    }
+            }
+        }
     else
         Surface(
             shape = RoundedCornerShape(14.dp),
