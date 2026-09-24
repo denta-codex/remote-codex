@@ -14,6 +14,13 @@
 - The fixture suite now disposes the production activity model before installing
   its mock-backed model and clears its temporary credential between tests. This
   prevents background endpoint reconnects from starving instrumentation work.
+- `scripts/release` passed its repeated checks, signed release assembly and lint,
+  package/signer verification, manifest generation, and checksum generation. The
+  signed APK SHA-256 is
+  `84f663519c2e220d1b2d3bd06f5acfff263cae0ca70f69543bb38c8054768bef`.
+- The Ansible publication dry run passed, then 0.1.8 was published to the private
+  stable channel. The authenticated endpoint returned versionCode 9. No Taildrop
+  delivery or physical-phone installation was performed.
 
 ## September 24, 2026 — decoupled Android update publication
 
