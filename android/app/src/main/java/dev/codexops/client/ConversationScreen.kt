@@ -6,8 +6,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -19,6 +21,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.mikepenz.markdown.m3.Markdown
 import dev.codexops.core.*
 import kotlinx.serialization.json.JsonArray
@@ -193,6 +197,7 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
 @Composable
 private fun Message(entry: Entry, canImplement: Boolean, onImplement: () -> Unit) {
     var expanded by rememberSaveable(entry.key) { mutableStateOf(false) }
+    var planFullscreen by rememberSaveable(entry.key) { mutableStateOf(false) }
     if (entry.kind == "userMessage")
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             Surface(
@@ -211,7 +216,7 @@ private fun Message(entry: Entry, canImplement: Boolean, onImplement: () -> Unit
         }
     else if (entry.kind == "agentMessage")
         SelectionContainer { Markdown(entry.text.take(100000)) }
-    else if (entry.kind == "plan")
+    else if (entry.kind == "plan") {
         Card(
             modifier = Modifier.fillMaxWidth().testTag("plan-card"),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
@@ -221,7 +226,18 @@ private fun Message(entry: Entry, canImplement: Boolean, onImplement: () -> Unit
                 Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text("Plan", fontWeight = FontWeight.SemiBold)
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Plan", Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                    TextButton(
+                        onClick = { planFullscreen = true },
+                        modifier = Modifier.testTag("open-plan-fullscreen"),
+                    ) {
+                        Text("Full screen")
+                    }
+                }
                 SelectionContainer { Markdown(entry.text.take(100000)) }
                 if (canImplement)
                     Button(
@@ -229,9 +245,20 @@ private fun Message(entry: Entry, canImplement: Boolean, onImplement: () -> Unit
                         modifier = Modifier.testTag("implement-plan"),
                     ) {
                         Text("Implement")
-                    }
+                }
             }
         }
+        if (planFullscreen)
+            FullscreenPlan(
+                text = entry.text,
+                canImplement = canImplement,
+                onDismiss = { planFullscreen = false },
+                onImplement = {
+                    planFullscreen = false
+                    onImplement()
+                },
+            )
+    }
     else
         Surface(
             shape = RoundedCornerShape(14.dp),
@@ -276,6 +303,62 @@ private fun Message(entry: Entry, canImplement: Boolean, onImplement: () -> Unit
                     }
             }
         }
+}
+
+@Composable
+private fun FullscreenPlan(
+    text: String,
+    canImplement: Boolean,
+    onDismiss: () -> Unit,
+    onImplement: () -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize().testTag("plan-fullscreen"),
+            color = MaterialTheme.colorScheme.background,
+        ) {
+            Column(Modifier.fillMaxSize().systemBarsPadding()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Plan",
+                        Modifier.weight(1f).padding(start = 8.dp),
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    TextButton(onClick = onDismiss, modifier = Modifier.testTag("close-plan-fullscreen")) {
+                        Text("Close")
+                    }
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Box(
+                    Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
+                        .padding(horizontal = 24.dp, vertical = 20.dp),
+                    contentAlignment = Alignment.TopCenter,
+                ) {
+                    Column(Modifier.fillMaxWidth().widthIn(max = 760.dp)) {
+                        SelectionContainer { Markdown(text.take(100000)) }
+                    }
+                }
+                if (canImplement) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Button(
+                        onClick = onImplement,
+                        modifier =
+                            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp)
+                                .testTag("implement-plan-fullscreen"),
+                    ) {
+                        Text("Implement")
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
