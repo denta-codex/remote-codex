@@ -1,6 +1,8 @@
 use sha2::{Digest, Sha256};
+use std::fs::OpenOptions;
 use std::future::Future;
 use std::io;
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -18,11 +20,16 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const CLIENT_HEADER_TIMEOUT: Duration = Duration::from_secs(5);
 const UPSTREAM_HEADER_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_CONNECTIONS: usize = 8;
+const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
+const MAX_APK_BYTES: u64 = 256 * 1024 * 1024;
+const UPDATE_PREFIX: &str = "/remote-codex/v1/updates/releases/";
+const UPDATE_MANIFEST: &str = "/remote-codex/v1/updates/stable/latest.json";
 
 #[derive(Clone)]
 pub struct Config {
     socket: PathBuf,
     expected_authorization: [u8; 32],
+    update_root: Option<PathBuf>,
 }
 
 impl Config {
@@ -37,7 +44,20 @@ impl Config {
         Ok(Self {
             socket: socket.into(),
             expected_authorization,
+            update_root: None,
         })
+    }
+
+    pub fn with_update_root(mut self, root: impl Into<PathBuf>) -> io::Result<Self> {
+        let root = root.into();
+        if !root.is_absolute() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "update root must be absolute",
+            ));
+        }
+        self.update_root = Some(root);
+        Ok(self)
     }
 }
 
@@ -149,6 +169,14 @@ async fn handle_client(
         }
     };
 
+    let request = match request {
+        ValidatedRequest::Update(update) => {
+            serve_update(&mut client, &config, update).await?;
+            return Ok(());
+        }
+        ValidatedRequest::WebSocket(request) => request,
+    };
+
     if check_socket(&config.socket).is_err() {
         write_bad_gateway(&mut client).await?;
         return Ok(());
@@ -201,14 +229,29 @@ async fn handle_client(
     Ok(())
 }
 
-fn validate_request(head: &[u8], config: &Config) -> Result<UpgradeRequest, Rejection> {
+enum ValidatedRequest {
+    WebSocket(UpgradeRequest),
+    Update(UpdateRequest),
+}
+
+enum UpdateRequest {
+    Manifest,
+    Apk(u64),
+}
+
+fn validate_request(head: &[u8], config: &Config) -> Result<ValidatedRequest, Rejection> {
     let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
     let mut request = httparse::Request::new(&mut headers);
     let parsed = request.parse(head).map_err(|_| Rejection::bad_request())?;
     if !parsed.is_complete() {
         return Err(Rejection::bad_request());
     }
-    if request.method != Some("GET") || request.path != Some("/codex/rpc") {
+    if request.method != Some("GET") {
+        return Err(Rejection::new(404, "Not Found", "Not Found"));
+    }
+    let path = request.path.unwrap_or_default();
+    let update = parse_update_path(path);
+    if path != "/codex/rpc" && update.is_none() {
         return Err(Rejection::new(404, "Not Found", "Not Found"));
     }
     let authorization = unique_header(request.headers, "Authorization")
@@ -217,6 +260,9 @@ fn validate_request(head: &[u8], config: &Config) -> Result<UpgradeRequest, Reje
     let actual: [u8; 32] = Sha256::digest(authorization.as_bytes()).into();
     if !bool::from(actual.ct_eq(&config.expected_authorization)) {
         return Err(Rejection::new(401, "Unauthorized", "Unauthorized"));
+    }
+    if let Some(update) = update {
+        return Ok(ValidatedRequest::Update(update));
     }
     if header(request.headers, "Origin").is_some_and(|value| !value.is_empty()) {
         return Err(Rejection::new(
@@ -245,9 +291,83 @@ fn validate_request(head: &[u8], config: &Config) -> Result<UpgradeRequest, Reje
         .map_err(|_| Rejection::bad_request())?
         .filter(|value| !value.is_empty())
         .ok_or_else(Rejection::bad_request)?;
-    Ok(UpgradeRequest {
+    Ok(ValidatedRequest::WebSocket(UpgradeRequest {
         websocket_key: websocket_key.to_owned(),
-    })
+    }))
+}
+
+fn parse_update_path(path: &str) -> Option<UpdateRequest> {
+    if path == UPDATE_MANIFEST {
+        return Some(UpdateRequest::Manifest);
+    }
+    let suffix = path.strip_prefix(UPDATE_PREFIX)?;
+    let version = suffix.strip_suffix("/remote-codex.apk")?;
+    if version.is_empty()
+        || version.len() > 10
+        || version.starts_with('0')
+        || !version.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    version.parse().ok().map(UpdateRequest::Apk)
+}
+
+async fn serve_update(
+    stream: &mut TcpStream,
+    config: &Config,
+    request: UpdateRequest,
+) -> io::Result<()> {
+    let Some(root) = config.update_root.as_ref() else {
+        return write_rejection(stream, Rejection::new(404, "Not Found", "Not Found")).await;
+    };
+    let (path, content_type, maximum) = match request {
+        UpdateRequest::Manifest => (
+            root.join("stable/latest.json"),
+            "application/json; charset=utf-8",
+            MAX_MANIFEST_BYTES,
+        ),
+        UpdateRequest::Apk(version) => (
+            root.join(format!("releases/{version}/remote-codex.apk")),
+            "application/vnd.android.package-archive",
+            MAX_APK_BYTES,
+        ),
+    };
+    let file = match open_release_file(&path, maximum) {
+        Ok(file) => file,
+        Err(_) => {
+            return write_rejection(stream, Rejection::new(404, "Not Found", "Not Found")).await;
+        }
+    };
+    let length = file.metadata()?.len();
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nCache-Control: private, no-store\r\nContent-Type: {content_type}\r\nContent-Length: {length}\r\nX-Content-Type-Options: nosniff\r\nX-Remote-Codex-Extension: updater-v1\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(response.as_bytes()).await?;
+    let mut file = tokio::fs::File::from_std(file);
+    tokio::io::copy(&mut file, stream).await?;
+    Ok(())
+}
+
+fn open_release_file(path: &Path, maximum: u64) -> io::Result<std::fs::File> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    // Publishing owns these files as the service user. Reject mutable or unusual files.
+    let current_uid = unsafe { libc::geteuid() };
+    if !metadata.file_type().is_file()
+        || metadata.uid() != current_uid
+        || metadata.permissions().mode() & 0o022 != 0
+        || metadata.len() == 0
+        || metadata.len() > maximum
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "release file is missing or insecure",
+        ));
+    }
+    Ok(file)
 }
 
 fn validate_upstream_response(head: &[u8]) -> Result<String, ()> {
@@ -439,6 +559,81 @@ mod tests {
         }
     }
 
+    #[test]
+    fn accepts_only_namespaced_update_paths() {
+        assert!(matches!(
+            parse_update_path(UPDATE_MANIFEST),
+            Some(UpdateRequest::Manifest)
+        ));
+        assert!(matches!(
+            parse_update_path("/remote-codex/v1/updates/releases/6/remote-codex.apk"),
+            Some(UpdateRequest::Apk(6))
+        ));
+        for path in [
+            "/updates/stable/latest.json",
+            "/remote-codex/v1/updates/releases/0/remote-codex.apk",
+            "/remote-codex/v1/updates/releases/06/remote-codex.apk",
+            "/remote-codex/v1/updates/releases/../remote-codex.apk",
+            "/remote-codex/v1/updates/releases/6/../../secret",
+            "/remote-codex/v1/updates/releases/6/remote-codex.apk?download=1",
+        ] {
+            assert!(parse_update_path(path).is_none(), "accepted {path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn serves_authenticated_manifest_and_immutable_apk() {
+        let directory = tempdir().unwrap();
+        let stable = directory.path().join("stable");
+        let release = directory.path().join("releases/6");
+        std::fs::create_dir_all(&stable).unwrap();
+        std::fs::create_dir_all(&release).unwrap();
+        std::fs::write(stable.join("latest.json"), b"{\"schema\":1}\n").unwrap();
+        std::fs::write(release.join("remote-codex.apk"), b"fixture-apk").unwrap();
+        let config = Config::new("/does-not-exist", TOKEN)
+            .unwrap()
+            .with_update_root(directory.path())
+            .unwrap();
+
+        let unauthorized = request_once_with_config(
+            "GET /remote-codex/v1/updates/stable/latest.json HTTP/1.1\r\nHost: localhost\r\n\r\n",
+            config.clone(),
+        )
+        .await;
+        assert!(unauthorized.starts_with("HTTP/1.1 401 Unauthorized"));
+
+        let manifest = request_once_with_config(
+            &format!(
+                "GET {UPDATE_MANIFEST} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TOKEN}\r\n\r\n"
+            ),
+            config.clone(),
+        )
+        .await;
+        assert!(manifest.starts_with("HTTP/1.1 200 OK"));
+        assert!(manifest.contains("X-Remote-Codex-Extension: updater-v1"));
+        assert!(manifest.ends_with("{\"schema\":1}\n"));
+
+        let apk = request_once_with_config(
+            &format!(
+                "GET /remote-codex/v1/updates/releases/6/remote-codex.apk HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TOKEN}\r\n\r\n"
+            ),
+            config.clone(),
+        )
+        .await;
+        assert!(apk.starts_with("HTTP/1.1 200 OK"));
+        assert!(apk.contains("application/vnd.android.package-archive"));
+        assert!(apk.ends_with("fixture-apk"));
+
+        let missing = request_once_with_config(
+            &format!(
+                "GET /remote-codex/v1/updates/releases/7/remote-codex.apk HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TOKEN}\r\n\r\n"
+            ),
+            config,
+        )
+        .await;
+        assert!(missing.starts_with("HTTP/1.1 404 Not Found"));
+    }
+
     #[tokio::test]
     async fn validates_socket_and_forwards_upgraded_bytes_unchanged() {
         let directory = tempdir().unwrap();
@@ -543,9 +738,13 @@ mod tests {
     }
 
     async fn request_once(request: &str) -> String {
+        request_once_with_config(request, Config::new("/does-not-exist", TOKEN).unwrap()).await
+    }
+
+    async fn request_once_with_config(request: &str, config: Config) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let config = Arc::new(Config::new("/does-not-exist", TOKEN).unwrap());
+        let config = Arc::new(config);
         let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();

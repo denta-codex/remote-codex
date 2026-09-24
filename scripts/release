@@ -2,6 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 scripts/check
+command -v jq >/dev/null || { echo 'jq is required to generate update metadata' >&2; exit 1; }
 export JAVA_HOME="${JAVA_HOME:-$(mise where java@temurin-17.0.20+8)}"
 export ANDROID_HOME="${ANDROID_HOME:-/home/agent/Android/Sdk}"
 export PATH="$JAVA_HOME/bin:$PATH"
@@ -18,9 +19,35 @@ expected="$(cat docs/signing-certificate.sha256)"
 badging="$("$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$apk")"
 [[ "$badging" == *"package: name='dev.codexops.client'"* ]] || { echo 'Unexpected package identity' >&2; exit 1; }
 if [[ "$badging" == *application-debuggable* ]]; then echo 'Release is debuggable' >&2; exit 1; fi
-mkdir -p dist
-cp "$apk" dist/remote-codex-0.1.5.apk
+version_code="$(sed -n "s/^package:.*versionCode='\([^']*\)'.*/\1/p" <<<"$badging")"
+version_name="$(sed -n "s/^package:.*versionName='\([^']*\)'.*/\1/p" <<<"$badging")"
+[[ "$version_code" =~ ^[1-9][0-9]*$ && -n "$version_name" ]] || { echo 'Invalid APK version metadata' >&2; exit 1; }
+release_notes=docs/release-notes.md
+[[ -s "$release_notes" ]] || { echo 'Release notes are missing' >&2; exit 1; }
+release_dir="dist/updates/releases/$version_code"
+stable_dir=dist/updates/stable
+mkdir -p "$release_dir" "$stable_dir"
+cp "$apk" "$release_dir/remote-codex.apk"
 (cd forwarder && mise x rust@1.95.0 -- cargo build --locked --release)
 cp forwarder/target/release/remote-codex-forwarder dist/remote-codex-forwarder
-(cd dist && sha256sum remote-codex-0.1.5.apk remote-codex-forwarder > SHA256SUMS)
-echo 'Signed APK and forwarder ready in dist/. Nothing deployed or delivered.'
+apk_sha256="$(sha256sum "$release_dir/remote-codex.apk" | cut -d' ' -f1)"
+apk_size="$(stat --format='%s' "$release_dir/remote-codex.apk")"
+jq -n \
+  --arg schema 'dev.codexops.remote-codex.update/v1' \
+  --arg channel stable \
+  --arg packageName dev.codexops.client \
+  --argjson versionCode "$version_code" \
+  --arg versionName "$version_name" \
+  --arg publishedAt "$(date --utc +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg apkUrl "/remote-codex/v1/updates/releases/$version_code/remote-codex.apk" \
+  --argjson apkSize "$apk_size" \
+  --arg sha256 "$apk_sha256" \
+  --arg signingCertificateSha256 "$actual" \
+  --rawfile releaseNotes "$release_notes" \
+  '{schema: $schema, channel: $channel, packageName: $packageName, versionCode: $versionCode, versionName: $versionName, publishedAt: $publishedAt, apkUrl: $apkUrl, apkSize: $apkSize, sha256: $sha256, signingCertificateSha256: $signingCertificateSha256, releaseNotes: ($releaseNotes | sub("\\n+$"; ""))}' \
+  > "$stable_dir/latest.json"
+(cd dist && sha256sum \
+  "updates/releases/$version_code/remote-codex.apk" \
+  updates/stable/latest.json \
+  remote-codex-forwarder > SHA256SUMS)
+echo "Signed Remote Codex $version_name ($version_code), update manifest, and forwarder ready in dist/. Nothing deployed or published."

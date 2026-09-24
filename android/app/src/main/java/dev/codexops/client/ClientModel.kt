@@ -24,11 +24,13 @@ constructor(
         GraceHost.copy(endpoint = endpoint, expectedCodexHome = expectedHome)
     private val local: ClientStore = LocalStore(app)
     private val rpc: RemoteSession = StockRemoteSession(allowLoopbackTest)
+    private val updater = AppUpdater(app, endpoint, allowLoopbackTest)
     private val workspaces = StockWorkspaceAdapter(rpc)
     private val timeline = Timeline()
     private val _state = MutableStateFlow(ScreenState(host = host))
     val state = _state.asStateFlow()
     private var connectionJob: Job? = null
+    private var updateJob: Job? = null
     private var foreground = false
     private var selection = 0
     private var listSelection = 0
@@ -52,10 +54,14 @@ constructor(
             }
             for (event in rpc.events) handle(event)
         }
+        viewModelScope.launch {
+            UpdateInstallResults.events.collect { message -> applyInstallResult(message) }
+        }
     }
 
     fun foreground(value: Boolean) {
         foreground = value
+        if (value) UpdateInstallResults.consume(getApplication())?.let(::applyInstallResult)
         if (value && !_state.value.ready) connect()
     }
 
@@ -162,6 +168,127 @@ constructor(
                     it.copy(error = "Could not save credential. Check its value and try again.")
                 }
             }
+        }
+    }
+
+    override fun checkForUpdates() {
+        if (updateJob?.isActive == true) return
+        updateJob =
+            viewModelScope.launch {
+                _state.update { it.copy(update = UpdateState(stage = UpdateStage.Checking)) }
+                try {
+                    val token = local.token()
+                    if (token.isEmpty()) throw UpdateFailure("Enter the connection credential before checking for updates.")
+                    val manifest = updater.check(token)
+                    _state.update {
+                        it.copy(
+                            update =
+                                if (isUpdateAvailable(manifest, BuildConfig.VERSION_CODE.toLong()))
+                                    UpdateState(UpdateStage.Available, manifest)
+                                else
+                                    UpdateState(
+                                        UpdateStage.Current,
+                                        message = "Remote Codex is up to date.",
+                                    )
+                        )
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: UpdateFailure) {
+                    _state.update { it.copy(update = UpdateState(UpdateStage.Error, message = e.message)) }
+                } catch (_: Exception) {
+                    _state.update {
+                        it.copy(update = UpdateState(UpdateStage.Error, message = "Could not reach the private update service. Check Tailscale and try again."))
+                    }
+                }
+            }
+    }
+
+    override fun downloadAndInstallUpdate() {
+        if (updateJob?.isActive == true) return
+        val manifest = _state.value.update.manifest ?: return
+        updateJob =
+            viewModelScope.launch {
+                _state.update { it.copy(update = UpdateState(UpdateStage.Downloading, manifest)) }
+                var file: java.io.File? = null
+                try {
+                    val token = local.token()
+                    if (token.isEmpty()) throw UpdateFailure("The connection credential is unavailable.")
+                    file =
+                        updater.downloadAndVerify(manifest, token) { progress ->
+                            _state.update {
+                                it.copy(update = UpdateState(UpdateStage.Downloading, manifest, progress))
+                            }
+                        }
+                    _state.update {
+                        it.copy(
+                            update =
+                                UpdateState(
+                                    UpdateStage.Installing,
+                                    manifest,
+                                    100,
+                                    "Confirm the update in Android's installer.",
+                                )
+                        )
+                    }
+                    updater.install(file, manifest)
+                    file.delete()
+                } catch (e: CancellationException) {
+                    file?.delete()
+                    _state.update {
+                        it.copy(
+                            update =
+                                UpdateState(
+                                    UpdateStage.Available,
+                                    manifest,
+                                    message = "Download canceled.",
+                                )
+                        )
+                    }
+                } catch (e: UpdateFailure) {
+                    file?.delete()
+                    _state.update {
+                        it.copy(update = UpdateState(UpdateStage.Error, manifest, message = e.message))
+                    }
+                } catch (_: Exception) {
+                    file?.delete()
+                    _state.update {
+                        it.copy(
+                            update =
+                                UpdateState(
+                                    UpdateStage.Error,
+                                    manifest,
+                                    message = "The installation request failed or its outcome is uncertain. Inspect Android's installer before trying again.",
+                                )
+                        )
+                    }
+                }
+            }
+    }
+
+    override fun cancelUpdateDownload() {
+        if (_state.value.update.stage == UpdateStage.Downloading) updateJob?.cancel()
+    }
+
+    override fun updateInstallPermissionRequired() {
+        _state.update {
+            it.copy(
+                update =
+                    it.update.copy(
+                        message = "Allow Remote Codex to install apps, then return and tap Download and install again."
+                    )
+            )
+        }
+    }
+
+    private fun applyInstallResult(message: String?) {
+        _state.update {
+            it.copy(
+                update =
+                    if (message == null || message == "Update installed.")
+                        UpdateState(UpdateStage.Current, message = "Update installed.")
+                    else UpdateState(UpdateStage.Error, it.update.manifest, message = message)
+            )
         }
     }
 

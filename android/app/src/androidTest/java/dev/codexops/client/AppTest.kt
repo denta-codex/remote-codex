@@ -557,6 +557,7 @@ class AppTest {
         demoPause(2500)
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithText("Scan setup QR").assertIsDisplayed()
+        compose.onNodeWithText("Check for updates").performScrollTo().assertIsDisplayed()
         demoPause(2000)
         compose.onNodeWithContentDescription("Tasks").performClick()
         compose.onNodeWithContentDescription("New chat").performClick()

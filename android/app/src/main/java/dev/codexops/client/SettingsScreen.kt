@@ -1,6 +1,8 @@
 package dev.codexops.client
 
 import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -116,5 +118,89 @@ internal fun SettingsScreen(st: ScreenState, actions: SettingsActions) {
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        HorizontalDivider()
+        Text("Updates", fontWeight = FontWeight.SemiBold)
+        Text(
+            "Updates are checked only when you ask. Downloads come from ${st.host.displayName} over your private connection and are verified before Android opens its installer.",
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        st.update.manifest?.let { update ->
+            Text(
+                "Remote Codex ${update.versionName} (${update.versionCode})",
+                fontWeight = FontWeight.Medium,
+            )
+            if (update.releaseNotes.isNotBlank())
+                Text(
+                    update.releaseNotes,
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+        }
+        st.update.message?.let {
+            Text(
+                it,
+                fontSize = 13.sp,
+                color =
+                    if (st.update.stage == UpdateStage.Error) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        when (st.update.stage) {
+            UpdateStage.Idle,
+            UpdateStage.Current,
+            UpdateStage.Error ->
+                OutlinedButton(
+                    onClick = actions::checkForUpdates,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Glyph(R.drawable.ic_refresh)
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (st.update.stage == UpdateStage.Error) "Check again" else "Check for updates")
+                }
+            UpdateStage.Checking ->
+                Button(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Checking…")
+                }
+            UpdateStage.Available ->
+                Button(
+                    onClick = {
+                        if (context.packageManager.canRequestPackageInstalls()) {
+                            actions.downloadAndInstallUpdate()
+                        } else {
+                            actions.updateInstallPermissionRequired()
+                            context.startActivity(
+                                Intent(
+                                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                    Uri.parse("package:${context.packageName}"),
+                                )
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Glyph(R.drawable.ic_down)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Download and install")
+                }
+            UpdateStage.Downloading -> {
+                LinearProgressIndicator(
+                    progress = { st.update.progress / 100f },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedButton(
+                    onClick = actions::cancelUpdateDownload,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Cancel download")
+                }
+            }
+            UpdateStage.Installing ->
+                Button(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) {
+                    Text("Waiting for Android…")
+                }
+        }
     }
 }

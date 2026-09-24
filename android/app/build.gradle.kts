@@ -10,8 +10,8 @@ android {
         applicationId = "dev.codexops.client"
         minSdk = 29
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.1.5"
+        versionCode = 8
+        versionName = "0.1.7"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {
@@ -34,6 +34,10 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+    val releaseCertificate = rootProject.file("../docs/signing-certificate.sha256").readText().trim()
+    defaultConfig {
+        buildConfigField("String", "RELEASE_CERTIFICATE_SHA256", "\"$releaseCertificate\"")
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

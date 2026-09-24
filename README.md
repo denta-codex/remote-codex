@@ -65,6 +65,8 @@ Tests use an isolated Codex home and fake model, not live account credentials.
 scripts/deploy
 scripts/deploy -e remote_codex_action=deploy --check --diff
 scripts/deploy -e remote_codex_action=deploy
+scripts/deploy -e remote_codex_action=publish --check --diff
+scripts/deploy -e remote_codex_action=publish
 scripts/deploy -e remote_codex_action=deliver
 ```
 
@@ -72,6 +74,16 @@ Default action is preview. Deploy checks identity, release hashes and existing
 Serve routes, then installs the user service and configures private Serve with
 `--bg`. It does not change or restart Codex. Delivery targets the single phone in
 inventory. The user opens the APK and confirms installation.
+
+Publish is a separate, explicit phone-delivery step. It requires a running host
+that exposes the authenticated update extension, but Android-only releases do not
+require an identical forwarder build. It copies the signed APK to an immutable
+private release path and atomically advances the stable manifest. In app Settings,
+**Check for updates** contacts only the authenticated
+`/remote-codex/v1/updates/` extension routes. **Download and install** verifies
+the manifest, APK hash, package, version and signing certificate before asking
+Android to confirm installation. There is no automatic or background check.
+Taildrop delivery remains the bootstrap and recovery path.
 
 Deployment creates a single user-scoped systemd encrypted credential at
 `/home/agent/.local/share/remote-codex/connection-token.cred` (0600). The user

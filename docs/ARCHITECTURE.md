@@ -1,4 +1,4 @@
-# Remote Codex 0.1.5
+# Remote Codex 0.1.7
 
 Android uses Java-WebSocket WSS over the existing Tailscale app. Persistent Tailscale Serve
 (`--bg`) terminates TLS and proxies the root route to 127.0.0.1:8787. The Rust service
@@ -17,8 +17,21 @@ The host bearer token is a systemd encrypted user credential loaded at service
 start. Android scans its versioned setup QR and stores the token with an Android
 Keystore key. Authentication applies only to the forwarder upgrade; stock RPC
 remains unchanged.
-Android has no SSH transport. SSH is for deployment/recovery. Additional HTTP
-transfer/preview endpoints are deferred.
+Android has no SSH transport. SSH is for deployment/recovery. Interactive preview
+endpoints remain deferred.
+
+The project-owned private updater is deliberately outside the stock RPC surface.
+Authenticated `GET /remote-codex/v1/updates/stable/latest.json` and immutable
+`GET /remote-codex/v1/updates/releases/<versionCode>/remote-codex.apk` routes
+serve files from the forwarder's read-only update root. Their manifest schema is
+`dev.codexops.remote-codex.update/v1`; `/codex/rpc` remains the only stock Codex
+bridge. Update discovery is user initiated in Settings. Android downloads into
+app-private storage, verifies the expected package, higher version, SHA-256 and
+pinned signing certificate, then commits a `PackageInstaller` session that always
+requires user confirmation. Publishing is explicit and manifest-last. It checks
+that the installed host supports the authenticated update extension, but it does
+not couple an Android-only release to the exact forwarder binary produced by the
+release build. Taildrop remains available for bootstrap and recovery.
 
 The protocol module separates responses, notifications, and server requests even
 when IDs overlap. Events carry a local connection generation; old-generation
