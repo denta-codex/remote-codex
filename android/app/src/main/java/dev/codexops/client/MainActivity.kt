@@ -2,18 +2,28 @@ package dev.codexops.client
 
 import android.app.Activity
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.ImageDecoder
+import android.net.Uri
 import android.os.Bundle
 import android.os.Build
+import android.provider.Settings
+import android.util.LruCache
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -24,6 +34,9 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
@@ -32,9 +45,14 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.window.Dialog
 import com.mikepenz.markdown.m3.Markdown
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import dev.codexops.core.*
+import java.io.File
+import java.nio.ByteBuffer
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 
 class AssistantActivity : Activity() {
@@ -319,7 +337,7 @@ private fun Settings(st: ScreenState, model: ClientModel) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(
-            "Remote Codex ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})\nText-first preview · Grace / agent",
+            "Remote Codex ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})\nText and images · Grace / agent",
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -330,6 +348,14 @@ private fun Settings(st: ScreenState, model: ClientModel) {
 private fun ColumnScope.Chat(st: ScreenState, model: ClientModel) {
     var confirmUnlock by remember { mutableStateOf(false) }
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    val picker =
+        rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) {
+            model.addAttachments(it)
+        }
+    val camera =
+        rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) {
+            model.finishCamera(it)
+        }
     val scroll = rememberLazyListState()
     val nearBottom by remember {
         derivedStateOf {
@@ -371,7 +397,7 @@ private fun ColumnScope.Chat(st: ScreenState, model: ClientModel) {
                 }
             }
         items(st.entries.filter { it.kind != "reasoning" }, key = { it.key }) { entry ->
-            Message(entry)
+            Message(entry, model)
         }
         items(st.decisions, key = { it.key }) { decision -> DecisionCard(decision, st, model) }
         if (st.attention && st.decisions.isEmpty())
@@ -418,6 +444,17 @@ private fun ColumnScope.Chat(st: ScreenState, model: ClientModel) {
     }
     Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
         Column(Modifier.padding(12.dp)) {
+            if (st.attachments.isNotEmpty())
+                LazyRow(
+                    Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(st.attachments, key = { it.id }) { attachment ->
+                        DraftAttachmentPreview(attachment) {
+                            model.removeAttachment(attachment.id)
+                        }
+                    }
+                }
             OutlinedTextField(
                 st.draft,
                 model::draft,
@@ -428,6 +465,24 @@ private fun ColumnScope.Chat(st: ScreenState, model: ClientModel) {
                 enabled = !st.busy,
             )
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(
+                    onClick = {
+                        picker.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    },
+                    enabled = !st.busy && st.journal == null,
+                    modifier = Modifier.testTag("add-photos"),
+                ) {
+                    Text("Photos")
+                }
+                TextButton(
+                    onClick = { model.prepareCamera()?.let(camera::launch) },
+                    enabled = !st.busy && st.journal == null,
+                    modifier = Modifier.testTag("add-camera"),
+                ) {
+                    Text("Camera")
+                }
                 Text(
                     if (st.activeTurn != null) "Follow-up guides the active turn"
                     else "Grace defaults",
@@ -443,7 +498,11 @@ private fun ColumnScope.Chat(st: ScreenState, model: ClientModel) {
                         model.send()
                     },
                     modifier = Modifier.testTag("send"),
-                    enabled = st.ready && !st.busy && st.draft.isNotBlank() && st.journal == null,
+                    enabled =
+                        st.ready &&
+                            !st.busy &&
+                            (st.draft.isNotBlank() || st.attachments.isNotEmpty()) &&
+                            st.journal == null,
                 ) {
                     Text(if (st.activeTurn != null) "Follow up" else "Send")
                 }
@@ -471,20 +530,181 @@ private fun ColumnScope.Chat(st: ScreenState, model: ClientModel) {
         )
 }
 
+private object BitmapMemoryCache : LruCache<String, Bitmap>(8 * 1024 * 1024) {
+    override fun sizeOf(key: String, value: Bitmap) = value.allocationByteCount
+}
+
+private suspend fun decodedBitmap(key: String, bytes: ByteArray, maximum: Int): Bitmap =
+    withContext(Dispatchers.Default) {
+        val cacheKey = "$key/$maximum"
+        BitmapMemoryCache.get(cacheKey)?.let { return@withContext it }
+        val bitmap =
+            ImageDecoder.decodeBitmap(ImageDecoder.createSource(ByteBuffer.wrap(bytes))) {
+                decoder, info, _ ->
+                val width = info.size.width
+                val height = info.size.height
+                val longest = maxOf(width, height)
+                if (longest > maximum) {
+                    val scale = maximum.toDouble() / longest
+                    decoder.setTargetSize(
+                        (width * scale).toInt().coerceAtLeast(1),
+                        (height * scale).toInt().coerceAtLeast(1),
+                    )
+                }
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            }
+        BitmapMemoryCache.put(cacheKey, bitmap)
+        bitmap
+    }
+
 @Composable
-private fun Message(entry: Entry) {
+private fun DraftAttachmentPreview(attachment: DraftAttachment, remove: () -> Unit) {
+    val bitmap by
+        produceState<Bitmap?>(null, attachment.id) {
+            value =
+                runCatching {
+                        decodedBitmap(
+                            attachment.id,
+                            withContext(Dispatchers.IO) { File(attachment.localPath).readBytes() },
+                            320,
+                        )
+                    }
+                    .getOrNull()
+        }
+    Surface(
+        Modifier.width(112.dp).testTag("draft-attachment"),
+        shape = MaterialTheme.shapes.small,
+        tonalElevation = 2.dp,
+    ) {
+        Column {
+            if (bitmap == null)
+                Box(Modifier.fillMaxWidth().height(80.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                }
+            else
+                Image(
+                    bitmap!!.asImageBitmap(),
+                    attachment.displayName,
+                    Modifier.fillMaxWidth().height(80.dp),
+                    contentScale = ContentScale.Crop,
+                )
+            TextButton(remove, Modifier.fillMaxWidth()) { Text("Remove", fontSize = 11.sp) }
+        }
+    }
+}
+
+@Composable
+private fun MediaGallery(media: List<MediaRef>, model: ClientModel) {
+    if (media.isEmpty()) return
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        media.forEach { MediaPreview(it, model) }
+    }
+}
+
+@Composable
+private fun MediaPreview(media: MediaRef, model: ClientModel) {
+    val context = LocalContext.current
+    if (media.location == MediaLocation.EXTERNAL_URL) {
+        TextButton(
+            onClick = {
+                runCatching {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(media.value)))
+                }
+            }
+        ) {
+            Text("Open external image")
+        }
+        return
+    }
+    var expanded by rememberSaveable(media.key) { mutableStateOf(false) }
+    val result by
+        produceState<Result<Bitmap>?>(null, media.key, media.value, expanded) {
+            value =
+                runCatching {
+                    decodedBitmap(media.key, model.loadMedia(media), if (expanded) 2048 else 1024)
+                }
+        }
+    when {
+        result == null ->
+            Box(
+                Modifier.fillMaxWidth().height(160.dp).testTag("message-image-loading"),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+            }
+        result!!.isFailure ->
+            Text(
+                "Image unavailable",
+                Modifier.padding(vertical = 12.dp).testTag("message-image-error"),
+                color = MaterialTheme.colorScheme.error,
+            )
+        else -> {
+            val bitmap = result!!.getOrThrow()
+            Image(
+                bitmap.asImageBitmap(),
+                "Conversation image",
+                Modifier.fillMaxWidth()
+                    .heightIn(max = 360.dp)
+                    .clip(MaterialTheme.shapes.medium)
+                    .clickable { expanded = true }
+                    .testTag("message-image"),
+                contentScale = ContentScale.Fit,
+            )
+            if (expanded)
+                Dialog(onDismissRequest = { expanded = false }) {
+                    Surface(
+                        Modifier.fillMaxWidth().clickable { expanded = false },
+                        shape = MaterialTheme.shapes.medium,
+                    ) {
+                        Column {
+                            Image(
+                                bitmap.asImageBitmap(),
+                                "Expanded conversation image",
+                                Modifier.fillMaxWidth().heightIn(max = 720.dp),
+                                contentScale = ContentScale.Fit,
+                            )
+                            TextButton(
+                                { expanded = false },
+                                Modifier.align(Alignment.End).testTag("close-image"),
+                            ) {
+                                Text("Close")
+                            }
+                        }
+                    }
+                }
+        }
+    }
+}
+
+@Composable
+private fun Message(entry: Entry, model: ClientModel) {
     var expanded by rememberSaveable(entry.key) { mutableStateOf(false) }
     if (entry.kind == "userMessage")
         Surface(
             color = MaterialTheme.colorScheme.surfaceVariant,
             shape = MaterialTheme.shapes.medium,
         ) {
-            SelectionContainer { Text(entry.text, Modifier.padding(16.dp)) }
+            Column(
+                Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                MediaGallery(entry.media, model)
+                if (entry.text.isNotBlank()) SelectionContainer { Text(entry.text) }
+            }
         }
     else if (entry.kind == "agentMessage" || entry.kind == "plan")
-        SelectionContainer { Markdown(entry.text.take(100000)) }
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            MediaGallery(entry.media, model)
+            if (entry.text.isNotBlank()) SelectionContainer { Markdown(entry.text.take(100000)) }
+        }
+    else if (entry.kind == "imageView" || entry.kind == "imageGeneration")
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            MediaGallery(entry.media, model)
+            if (entry.text.isNotBlank()) Text(entry.text, fontSize = 13.sp)
+        }
     else
         Column {
+            MediaGallery(entry.media, model)
             TextButton(onClick = { expanded = !expanded }) {
                 Text(
                     (if (expanded) "▾ " else "▸ ") +

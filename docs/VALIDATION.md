@@ -1,5 +1,20 @@
 # Validation
 
+## September 24, 2026 — 0.1.4 bidirectional images
+
+- Added persisted Photos/camera drafts, image-only and mixed turns, and stock
+  `localImage` upload through filesystem RPC. Originals are limited to 20 MiB each
+  and 50 MiB combined; JPEG, PNG, WebP, and non-animated GIF are accepted.
+- Added structured timeline rendering for user images, `imageView`, and
+  `imageGeneration`, with lazy host reads, bounded caching, sampled previews, and
+  an expanded viewer. External HTTP images are not fetched automatically.
+- Added regression coverage for wire shapes, media parsing, draft restoration,
+  image-only upload/rendering, and uncertain file-write handling. The isolated
+  stock lifecycle now sends a full 20 MiB payload through WSS and verifies the
+  written host file.
+- Local checks and physical-device acceptance are recorded separately below; this
+  section does not claim deployment or phone delivery.
+
 ## September 23, 2026 — 0.1.3 live Android connection fix
 
 - Razr 0.1.2 remained disconnected after the shutdown fix. Credential-free HTTPS

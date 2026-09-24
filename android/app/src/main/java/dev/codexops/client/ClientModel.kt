@@ -3,10 +3,12 @@ package dev.codexops.client
 import android.app.Application
 import android.net.ConnectivityManager
 import android.net.Network
+import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.codexops.core.*
+import java.io.File
 import java.util.UUID
 import kotlin.concurrent.thread
 import kotlinx.coroutines.*
@@ -29,6 +31,7 @@ data class ScreenState(
     val entries: List<Entry> = emptyList(),
     val historyCursor: String? = null,
     val draft: String = "",
+    val attachments: List<DraftAttachment> = emptyList(),
     val activeTurn: String? = null,
     val decisions: List<Decision> = emptyList(),
     val busy: Boolean = false,
@@ -48,6 +51,8 @@ constructor(
     private val local = LocalStore(app)
     private val rpc = Rpc(allowLoopbackTest)
     private val timeline = Timeline()
+    private val attachmentStore = AttachmentStore(app)
+    private val mediaRepository = MediaRepository(app)
     private val _state = MutableStateFlow(ScreenState())
     val state = _state.asStateFlow()
     private var connectionJob: Job? = null
@@ -55,6 +60,7 @@ constructor(
     private var selection = 0
     private var listSelection = 0
     private var hydrating = false
+    private var codexHome = expectedHome
     private val buffered = mutableListOf<JsonObject>()
     private val requests = linkedMapOf<String, Decision>()
     private val network = app.getSystemService(ConnectivityManager::class.java)
@@ -117,6 +123,7 @@ constructor(
                         require(init.str("codexHome") == expectedHome) {
                             "Unexpected Codex account"
                         }
+                        codexHome = init.str("codexHome")
                         _state.update { it.copy(connection = "Connected to Grace", ready = true) }
                         refreshList()
                         val id = _state.value.thread
@@ -260,6 +267,7 @@ constructor(
             buffered.clear()
             hydrating = false
             val draft = local.get("draft/new")
+            val attachments = restoreAttachments("new")
             val journal = parse(local.get("journal/new"))
             _state.update {
                 it.copy(
@@ -271,6 +279,7 @@ constructor(
                     decisions = emptyList(),
                     historyCursor = null,
                     draft = draft,
+                    attachments = attachments,
                     journal = journal,
                     error = null,
                     attention = false,
@@ -315,23 +324,28 @@ constructor(
                 entries = emptyList(),
                 activeTurn = null,
                 historyCursor = null,
+                attachments = emptyList(),
                 error = null,
                 busy = true,
                 attention = false,
             )
         }
         var draft = local.get("draft/$id")
+        var attachments = restoreAttachments(id)
         var journal = parse(local.get("journal/$id"))
         if (journal?.str("stage") == "accepted") {
             if (draft == journal.str("text")) {
                 local.remove("draft/$id")
                 draft = ""
+                attachments.forEach(attachmentStore::delete)
+                local.remove("attachments/$id")
+                attachments = emptyList()
             }
             local.remove("journal/$id")
             journal = null
         }
         if (n != selection) return
-        _state.update { it.copy(draft = draft, journal = journal) }
+        _state.update { it.copy(draft = draft, attachments = attachments, journal = journal) }
         try {
             val response =
                 readEventually(
@@ -416,9 +430,99 @@ constructor(
         viewModelScope.launch { local.put("draft/$key", value) }
     }
 
+    fun addAttachments(uris: List<Uri>) {
+        val before = _state.value
+        if (before.busy || before.journal != null || uris.isEmpty()) return
+        val n = selection
+        val key = before.thread ?: "new"
+        viewModelScope.launch {
+            var values = before.attachments
+            for (uri in uris) {
+                try {
+                    val added = attachmentStore.import(uri, values.sumOf { it.byteSize })
+                    if (n != selection || (_state.value.thread ?: "new") != key) {
+                        attachmentStore.delete(added)
+                        return@launch
+                    }
+                    values = values + added
+                    persistAttachments(key, values)
+                    _state.update { it.copy(attachments = values, error = null) }
+                } catch (e: Exception) {
+                    _state.update { it.copy(error = e.message ?: "The selected image could not be added.") }
+                    break
+                }
+            }
+        }
+    }
+
+    fun prepareCamera(): Uri? {
+        val st = _state.value
+        if (st.busy || st.journal != null) return null
+        return runCatching { attachmentStore.prepareCamera() }
+            .onFailure {
+                _state.update { state -> state.copy(error = "The camera could not be opened.") }
+            }
+            .getOrNull()
+    }
+
+    fun finishCamera(success: Boolean) {
+        val before = _state.value
+        val n = selection
+        val key = before.thread ?: "new"
+        viewModelScope.launch {
+            try {
+                val added =
+                    attachmentStore.finishCamera(success, before.attachments.sumOf { it.byteSize })
+                        ?: return@launch
+                if (n != selection || (_state.value.thread ?: "new") != key) {
+                    attachmentStore.delete(added)
+                    return@launch
+                }
+                val values = before.attachments + added
+                persistAttachments(key, values)
+                _state.update { it.copy(attachments = values, error = null) }
+            } catch (e: Exception) {
+                _state.update { it.copy(error = e.message ?: "The camera image could not be added.") }
+            }
+        }
+    }
+
+    fun removeAttachment(id: String) {
+        val st = _state.value
+        if (st.busy || st.journal != null) return
+        val removed = st.attachments.find { it.id == id } ?: return
+        val values = st.attachments.filterNot { it.id == id }
+        val key = st.thread ?: "new"
+        _state.update { it.copy(attachments = values) }
+        viewModelScope.launch {
+            persistAttachments(key, values)
+            attachmentStore.delete(removed)
+        }
+    }
+
+    suspend fun loadMedia(media: MediaRef): ByteArray =
+        mediaRepository.load(media) { rpc.readFile(it) }
+
+    private suspend fun restoreAttachments(key: String): List<DraftAttachment> =
+        runCatching { attachmentStore.restore(local.get("attachments/$key")) }
+            .getOrElse {
+                local.remove("attachments/$key")
+                emptyList()
+            }
+
+    private suspend fun persistAttachments(key: String, values: List<DraftAttachment>) {
+        if (values.isEmpty()) local.remove("attachments/$key")
+        else local.put("attachments/$key", attachmentStore.serialize(values))
+    }
+
     fun send() {
         val before = _state.value
-        if (!before.ready || before.busy || before.draft.isBlank() || before.journal != null) return
+        if (
+            !before.ready ||
+                before.busy ||
+                (before.draft.isBlank() && before.attachments.isEmpty()) ||
+                before.journal != null
+        ) return
         _state.update { it.copy(busy = true, error = null) }
         viewModelScope.launch {
             val originalKey = before.thread ?: "new"
@@ -430,6 +534,7 @@ constructor(
                     "stage" to s("preparing"),
                     "cwd" to s("/home/agent/Documents/RemoteCodex/$operation"),
                     "threadId" to before.thread?.let(::s),
+                    "attachments" to JsonArray(before.attachments.map { it.json() }),
                 )
             var key = originalKey
             suspend fun record(stage: String) {
@@ -496,17 +601,56 @@ constructor(
                     key = id
                     local.put("journal/$key", journal.toString())
                     local.put("draft/$key", before.draft)
+                    persistAttachments(key, before.attachments)
                     local.remove("journal/new")
                     local.remove("draft/new")
-                    _state.update { it.copy(thread = id, title = before.draft.take(80)) }
+                    local.remove("attachments/new")
+                    _state.update {
+                        it.copy(
+                            thread = id,
+                            title = before.draft.take(80).ifBlank { "Image message" },
+                        )
+                    }
+                }
+                val remotePaths = mutableListOf<String>()
+                if (before.attachments.isNotEmpty()) {
+                    ImagePolicy.validateCombined(before.attachments.map { it.byteSize })
+                    val safeThread = id.replace(Regex("[^A-Za-z0-9._-]"), "-")
+                    val remoteDirectory =
+                        "$codexHome/attachments/remote-android/$safeThread/$operation"
+                    journal = JsonObject(journal + ("remoteDirectory" to s(remoteDirectory)))
+                    record("creatingAttachmentDirectory")
+                    rpc.createDirectory(remoteDirectory)
+                    before.attachments.forEachIndexed { index, attachment ->
+                        val file = File(attachment.localPath)
+                        val format = ImagePolicy.inspect(file)
+                        check(file.length() == attachment.byteSize) {
+                            "A draft image changed before it could be sent."
+                        }
+                        val remotePath =
+                            "$remoteDirectory/${safeAttachmentName(index + 1, attachment.displayName, format)}"
+                        remotePaths += remotePath
+                        journal =
+                            JsonObject(
+                                journal +
+                                    mapOf(
+                                        "remotePaths" to JsonArray(remotePaths.map(::s)),
+                                        "uploadIndex" to JsonPrimitive(index),
+                                    )
+                            )
+                        record("uploadingAttachment")
+                        rpc.writeFile(remotePath, withContext(Dispatchers.IO) { file.readBytes() })
+                        journal =
+                            JsonObject(journal + ("uploadedCount" to JsonPrimitive(index + 1)))
+                        record("attachmentUploaded")
+                    }
                 }
                 record("sending")
-                val input = JsonArray(listOf(obj("type" to s("text"), "text" to s(before.draft))))
                 rpc.call(
                     if (before.activeTurn == null) "turn/start" else "turn/steer",
                     obj(
                         "threadId" to s(id),
-                        "input" to input,
+                        "input" to turnInput(before.draft, remotePaths),
                         "clientUserMessageId" to s(operation),
                         "expectedTurnId" to before.activeTurn?.let(::s),
                     ),
@@ -514,7 +658,9 @@ constructor(
                 record("accepted")
                 local.remove("journal/$key")
                 local.remove("draft/$key")
-                _state.update { it.copy(draft = "", journal = null) }
+                local.remove("attachments/$key")
+                before.attachments.forEach(attachmentStore::delete)
+                _state.update { it.copy(draft = "", attachments = emptyList(), journal = null) }
                 // Refresh only after acceptance; a failed history read must never become a resend.
                 if (timeline.values().isEmpty()) _state.update { it.copy(error = null) }
             } catch (e: Exception) {
@@ -557,8 +703,10 @@ constructor(
         if (!found.isNullOrEmpty()) {
             local.put("journal/$found", JsonObject(journal + ("threadId" to s(found))).toString())
             local.put("draft/$found", journal.str("text"))
+            persistAttachments(found, _state.value.attachments)
             local.remove("journal/new")
             local.remove("draft/new")
+            local.remove("attachments/new")
             loadTask(found)
         }
     }

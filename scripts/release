@@ -19,7 +19,7 @@ badging="$("$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$apk")"
 [[ "$badging" == *"package: name='dev.codexops.client'"* ]] || { echo 'Unexpected package identity' >&2; exit 1; }
 if [[ "$badging" == *application-debuggable* ]]; then echo 'Release is debuggable' >&2; exit 1; fi
 mkdir -p dist
-cp "$apk" dist/remote-codex-0.1.3.apk
+cp "$apk" dist/remote-codex-0.1.4.apk
 (cd forwarder && go build -trimpath -o ../dist/remote-codex-forwarder ./cmd/forwarder)
-(cd dist && sha256sum remote-codex-0.1.3.apk remote-codex-forwarder > SHA256SUMS)
+(cd dist && sha256sum remote-codex-0.1.4.apk remote-codex-forwarder > SHA256SUMS)
 echo 'Signed APK and forwarder ready in dist/. Nothing deployed or delivered.'

@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"github.com/coder/websocket"
@@ -124,6 +125,18 @@ func TestStockLifecycle(t *testing.T) {
 	}
 	first := dial()
 	init(first)
+	// ChatGPT Android preserves originals up to 20 MiB. Prove that the largest
+	// supported image-sized fs/writeFile request traverses the real WSS proxy and
+	// stock control socket without adding a second upload protocol.
+	attachmentDir := filepath.Join(home, "attachments", "remote-android", "boundary")
+	call(first, "fs/createDirectory", map[string]any{"path": attachmentDir, "recursive": true})
+	attachmentPath := filepath.Join(attachmentDir, "20-mib.png")
+	attachmentBytes := make([]byte, 20<<20)
+	copy(attachmentBytes, []byte("remote-codex-image-boundary"))
+	call(first, "fs/writeFile", map[string]any{"path": attachmentPath, "dataBase64": base64.StdEncoding.EncodeToString(attachmentBytes)})
+	if info, err := os.Stat(attachmentPath); err != nil || info.Size() != int64(len(attachmentBytes)) {
+		t.Fatalf("20 MiB attachment did not traverse stock WSS intact: info=%v err=%v", info, err)
+	}
 	// Mirrors the Android workspace preparation, with a narrow explicit write root.
 	prep := call(first, "command/exec", map[string]any{"command": []string{"mkdir", "-p", "--", filepath.Join(workspace, "new")}, "sandboxPolicy": map[string]any{"type": "workspaceWrite", "writableRoots": []string{workspace}, "networkAccess": false}, "timeoutMs": 10000})
 	if string(prep["exitCode"]) != "0" {

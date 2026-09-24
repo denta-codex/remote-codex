@@ -1,4 +1,4 @@
-# Remote Codex 0.1.3
+# Remote Codex 0.1.4
 
 Android uses OkHttp WSS over the existing Tailscale app. Persistent Tailscale Serve
 (`--bg`) terminates TLS and proxies the root route to 127.0.0.1:8787. The Go service
@@ -15,8 +15,9 @@ The host bearer token is a systemd encrypted user credential loaded at service
 start. Android scans its versioned setup QR and stores the token with an Android
 Keystore key. Authentication applies only to the forwarder upgrade; stock RPC
 remains unchanged.
-Android has no SSH transport. SSH is for deployment/recovery. Additional HTTP
-transfer/preview endpoints are deferred.
+Android has no SSH transport. SSH is for deployment/recovery. Image transfer uses
+stock `fs/createDirectory`, `fs/writeFile`, and `fs/readFile` RPC over the same WSS
+connection; there is no additional HTTP upload or preview endpoint.
 
 The protocol module separates responses, notifications, and server requests even
 when IDs overlap. Events carry a local connection generation; old-generation
@@ -31,6 +32,20 @@ Each send is journaled before dispatch. Known IDs are saved before the next step
 An unacknowledged operation blocks further submission until the user inspects it.
 A reviewed record is retained locally; the composer can be explicitly unlocked.
 A successful acknowledgement removes the draft. Offline sending is not queued.
+Selected and camera images are first copied into app-private draft storage, and
+their descriptors are persisted with the text draft. Originals are preserved.
+Before the turn mutation, images are written sequentially beneath
+`$CODEX_HOME/attachments/remote-android/<thread>/<operation>` and referenced with
+stock `localImage` items. An uncertain directory creation, file write, or turn
+submission remains journaled and is never retried automatically. Limits match the
+ChatGPT Android remote client: 20 MiB per image and 50 MiB combined. Supported
+inputs are JPEG, PNG, WebP, and non-animated GIF.
+
+Timeline entries retain stock `image`, `localImage`, `imageView`, and
+`imageGeneration` media. Host paths are fetched lazily with `fs/readFile`; data
+URLs and generation results are decoded locally. Raw host images use a bounded
+app cache and sampled rendering. External HTTP image URLs require an explicit tap
+and are never fetched automatically by the app.
 
 Stock 0.154.0 can briefly return `list_turns is not supported yet` or `no rollout
 found` just after creation. This is retried only on history/resume reads, for a
@@ -42,7 +57,7 @@ another client. A missing file-change body disables approval; the user is direct
 to desktop. Unsupported dynamic/MCP requests remain visible as desktop-required.
 No auto-approval is performed. Permission grants are limited to the current turn.
 
-Limits: no push notifications, media, project/worktree controls, terminal emulator,
-model/mode selectors, or interactive previews. Activity text is bounded for phone
+Limits: no push notifications, non-image files, project/worktree controls, terminal
+emulator, model/mode selectors, or interactive previews. Activity text is bounded for phone
 rendering; full output remains on Grace. End-to-end physical-device behavior is a
 release acceptance step, not inferred from successful builds.
