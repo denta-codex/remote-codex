@@ -187,6 +187,7 @@ class AppTest {
                                                     ) -> {
                                                         createdWorktreePath = command[command.size - 2]
                                                         worktreeAdds.incrementAndGet()
+                                                        demoPause(1800)
                                                         if (dropWorktreeReply) {
                                                             dropWorktreeReply = false
                                                             ws.cancel()
@@ -552,6 +553,7 @@ class AppTest {
     fun selectedProjectCanRunInANewIsolatedWorktree() {
         compose.onNodeWithContentDescription("New chat").performClick()
         compose.waitUntil { model.state.value.page == "chat" }
+        demoPause()
         compose.runOnUiThread {
             model.updateNewTaskOptions(
                 NewTaskOptions(
@@ -562,17 +564,26 @@ class AppTest {
             )
         }
         compose.onNodeWithTag("workspace-current").assertIsSelected()
+        demoPause(2200)
         compose.onNodeWithTag("workspace-new-worktree").performClick()
         compose.onNodeWithTag("workspace-new-worktree").assertIsSelected()
+        demoPause(1800)
         compose.onNodeWithTag("composer").performTextInput("Change this in isolation")
+        demoPause(2200)
         compose.onNodeWithTag("send").performClick()
 
-        compose.waitUntil(15000) { sent.get() == 1 && model.state.value.journal == null }
+        compose.waitUntil(15000) {
+            sent.get() == 1 &&
+                model.state.value.journal == null &&
+                model.state.value.entries.any { it.text == "Hello from Grace" }
+        }
+        compose.onNodeWithText("Hello from Grace").assertIsDisplayed()
         assertEquals(1, worktreeAdds.get())
         assertEquals("project-1", threadStartParams!!.str("projectId"))
         assertEquals(createdWorktreePath, threadStartParams!!.str("cwd"))
         assertTrue(createdWorktreePath.startsWith("/fixture/worktrees/remote-codex-"))
         assertTrue(createdWorktreePath.endsWith("/workspace"))
+        demoPause(3500)
     }
 
     @Test
