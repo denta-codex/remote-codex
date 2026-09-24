@@ -34,9 +34,9 @@
   exact verified Rust binary on loopback with an enabled user service and zero
   restarts; the existing private Tailscale Serve route was preserved. The public
   route returned 401 without credentials, and a credential-protected, read-only
-  WSS `initialize` reached the stock app server. The earlier ambiguously versioned
-  APK was delivered to the configured Razr; the corrected 0.1.5 APK is prepared for
-  a replacement Taildrop delivery.
+  WSS `initialize` reached the stock app server. The corrected 0.1.5 APK was then
+  checksum-verified and delivered to the configured Razr through Taildrop; Android
+  installation awaits user confirmation.
 
 ## September 24, 2026 — integrated 0.1.4 Android release
 
