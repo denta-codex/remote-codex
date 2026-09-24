@@ -1,4 +1,4 @@
-# Remote Codex 0.1.3
+# Remote Codex 0.1.4
 
 Android uses OkHttp WSS over the existing Tailscale app. Persistent Tailscale Serve
 (`--bg`) terminates TLS and proxies the root route to 127.0.0.1:8787. The Go service
