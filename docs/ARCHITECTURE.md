@@ -23,11 +23,17 @@ when IDs overlap. Events carry a local connection generation; old-generation
 requests cannot be answered. History uses 20-turn pages. Bounded read retries
 cover the observed initial persistence delay; mutations are never replayed.
 
-New task directories are fixed under `/home/agent/Documents/RemoteCodex`, using a
-client UUID. Directory preparation uses an explicit workspace-write sandbox rooted
-there, without network access. Task execution then inherits Grace defaults.
+The client pages the stock `project/list` catalog and keeps project identity and
+thread assignment server-owned. The task browser can show all tasks, projectless
+Chats, or one existing project. New tasks default to projectless execution: their
+directories are fixed under `/home/agent/Documents/RemoteCodex`, using a client
+UUID, and preparation uses an explicit workspace-write sandbox rooted there without
+network access. Selecting an existing project instead uses its first stock project
+root as the current workspace and passes its ID to `thread/start`; it does not create
+a directory or worktree.
 
-Each send is journaled before dispatch. Known IDs are saved before the next step.
+Each send is journaled before dispatch, including a new task's project and workspace.
+Known IDs are saved before the next step.
 An unacknowledged operation blocks further submission until the user inspects it.
 A reviewed record is retained locally; the composer can be explicitly unlocked.
 A successful acknowledgement removes the draft. Offline sending is not queued.
@@ -42,7 +48,9 @@ another client. A missing file-change body disables approval; the user is direct
 to desktop. Unsupported dynamic/MCP requests remain visible as desktop-required.
 No auto-approval is performed. Permission grants are limited to the current turn.
 
-Limits: no push notifications, media, project/worktree controls, terminal emulator,
-model/mode selectors, or interactive previews. Activity text is bounded for phone
-rendering; full output remains on Grace. End-to-end physical-device behavior is a
-release acceptance step, not inferred from successful builds.
+Limits: existing projects can be selected but not created, deleted, reordered, or
+edited; only the first project root is offered and worktrees are not created. There
+are no push notifications, media, terminal emulator, model/mode selectors, or
+interactive previews. Activity text is bounded for phone rendering; full output
+remains on Grace. End-to-end physical-device behavior is a release acceptance step,
+not inferred from successful builds.

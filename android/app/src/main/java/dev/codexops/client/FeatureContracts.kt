@@ -31,6 +31,23 @@ data class ComposerAttachment(
     val localUri: String,
 )
 
+data class CodexProject(
+    val id: String,
+    val name: String,
+    val roots: List<String>,
+) {
+    val primaryRoot: String?
+        get() = roots.firstOrNull()
+}
+
+sealed interface TaskProjectFilter {
+    data object All : TaskProjectFilter
+
+    data object Projectless : TaskProjectFilter
+
+    data class Project(val id: String) : TaskProjectFilter
+}
+
 /** Shared new-task choices. Null values deliberately retain the server default. */
 data class NewTaskOptions(
     val projectId: String? = null,
@@ -49,6 +66,8 @@ data class ScreenState(
     val connection: String = "Offline",
     val ready: Boolean = false,
     val configured: Boolean = false,
+    val projects: List<CodexProject> = emptyList(),
+    val projectFilter: TaskProjectFilter = TaskProjectFilter.All,
     val tasks: List<JsonObject> = emptyList(),
     val listCursor: String? = null,
     val query: String = "",
@@ -79,6 +98,8 @@ interface HomeActions {
     fun query(value: String)
 
     fun archived(value: Boolean)
+
+    fun projectFilter(value: TaskProjectFilter)
 
     fun moreTasks()
 

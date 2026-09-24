@@ -25,11 +25,13 @@ class AppTest {
     private lateinit var model: ClientModel
     private val store = ViewModelStore()
     private val sent = AtomicInteger()
+    private val prepared = AtomicInteger()
     @Volatile private var dropSend = false
     @Volatile private var peer: WebSocket? = null
     @Volatile private var acceptedText = ""
     @Volatile private var historyOverride: JsonObject? = null
     @Volatile private var fixtureTitle = "Fixture task"
+    @Volatile private var lastThreadStart: JsonObject? = null
     private val app
         get() = ApplicationProvider.getApplicationContext<Application>()
     private val demo by lazy {
@@ -61,61 +63,84 @@ class AppTest {
                                     val result =
                                         when (method) {
                                             "initialize" -> obj("codexHome" to s("/fixture"))
+                                            "project/list" ->
+                                                if (params.str("cursor").isEmpty())
+                                                    obj(
+                                                        "data" to
+                                                            JsonArray(
+                                                                listOf(
+                                                                    project(
+                                                                        "project-remote",
+                                                                        "Remote Codex",
+                                                                        "/fixture/remote-codex",
+                                                                    )
+                                                                )
+                                                            ),
+                                                        "nextCursor" to s("projects-2"),
+                                                    )
+                                                else
+                                                    obj(
+                                                        "data" to
+                                                            JsonArray(
+                                                                listOf(
+                                                                    project(
+                                                                        "project-notes",
+                                                                        "Notes",
+                                                                        "/fixture/notes",
+                                                                    )
+                                                                )
+                                                            )
+                                                    )
                                             "thread/list" ->
                                                 obj(
                                                     "data" to
                                                         JsonArray(
-                                                            listOf(
-                                                                obj(
-                                                                    "id" to s("task-test"),
-                                                                    "name" to s(fixtureTitle),
-                                                                    "cwd" to s("/fixture"),
-                                                                )
-                                                            ) + if (fixtureTitle == "Fixture task") emptyList() else listOf(
-                                                                obj("id" to s("demo-2"), "name" to s("Review the Android build"),
-                                                                    "cwd" to s("/fixture/remote-codex"), "status" to obj("type" to s("idle"))),
-                                                                obj("id" to s("demo-3"), "name" to s("Tidy up the connection screen"),
-                                                                    "cwd" to s("/fixture/remote-codex"), "status" to obj("type" to s("notLoaded"))),
-                                                                obj("id" to s("demo-4"), "name" to s("Check the release notes"),
-                                                                    "cwd" to s("/fixture/notes"), "status" to obj("type" to s("idle"))),
-                                                            )
+                                                            fixtureTasks(params)
                                                         )
                                                 )
                                             "thread/search" ->
                                                 obj(
                                                     "data" to
                                                         JsonArray(
-                                                            listOf(
+                                                            fixtureTasks(obj()).map { task ->
                                                                 obj(
-                                                                    "thread" to
-                                                                        obj(
-                                                                            "id" to s("task-test"),
-                                                                            "name" to
-                                                                                s(fixtureTitle),
-                                                                            "cwd" to s("/fixture"),
-                                                                        ),
+                                                                    "thread" to task,
                                                                     "snippet" to s("fixture match"),
                                                                 )
-                                                            )
+                                                            }
                                                         )
                                                 )
                                             "thread/resume" ->
                                                 obj(
                                                     "thread" to
                                                         obj(
-                                                            "id" to s("task-test"),
-                                                            "name" to s(fixtureTitle),
+                                                            "id" to s(params.str("threadId")),
+                                                            "name" to
+                                                                s(
+                                                                    if (
+                                                                        params.str("threadId") ==
+                                                                            "project-task"
+                                                                    )
+                                                                        "Remote Codex project task"
+                                                                    else fixtureTitle
+                                                                ),
                                                         )
                                                 )
-                                            "thread/start" ->
+                                            "thread/start" -> {
+                                                lastThreadStart = params
                                                 obj(
                                                     "thread" to
                                                         obj(
                                                             "id" to s("task-test"),
-                                                            "projectId" to JsonNull,
+                                                            "projectId" to
+                                                                (params["projectId"] ?: JsonNull),
                                                         )
                                                 )
-                                            "command/exec" -> obj("exitCode" to JsonPrimitive(0))
+                                            }
+                                            "command/exec" -> {
+                                                prepared.incrementAndGet()
+                                                obj("exitCode" to JsonPrimitive(0))
+                                            }
                                             "thread/turns/list" -> history()
                                             "turn/start",
                                             "turn/steer" -> {
@@ -186,9 +211,16 @@ class AppTest {
         server.start()
         runBlocking {
             val local = LocalStore(app)
-            listOf("draft/new", "journal/new", "draft/task-test", "journal/task-test").forEach {
-                local.remove(it)
-            }
+            listOf(
+                    "draft/new",
+                    "journal/new",
+                    "options/new",
+                    "draft/task-test",
+                    "journal/task-test",
+                    "draft/project-task",
+                    "journal/project-task",
+                )
+                .forEach { local.remove(it) }
         }
         compose.runOnUiThread {
             model = ClientModel(app, "ws://127.0.0.1:${server.port}/rpc", "/fixture", true)
@@ -196,8 +228,71 @@ class AppTest {
             compose.activity.setContent { RemoteTheme { App(model) } }
             model.saveCredential("fixture-credential-0000000000000000000000000000000000000")
         }
-        compose.waitUntil(15000) { model.state.value.ready && model.state.value.tasks.isNotEmpty() }
+        compose.waitUntil(15000) {
+            model.state.value.ready &&
+                model.state.value.projects.size == 2 &&
+                model.state.value.tasks.isNotEmpty()
+        }
         demoPause()
+    }
+
+    private fun project(id: String, name: String, root: String) =
+        obj(
+            "id" to s(id),
+            "name" to s(name),
+            "roots" to JsonArray(listOf(obj("path" to s(root)))),
+        )
+
+    private fun fixtureTasks(params: JsonObject): List<JsonObject> {
+        val tasks =
+            listOf(
+                obj(
+                    "id" to s("task-test"),
+                    "name" to s(fixtureTitle),
+                    "cwd" to s("/fixture"),
+                    "projectId" to JsonNull,
+                ),
+                obj(
+                    "id" to s("project-task"),
+                    "name" to s("Remote Codex project task"),
+                    "cwd" to s("/fixture/remote-codex"),
+                    "projectId" to s("project-remote"),
+                    "status" to obj("type" to s("idle")),
+                ),
+            ) +
+                if (fixtureTitle == "Fixture task") emptyList()
+                else
+                    listOf(
+                        obj(
+                            "id" to s("demo-2"),
+                            "name" to s("Review the Android build"),
+                            "cwd" to s("/fixture/remote-codex"),
+                            "projectId" to s("project-remote"),
+                            "status" to obj("type" to s("idle")),
+                        ),
+                        obj(
+                            "id" to s("demo-3"),
+                            "name" to s("Tidy up the connection screen"),
+                            "cwd" to s("/fixture/remote-codex"),
+                            "projectId" to s("project-remote"),
+                            "status" to obj("type" to s("notLoaded")),
+                        ),
+                        obj(
+                            "id" to s("demo-4"),
+                            "name" to s("Check the release notes"),
+                            "cwd" to s("/fixture/notes"),
+                            "projectId" to s("project-notes"),
+                            "status" to obj("type" to s("idle")),
+                        ),
+                    )
+        return tasks.filter { task ->
+            val cwdMatches = params.str("cwd").let { it.isEmpty() || it == task.str("cwd") }
+            val projectMatches =
+                if (!params.containsKey("projectId")) true
+                else if (params["projectId"] is JsonNull) task["projectId"] is JsonNull
+                else params.str("projectId") == task.str("projectId")
+            cwdMatches && projectMatches
+        }
     }
 
     private fun history(): JsonObject {
@@ -358,6 +453,8 @@ class AppTest {
         compose.onNodeWithTag("send").performClick()
         compose.waitUntil(15000) { model.state.value.entries.any { it.text == "Hello from Grace" } }
         assertEquals(1, sent.get())
+        assertTrue(lastThreadStart?.get("projectId") is JsonNull)
+        assertEquals(1, prepared.get())
         compose.waitUntil(5000) {
             compose.onAllNodesWithText("Hello from Grace").fetchSemanticsNodes().isNotEmpty()
         }
@@ -395,6 +492,128 @@ class AppTest {
         assertNotNull(model.state.value.journal)
         compose.onNodeWithTag("send").assertIsNotEnabled()
         demoPause(2000)
+    }
+
+    @Test
+    fun projectsAndChatsFilterTaskBrowser() {
+        assertEquals(listOf("Remote Codex", "Notes"), model.state.value.projects.map { it.name })
+        demoPause(2000)
+
+        compose.onNode(hasText("Remote Codex") and hasClickAction()).performClick()
+        compose.waitUntil(5000) {
+            model.state.value.projectFilter == TaskProjectFilter.Project("project-remote") &&
+                model.state.value.tasks.map { it.str("id") } == listOf("project-task")
+        }
+        compose.onNodeWithText("Remote Codex project task").assertIsDisplayed()
+        compose.onNodeWithText(fixtureTitle).assertDoesNotExist()
+        demoPause(2000)
+
+        compose.onNodeWithText("Chats").performClick()
+        compose.waitUntil(5000) {
+            model.state.value.projectFilter == TaskProjectFilter.Projectless &&
+                model.state.value.tasks.map { it.str("id") } == listOf("task-test")
+        }
+        compose.onNodeWithText(fixtureTitle).assertIsDisplayed()
+        compose.onNodeWithText("Remote Codex project task").assertDoesNotExist()
+        demoPause(2000)
+
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil { model.state.value.page == "chat" }
+        demoPause(2000)
+        compose.onNodeWithTag("project-selector").performClick()
+        compose.onNodeWithText("Remote Codex").assertIsDisplayed()
+        demoPause(2000)
+        compose.onNodeWithText("Remote Codex").performClick()
+        compose.waitUntil {
+            model.state.value.newTaskOptions.projectId == "project-remote" &&
+                model.state.value.newTaskOptions.workingDirectory == "/fixture/remote-codex"
+        }
+        demoPause(2000)
+        compose.onNodeWithTag("composer").performTextInput("Review the project status")
+        demoPause(2000)
+        compose.onNodeWithTag("send").performClick()
+        compose.waitUntil(15000) {
+            sent.get() == 1 &&
+                !model.state.value.busy &&
+                model.state.value.journal == null &&
+                model.state.value.entries.any { it.text == "Hello from Grace" }
+        }
+        compose.onNodeWithText("Hello from Grace").assertIsDisplayed()
+        assertEquals("project-remote", lastThreadStart?.str("projectId"))
+        assertEquals("/fixture/remote-codex", lastThreadStart?.str("cwd"))
+        assertEquals(0, prepared.get())
+        demoPause(3000)
+    }
+
+    @Test
+    fun selectedProjectSurvivesDraftRecreationAndStartsInItsRoot() {
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil { model.state.value.page == "chat" }
+        compose.onNodeWithTag("project-selector").assertTextContains("No project").performClick()
+        compose.onNodeWithText("Remote Codex").performClick()
+        compose.waitUntil {
+            model.state.value.newTaskOptions.projectId == "project-remote" &&
+                model.state.value.newTaskOptions.workingDirectory == "/fixture/remote-codex"
+        }
+        compose.onNodeWithTag("composer").performTextInput("Review this project")
+        compose.waitUntil(5000) {
+            runBlocking {
+                LocalStore(app).get("draft/new") == "Review this project" &&
+                    LocalStore(app).get("options/new").contains("project-remote")
+            }
+        }
+
+        compose.runOnUiThread {
+            store.clear()
+            model = ClientModel(app, "ws://127.0.0.1:${server.port}/rpc", "/fixture", true)
+            store.put("fixture", model)
+            compose.activity.setContent { RemoteTheme { App(model) } }
+            model.newChat()
+            model.connect()
+        }
+        compose.waitUntil(15000) {
+            model.state.value.ready &&
+                model.state.value.projects.size == 2 &&
+                model.state.value.draft == "Review this project" &&
+                model.state.value.newTaskOptions.projectId == "project-remote"
+        }
+        compose.onNodeWithTag("project-selector").assertTextContains("Remote Codex")
+        compose.onNodeWithTag("send").performClick()
+        compose.waitUntil(15000) { sent.get() == 1 && model.state.value.journal == null }
+
+        assertEquals("project-remote", lastThreadStart?.str("projectId"))
+        assertEquals("/fixture/remote-codex", lastThreadStart?.str("cwd"))
+        assertEquals(0, prepared.get())
+        assertEquals("", runBlocking { LocalStore(app).get("options/new") })
+    }
+
+    @Test
+    fun projectJournalReconnectRecoversWithoutReplayingMutation() {
+        val journal =
+            obj(
+                "operation" to s("fixture-operation"),
+                "text" to s("Recover this project task"),
+                "stage" to s("creating"),
+                "cwd" to s("/fixture/remote-codex"),
+                "projectId" to s("project-remote"),
+            )
+        runBlocking {
+            LocalStore(app).put("draft/new", "Recover this project task")
+            LocalStore(app).put("journal/new", journal.toString())
+        }
+
+        compose.runOnUiThread { model.newChat() }
+        compose.waitUntil(15000) {
+            model.state.value.thread == "project-task" &&
+                !model.state.value.busy &&
+                model.state.value.journal?.str("projectId") == "project-remote"
+        }
+
+        assertEquals(0, sent.get())
+        assertNull(lastThreadStart)
+        assertEquals("", runBlocking { LocalStore(app).get("journal/new") })
+        assertTrue(runBlocking { LocalStore(app).get("journal/project-task") }.isNotEmpty())
+        compose.onNodeWithText("Delivery needs review").assertIsDisplayed()
     }
 
     @Test

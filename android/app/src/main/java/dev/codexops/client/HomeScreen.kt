@@ -2,6 +2,7 @@ package dev.codexops.client
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -47,9 +48,47 @@ internal fun HomeScreen(st: ScreenState, actions: HomeActions) {
                     unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
                 ),
         )
+        Text(
+            "Projects",
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        LazyRow(
+            Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            item {
+                FilterChip(
+                    selected = st.projectFilter == TaskProjectFilter.All,
+                    onClick = { actions.projectFilter(TaskProjectFilter.All) },
+                    label = { Text("All") },
+                )
+            }
+            item {
+                FilterChip(
+                    selected = st.projectFilter == TaskProjectFilter.Projectless,
+                    onClick = { actions.projectFilter(TaskProjectFilter.Projectless) },
+                    label = { Text("Chats") },
+                    leadingIcon = { Glyph(R.drawable.ic_chat, modifier = Modifier.size(16.dp)) },
+                )
+            }
+            items(st.projects, key = { it.id }) { project ->
+                FilterChip(
+                    selected = st.projectFilter == TaskProjectFilter.Project(project.id),
+                    onClick = { actions.projectFilter(TaskProjectFilter.Project(project.id)) },
+                    label = { Text(project.name, maxLines = 1) },
+                    leadingIcon = { Glyph(R.drawable.ic_folder, modifier = Modifier.size(16.dp)) },
+                )
+            }
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                if (st.archived) "Archived" else "Recent",
+                when (val filter = st.projectFilter) {
+                    TaskProjectFilter.All -> if (st.archived) "Archived" else "Recent"
+                    TaskProjectFilter.Projectless -> "Chats"
+                    is TaskProjectFilter.Project ->
+                        st.projects.firstOrNull { it.id == filter.id }?.name ?: "Project"
+                },
                 Modifier.weight(1f),
                 fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -95,6 +134,10 @@ internal fun HomeScreen(st: ScreenState, actions: HomeActions) {
                 }
             items(st.tasks, key = { it.str("id") }) { task ->
                 val status = task.map("status").str("type")
+                val projectName =
+                    task.str("projectId").takeIf(String::isNotBlank)?.let { projectId ->
+                        st.projects.firstOrNull { it.id == projectId }?.name ?: "Project"
+                    } ?: "Chats"
                 val statusLabel =
                     when (status) {
                         "active" -> "Working"
@@ -136,9 +179,7 @@ internal fun HomeScreen(st: ScreenState, actions: HomeActions) {
                             ) {
                                 Glyph(R.drawable.ic_folder, modifier = Modifier.size(13.dp))
                                 Text(
-                                    task.str("cwd").trimEnd('/').substringAfterLast('/').ifBlank {
-                                        "Workspace"
-                                    } + " · " + statusLabel,
+                                    "$projectName · $statusLabel",
                                     fontSize = 12.sp,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
