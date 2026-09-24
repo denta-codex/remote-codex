@@ -1,4 +1,4 @@
-# Remote Codex 0.1.4
+# Remote Codex 0.1.5
 
 Android uses Java-WebSocket WSS over the existing Tailscale app. Persistent Tailscale Serve
 (`--bg`) terminates TLS and proxies the root route to 127.0.0.1:8787. The Rust service

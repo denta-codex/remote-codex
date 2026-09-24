@@ -24,17 +24,19 @@
 - Repeated instrumentation exposed the obsolete asynchronous OkHttp cleanup path;
   Java-WebSocket disposal now closes synchronously during ViewModel cleanup. The
   uninstrumented 14-test fixture suite then passed and the emulator was stopped.
-- `scripts/release` passed for the reconciled version 0.1.4 / code 5 app and Rust
-  forwarder. The signed APK SHA-256 is
-  `a60a519a09b511d11ce13e13bb9ce0def2e8f0320b9ccb7e09056b92d243e983`;
+- `scripts/release` passed for the corrected version 0.1.5 / code 6 app and Rust
+  forwarder. This distinct Android version prevents confusion with the earlier
+  0.1.4 release already installed on the phone. The signed APK SHA-256 is
+  `7df5f8d834bd5fbf8f55c22e8a6cc4e6fe31d69ca4630a1be34f35b9d2941b5d`;
   the Rust forwarder SHA-256 is
   `742ab98ba95018cb0fc2c334b9a2f4a500b8bef200632c22ed1069a7f22d0fc7`.
 - The Ansible deployment dry run and live deployment passed. Grace is running the
   exact verified Rust binary on loopback with an enabled user service and zero
   restarts; the existing private Tailscale Serve route was preserved. The public
   route returned 401 without credentials, and a credential-protected, read-only
-  WSS `initialize` reached the stock app server. The verified APK was delivered to
-  the configured Razr through Taildrop; Android installation awaits user confirmation.
+  WSS `initialize` reached the stock app server. The earlier ambiguously versioned
+  APK was delivered to the configured Razr; the corrected 0.1.5 APK is prepared for
+  a replacement Taildrop delivery.
 
 ## September 24, 2026 — integrated 0.1.4 Android release
 
