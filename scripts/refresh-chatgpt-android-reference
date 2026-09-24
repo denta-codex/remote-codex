@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd -P)"
+artifact_root="$repo_root/artifacts"
+destination="$artifact_root/chatgpt-android"
+download_url="${CHATGPT_ANDROID_XAPK_URL:-https://d.apkpure.net/b/XAPK/com.openai.chatgpt?version=latest}"
+jadx_version="${JADX_VERSION:-1.5.6}"
+expected_signer="b24f4bfbb3cf293f938703b9d87027c1102cc36dc4fa206910e08927db40473c"
+android_home="${ANDROID_HOME:-/home/agent/Android/Sdk}"
+
+for command_name in curl jq mise sha256sum unzip; do
+    command -v "$command_name" >/dev/null || {
+        echo "$command_name is required" >&2
+        exit 1
+    }
+done
+
+java_home="${JAVA_HOME:-$(mise where java@temurin-17.0.20+8)}"
+[[ -x "$java_home/bin/java" ]] || {
+    echo "Managed Java not found at $java_home" >&2
+    exit 1
+}
+export JAVA_HOME="$java_home"
+export PATH="$JAVA_HOME/bin:$PATH"
+
+apksigner="$(find "$android_home/build-tools" -mindepth 2 -maxdepth 2 -type f -name apksigner -print 2>/dev/null | sort -V | tail -n 1)"
+[[ -n "$apksigner" && -x "$apksigner" ]] || {
+    echo "Android SDK apksigner not found under $android_home/build-tools" >&2
+    exit 1
+}
+
+mkdir -p "$artifact_root"
+staging="$(mktemp -d "$artifact_root/.chatgpt-android.staging.XXXXXX")"
+previous=""
+
+cleanup() {
+    if [[ -d "$staging" ]]; then
+        rm -rf -- "$staging"
+    fi
+    if [[ -n "$previous" && -d "$previous" && ! -e "$destination" ]]; then
+        mv -- "$previous" "$destination"
+    fi
+}
+trap cleanup EXIT
+
+echo "Downloading ChatGPT Android bundle..."
+curl --fail --location --show-error --output "$staging/chatgpt.xapk" "$download_url"
+unzip -q "$staging/chatgpt.xapk" com.openai.chatgpt.apk manifest.json -d "$staging"
+
+package_name="$(jq -r '.package_name' "$staging/manifest.json")"
+version_name="$(jq -r '.version_name' "$staging/manifest.json")"
+version_code="$(jq -r '.version_code' "$staging/manifest.json")"
+[[ "$package_name" == "com.openai.chatgpt" ]] || {
+    echo "Unexpected package in XAPK: $package_name" >&2
+    exit 1
+}
+
+signer_output="$($apksigner verify --print-certs "$staging/com.openai.chatgpt.apk")"
+signer_digest="$(printf '%s\n' "$signer_output" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr '[:upper:]' '[:lower:]')"
+[[ "$signer_digest" == "$expected_signer" ]] || {
+    echo "Unexpected APK signer: ${signer_digest:-missing}" >&2
+    exit 1
+}
+
+apk_sha256="$(sha256sum "$staging/com.openai.chatgpt.apk" | awk '{print $1}')"
+xapk_sha256="$(sha256sum "$staging/chatgpt.xapk" | awk '{print $1}')"
+
+echo "Downloading JADX $jadx_version..."
+curl --fail --location --show-error \
+    --output "$staging/jadx.zip" \
+    "https://github.com/skylot/jadx/releases/download/v${jadx_version}/jadx-${jadx_version}.zip"
+mkdir -p "$staging/jadx"
+unzip -q "$staging/jadx.zip" -d "$staging/jadx"
+
+echo "Decompiling ChatGPT $version_name ($version_code)..."
+mkdir -p "$staging/xdg/config" "$staging/xdg/cache" "$staging/xdg/data"
+set +e
+XDG_CONFIG_HOME="$staging/xdg/config" \
+XDG_CACHE_HOME="$staging/xdg/cache" \
+XDG_DATA_HOME="$staging/xdg/data" \
+JAVA_HOME="$java_home" \
+JAVA_OPTS="${JAVA_OPTS:--Xmx8g}" \
+    "$staging/jadx/bin/jadx" \
+    --decompilation-mode simple \
+    --no-res \
+    --no-inline-anonymous \
+    --no-inline-kotlin-lambda \
+    --show-bad-code \
+    -j "${JADX_JOBS:-8}" \
+    -d "$staging/simple" \
+    "$staging/com.openai.chatgpt.apk" \
+    >"$staging/jadx.log" 2>&1
+jadx_status=$?
+set -e
+
+if [[ "$jadx_status" -ne 0 && "$jadx_status" -ne 3 ]]; then
+    echo "JADX failed with exit status $jadx_status" >&2
+    tail -n 40 "$staging/jadx.log" >&2
+    exit 1
+fi
+
+source_root="$staging/simple/sources"
+[[ -d "$source_root/com/openai/feature/codexremote" ]] || {
+    echo "JADX did not produce the expected Codex Remote source tree" >&2
+    tail -n 40 "$staging/jadx.log" >&2
+    exit 1
+}
+source_count="$(find "$source_root" -type f -name '*.java' | wc -l)"
+[[ "$source_count" -gt 1000 ]] || {
+    echo "JADX produced only $source_count Java files" >&2
+    exit 1
+}
+
+cat >"$staging/METADATA.txt" <<EOF
+Package: $package_name
+Version: $version_name ($version_code)
+Download URL: $download_url
+XAPK SHA-256: $xapk_sha256
+Base APK SHA-256: $apk_sha256
+Signer certificate SHA-256: $signer_digest
+JADX version: $jadx_version
+JADX exit status: $jadx_status
+Java source files: $source_count
+EOF
+
+rm -rf -- "$staging/xdg"
+rm -f -- "$staging/jadx.zip"
+
+if [[ -e "$destination" ]]; then
+    previous="$artifact_root/.chatgpt-android.previous.$$"
+    mv -- "$destination" "$previous"
+fi
+mv -- "$staging" "$destination"
+staging=""
+if [[ -n "$previous" ]]; then
+    rm -rf -- "$previous"
+    previous=""
+fi
+trap - EXIT
+
+echo "ChatGPT Android $version_name ($version_code) is ready at $destination"
+echo "Decompiled Java: $destination/simple/sources"
