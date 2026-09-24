@@ -1,19 +1,142 @@
 # Validation
 
-## September 24, 2026 — 0.1.4 bidirectional images
+## September 24, 2026 — image support reconciled with Rust transport
 
-- Added persisted Photos/camera drafts, image-only and mixed turns, and stock
-  `localImage` upload through filesystem RPC. Originals are limited to 20 MiB each
-  and 50 MiB combined; JPEG, PNG, WebP, and non-animated GIF are accepted.
-- Added structured timeline rendering for user images, `imageView`, and
-  `imageGeneration`, with lazy host reads, bounded caching, sampled previews, and
-  an expanded viewer. External HTTP images are not fetched automatically.
-- Added regression coverage for wire shapes, media parsing, draft restoration,
-  image-only upload/rendering, and uncertain file-write handling. The isolated
-  stock lifecycle now sends a full 20 MiB payload through WSS and verifies the
-  written host file.
-- Local checks and physical-device acceptance are recorded separately below; this
-  section does not claim deployment or phone delivery.
+- Merged the current `main` line into the image-support branch, retaining the Rust
+  byte tunnel, Java-WebSocket continuation framing, projects/worktrees, model
+  controls, and the refactored Compose navigation.
+- Added persisted multiple-image drafts, Photos and camera capture, image-only and
+  mixed turn input, stock filesystem upload/read helpers, structured timeline media,
+  sampled inline rendering, and tap-to-expand viewing. Originals remain limited to
+  20 MiB each and 50 MiB combined.
+- Attachment directory creation, individual file writes, and turn submission are
+  journaled. An uncertain image write is retained for review and is not replayed
+  automatically.
+- `scripts/check` passed, including the Rust checks/tests, exact 20 MiB fragmented
+  stock-server round trip, Kotlin tests, Android build, unit tests, lint, and
+  instrumentation APK assembly.
+- All 17 fixture-backed instrumentation tests passed on the worktree-owned Android
+  16 emulator; the credential-gated live test skipped as designed. The new coverage
+  exercises image-only upload and inline/full-screen rendering, uncertain image-write
+  no-replay, and attachment restoration after ViewModel recreation. The disposable
+  emulator was stopped afterward.
+- Prepared Android version 0.1.6 / code 7 so it remains newer than the delivered
+  Rust-transport 0.1.5 build. No deployment or phone delivery was performed.
+
+## September 24, 2026 — Rust tunnel and fragmented Android transport
+
+- Preserved the detached image and machine-profile work on separate named branches;
+  neither was merged into this transport branch.
+- Replaced the Go reverse proxy with a Rust 1.95 service that keeps the same binary,
+  environment, endpoint, credential and systemd contracts. The Rust service parses
+  only the two HTTP handshakes and copies upgraded bytes unchanged.
+- Replaced Android's OkHttp WebSocket with Java-WebSocket 1.6.0. Outbound stock RPC
+  uses 256 KiB continuation frames, requests no extensions and retains connection
+  generations, typed failures, bounded events and mutation-safe reconnect behavior.
+- Rust unit tests cover authentication, route/origin rejection, credential and Unix
+  socket checks, header sanitization, exact upgraded bytes and the eight-client cap.
+  The isolated stock gate writes and reads an exact 20 MiB file through the Rust
+  tunnel, accepts the roughly 28 MiB response and reads a server-owned task from a
+  second connection.
+- Kotlin tests cover the previous HTTP 401 diagnostic, a base64-expanded 20 MiB
+  request, UTF-8 across a fragment boundary, absence of compression negotiation and
+  a single 28 MiB incoming text frame. No live deployment or phone delivery occurred.
+- `scripts/check` passed. After reconciliation with main, all 14 fixture-backed
+  Android tests also passed on the worktree-owned Android 16 emulator. The
+  credential-gated live test skipped as designed.
+- Repeated instrumentation exposed the obsolete asynchronous OkHttp cleanup path;
+  Java-WebSocket disposal now closes synchronously during ViewModel cleanup. The
+  uninstrumented 14-test fixture suite then passed and the emulator was stopped.
+- `scripts/release` passed for the corrected version 0.1.5 / code 6 app and Rust
+  forwarder. This distinct Android version prevents confusion with the earlier
+  0.1.4 release already installed on the phone. The signed APK SHA-256 is
+  `7df5f8d834bd5fbf8f55c22e8a6cc4e6fe31d69ca4630a1be34f35b9d2941b5d`;
+  the Rust forwarder SHA-256 is
+  `742ab98ba95018cb0fc2c334b9a2f4a500b8bef200632c22ed1069a7f22d0fc7`.
+- The Ansible deployment dry run and live deployment passed. Grace is running the
+  exact verified Rust binary on loopback with an enabled user service and zero
+  restarts; the existing private Tailscale Serve route was preserved. The public
+  route returned 401 without credentials, and a credential-protected, read-only
+  WSS `initialize` reached the stock app server. The corrected 0.1.5 APK was then
+  checksum-verified and delivered to the configured Razr through Taildrop; Android
+  installation awaits user confirmation.
+
+## September 24, 2026 — integrated 0.1.4 Android release
+
+- Merged the Projects, workspace/worktree execution, and server-backed model
+  controls feature branches into `main`, resolving their shared composer, client
+  state machine, recovery journal, and fixture-server changes as one architecture.
+- `scripts/check` passed after integration. The worktree-owned Android 16 emulator
+  then ran all 14 fixture-backed tests without failures; the credential-gated live
+  connection test was skipped as designed. The disposable emulator was stopped.
+- `scripts/release` passed its repeated checks, release lint, package identity,
+  non-debuggable, and signing-certificate verification. The signed APK is version
+  0.1.4 / code 5. SHA-256:
+  `f68029bf91861702f76c0f9d0ebbe2e6059d9187ccf8306fdd7ffb618fea6e98`.
+- Taildrop delivery completed to the active
+  `motorola-razr-ultra-2025-2` Tailscale node. Installation remains an explicit
+  user step; no ADB installation or live deployment was performed.
+
+## September 24, 2026 — projects and workspace execution parity
+
+- Checked the stock 0.154.0 schemas for paginated `project/list`, nullable
+  `thread/list.projectId`, and `thread/start.projectId`. The ignored ChatGPT Android
+  1.2026.258 reference confirmed its named/projectless selection states, the
+  `__codex_projectless_chats` Chats presentation, and `project/list` records with
+  `id`, `name`, and `roots[].path`.
+- The Android task browser presents All, projectless Chats, and every paged existing
+  project, and filters task reads by the selected project. New chats default to
+  projectless; selecting a project offers its current first root or a new isolated
+  detached worktree from local `origin/HEAD` under the connected Codex home.
+- Project choice is persisted with `NewTaskOptions` and copied into the operation
+  journal before mutation dispatch. Reconnect recovery uses project plus cwd to
+  find a server-owned thread and does not replay `thread/start` or `turn/start`.
+- `scripts/check` passed: Go race tests/vet, Kotlin core tests, Android debug build,
+  lint, and debug instrumentation APK assembly.
+- All ten fixture-backed Android tests passed on the worktree-owned Android 16
+  emulator. Coverage includes paginated project loading, project/Chats filtering,
+  project selection across ViewModel recreation and reconnect, exact project-root
+  `thread/start`, retained projectless directory preparation, and uncertain project
+  journal recovery with zero mutation replay. The credential-gated live connection
+  test was skipped; no live deployment or phone delivery was performed.
+- Added pure JVM coverage for destination planning, invalid selections, selected
+  `project/read` validation, detached Git argv, exact worktree reconciliation, and
+  the narrower projectless sandbox policy.
+- Ten fixture-backed Android tests passed on this worktree's disposable Android 16
+  emulator. New cases cover current-checkout and worktree RPC wiring, plus
+  deliberately lost `git worktree add` and `thread/start` responses. Reconnect
+  observed the deterministic registered worktree/task, did not repeat either
+  creation, and proceeded to one input submission. The credential-gated live
+  connection test remained skipped as designed.
+- `scripts/check` passed, including Go race/vet and isolated stock lifecycle tests,
+  Kotlin/JVM tests, Android debug build, lint, and instrumentation APK assembly.
+- No live deployment, physical-phone delivery, or worktree cleanup was performed.
+  Project browsing populates `projectId` and the selected absolute root in
+  `workingDirectory` for the workspace adapter.
+
+## September 24, 2026 — server-backed Android model controls
+
+- The Android composer now loads the stock `model/list` catalog and presents a
+  server-default choice plus the models and reasoning efforts advertised by that
+  response. It uses the current thread model from `thread/resume` to constrain
+  effort choices for existing tasks.
+- Null model and effort choices remain absent from RPC payloads. Explicit models
+  are sent on `thread/start` and `turn/start`; explicit effort is sent as
+  `turn/start.effort`. Active-turn `turn/steer` remains unchanged because the
+  checked-in stock schema exposes neither override there.
+- Catalog loading, manual refresh, reconnect refresh, and removal of stale model
+  or effort choices are covered by the fixture server. No fallback model names,
+  effort lists, or compatibility catalog are stored locally.
+- `scripts/check` passed, including Go race/vet, Kotlin tests, Android debug
+  build, lint, and instrumentation assembly. The disposable Android 16 emulator
+  ran seven fixture-backed UI/integration tests with zero failures; the live
+  credential-gated smoke test was skipped as expected. Coverage includes catalog
+  rendering, model-specific effort filtering, exact request overrides, omission
+  of defaults, refresh invalidation, reconnect reload, and uncertain-send
+  no-replay behavior.
+- No live deployment, signed release, physical-phone installation, or live model
+  mutation was performed. Runtime verification used the stock-schema-shaped
+  fixture transport only.
 
 ## September 23, 2026 — 0.1.3 live Android connection fix
 

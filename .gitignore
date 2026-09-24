@@ -1,6 +1,7 @@
 .gradle/
 .kotlin/
 **/build/
+forwarder/target/
 local.properties
 dist/
 artifacts/

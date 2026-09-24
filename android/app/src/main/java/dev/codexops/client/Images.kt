@@ -185,20 +185,28 @@ class MediaRepository(private val context: Context) {
             when (media.location) {
                 MediaLocation.HOST_PATH -> {
                     val target = File(root, digest(media.value))
-                    if (target.exists()) return@withContext target.readBytes()
+                    if (target.exists()) return@withContext validateDisplayBytes(target.readBytes())
                     val bytes = hostReader(media.value)
-                    require(bytes.size <= MAX_IMAGE_BYTES) { "Image is too large to display." }
+                    validateDisplayBytes(bytes)
                     val part = File(root, ".${target.name}.part")
                     part.writeBytes(bytes)
                     if (!part.renameTo(target)) part.delete()
                     trim()
                     bytes
                 }
-                MediaLocation.DATA_URL -> decodeDataUrl(media.value)
-                MediaLocation.BASE64 -> Base64.decode(media.value, Base64.DEFAULT)
+                MediaLocation.DATA_URL -> validateDisplayBytes(decodeDataUrl(media.value))
+                MediaLocation.BASE64 ->
+                    validateDisplayBytes(Base64.decode(media.value, Base64.DEFAULT))
                 MediaLocation.EXTERNAL_URL -> error("External images require explicit opening.")
             }
         }
+
+    private fun validateDisplayBytes(bytes: ByteArray): ByteArray {
+        require(bytes.isNotEmpty() && bytes.size <= MAX_IMAGE_BYTES) {
+            "Image is too large or empty."
+        }
+        return bytes
+    }
 
     private fun decodeDataUrl(value: String): ByteArray {
         val comma = value.indexOf(',')
