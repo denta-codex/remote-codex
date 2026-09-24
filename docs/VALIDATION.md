@@ -29,6 +29,11 @@
   `a60a519a09b511d11ce13e13bb9ce0def2e8f0320b9ccb7e09056b92d243e983`;
   the Rust forwarder SHA-256 is
   `742ab98ba95018cb0fc2c334b9a2f4a500b8bef200632c22ed1069a7f22d0fc7`.
+- The Ansible deployment dry run and live deployment passed. Grace is running the
+  exact verified Rust binary on loopback with an enabled user service and zero
+  restarts; the existing private Tailscale Serve route was preserved. The public
+  route returned 401 without credentials, and a credential-protected, read-only
+  WSS `initialize` reached the stock app server. No APK was delivered or installed.
 
 ## September 24, 2026 — integrated 0.1.4 Android release
 
