@@ -452,23 +452,30 @@ class AppTest {
     fun modelControlsUseCatalogAndRefreshUnsupportedSelection() {
         compose.onNodeWithContentDescription("New chat").performClick()
         compose.waitUntil { model.state.value.page == "chat" }
+        demoPause()
 
         compose.onNodeWithTag("model-selector").performClick()
+        demoPause()
         compose.onNodeWithText("Fixture Fast").performClick()
         assertEquals("gpt-fixture-fast", model.state.value.newTaskOptions.model)
+        demoPause()
 
         compose.onNodeWithTag("reasoning-selector").performClick()
         compose.onNodeWithText("medium").assertExists()
         compose.onNodeWithText("low").assertDoesNotExist()
+        demoPause()
         compose.onNodeWithText("medium").performClick()
         assertEquals("medium", model.state.value.newTaskOptions.reasoningEffort)
+        demoPause()
 
         compose.onNodeWithTag("composer").performTextInput("Use the selected model")
+        demoPause()
         compose.onNodeWithTag("send").performClick()
         compose.waitUntil(15000) { model.state.value.entries.any { it.text == "Hello from Grace" } }
         assertEquals("gpt-fixture-fast", lastThreadStartParams!!.str("model"))
         assertEquals("gpt-fixture-fast", lastTurnStartParams!!.str("model"))
         assertEquals("medium", lastTurnStartParams!!.str("effort"))
+        demoPause(2500)
 
         val previousLists = modelLists.get()
         fastModelAvailable = false
@@ -480,6 +487,7 @@ class AppTest {
         assertNull(model.state.value.newTaskOptions.model)
         assertNull(model.state.value.newTaskOptions.reasoningEffort)
         compose.onNodeWithText("Unsupported overrides were cleared", substring = true).assertExists()
+        demoPause(3000)
     }
 
     @Test
