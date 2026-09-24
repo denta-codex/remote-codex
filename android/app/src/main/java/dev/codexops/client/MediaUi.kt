@@ -1,0 +1,179 @@
+package dev.codexops.client
+
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.ImageDecoder
+import android.net.Uri
+import android.util.LruCache
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import dev.codexops.core.MediaLocation
+import dev.codexops.core.MediaRef
+import java.io.File
+import java.nio.ByteBuffer
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+private object BitmapMemoryCache : LruCache<String, Bitmap>(8 * 1024 * 1024) {
+    override fun sizeOf(key: String, value: Bitmap) = value.allocationByteCount
+}
+
+private suspend fun decodedBitmap(key: String, bytes: ByteArray, maximum: Int): Bitmap =
+    withContext(Dispatchers.Default) {
+        val cacheKey = "$key/$maximum"
+        BitmapMemoryCache.get(cacheKey)?.let { return@withContext it }
+        val bitmap =
+            ImageDecoder.decodeBitmap(ImageDecoder.createSource(ByteBuffer.wrap(bytes))) {
+                decoder, info, _ ->
+                val longest = maxOf(info.size.width, info.size.height)
+                if (longest > maximum) {
+                    val scale = maximum.toDouble() / longest
+                    decoder.setTargetSize(
+                        (info.size.width * scale).toInt().coerceAtLeast(1),
+                        (info.size.height * scale).toInt().coerceAtLeast(1),
+                    )
+                }
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            }
+        BitmapMemoryCache.put(cacheKey, bitmap)
+        bitmap
+    }
+
+@Composable
+internal fun DraftAttachmentPreview(attachment: DraftAttachment, remove: () -> Unit) {
+    val bitmap by
+        produceState<Bitmap?>(null, attachment.id) {
+            value =
+                runCatching {
+                        decodedBitmap(
+                            attachment.id,
+                            withContext(Dispatchers.IO) {
+                                File(attachment.localPath).readBytes()
+                            },
+                            320,
+                        )
+                    }
+                    .getOrNull()
+        }
+    Surface(
+        Modifier.width(112.dp).testTag("draft-attachment"),
+        shape = MaterialTheme.shapes.small,
+        tonalElevation = 2.dp,
+    ) {
+        Column {
+            if (bitmap == null)
+                Box(Modifier.fillMaxWidth().height(80.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                }
+            else
+                Image(
+                    bitmap!!.asImageBitmap(),
+                    attachment.displayName,
+                    Modifier.fillMaxWidth().height(80.dp),
+                    contentScale = ContentScale.Crop,
+                )
+            TextButton(remove, Modifier.fillMaxWidth()) { Text("Remove", fontSize = 11.sp) }
+        }
+    }
+}
+
+@Composable
+internal fun MediaGallery(media: List<MediaRef>, actions: ConversationActions) {
+    if (media.isEmpty()) return
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        media.forEach { MediaPreview(it, actions) }
+    }
+}
+
+@Composable
+private fun MediaPreview(media: MediaRef, actions: ConversationActions) {
+    val context = LocalContext.current
+    if (media.location == MediaLocation.EXTERNAL_URL) {
+        TextButton(
+            onClick = {
+                runCatching {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(media.value)))
+                }
+            }
+        ) {
+            Text("Open external image")
+        }
+        return
+    }
+    var expanded by rememberSaveable(media.key) { mutableStateOf(false) }
+    val result by
+        produceState<Result<Bitmap>?>(null, media.key, media.value, expanded) {
+            value =
+                runCatching {
+                    decodedBitmap(
+                        media.key,
+                        actions.loadMedia(media),
+                        if (expanded) 2048 else 1024,
+                    )
+                }
+        }
+    when {
+        result == null ->
+            Box(
+                Modifier.fillMaxWidth().height(160.dp).testTag("message-image-loading"),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+            }
+        result!!.isFailure ->
+            Text(
+                "Image unavailable",
+                Modifier.padding(vertical = 12.dp).testTag("message-image-error"),
+                color = MaterialTheme.colorScheme.error,
+            )
+        else -> {
+            val bitmap = result!!.getOrThrow()
+            Image(
+                bitmap.asImageBitmap(),
+                "Conversation image",
+                Modifier.fillMaxWidth()
+                    .heightIn(max = 360.dp)
+                    .clip(MaterialTheme.shapes.medium)
+                    .clickable { expanded = true }
+                    .testTag("message-image"),
+                contentScale = ContentScale.Fit,
+            )
+            if (expanded)
+                Dialog(onDismissRequest = { expanded = false }) {
+                    Surface(
+                        Modifier.fillMaxWidth().clickable { expanded = false },
+                        shape = MaterialTheme.shapes.medium,
+                    ) {
+                        Column {
+                            Image(
+                                bitmap.asImageBitmap(),
+                                "Expanded conversation image",
+                                Modifier.fillMaxWidth().heightIn(max = 720.dp),
+                                contentScale = ContentScale.Fit,
+                            )
+                            TextButton(
+                                { expanded = false },
+                                Modifier.align(Alignment.End).testTag("close-image"),
+                            ) {
+                                Text("Close")
+                            }
+                        }
+                    }
+                }
+        }
+    }
+}

@@ -1,7 +1,12 @@
 package dev.codexops.client
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -22,6 +27,14 @@ internal fun ConversationComposer(
     onSend: () -> Unit,
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
+    val picker =
+        rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) {
+            actions.addAttachments(it)
+        }
+    val camera =
+        rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) {
+            actions.finishCamera(it)
+        }
     var projectMenu by remember { mutableStateOf(false) }
     val selectedProject =
         state.newTaskOptions.projectId?.let { id -> state.projects.firstOrNull { it.id == id } }
@@ -34,6 +47,17 @@ internal fun ConversationComposer(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(Modifier.padding(8.dp)) {
+            if (state.attachments.isNotEmpty())
+                LazyRow(
+                    Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(state.attachments, key = { it.id }) { attachment ->
+                        DraftAttachmentPreview(attachment) {
+                            actions.removeAttachment(attachment.id)
+                        }
+                    }
+                }
             if (state.thread == null) {
                 Box(Modifier.padding(start = 8.dp, top = 2.dp)) {
                     AssistChip(
@@ -169,6 +193,26 @@ internal fun ConversationComposer(
                 Modifier.fillMaxWidth().padding(start = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                TextButton(
+                    onClick = {
+                        picker.launch(
+                            PickVisualMediaRequest(
+                                ActivityResultContracts.PickVisualMedia.ImageOnly
+                            )
+                        )
+                    },
+                    enabled = !state.busy && state.journal == null,
+                    modifier = Modifier.testTag("add-photos"),
+                ) {
+                    Text("Photos")
+                }
+                TextButton(
+                    onClick = { actions.prepareCamera()?.let(camera::launch) },
+                    enabled = !state.busy && state.journal == null,
+                    modifier = Modifier.testTag("add-camera"),
+                ) {
+                    Text("Camera")
+                }
                 Text(
                     when {
                         state.activeTurn != null -> "Follow-up guides the active turn"
@@ -199,7 +243,7 @@ internal fun ConversationComposer(
                     enabled =
                         state.ready &&
                             !state.busy &&
-                            state.draft.isNotBlank() &&
+                            (state.draft.isNotBlank() || state.attachments.isNotEmpty()) &&
                             state.journal == null &&
                             (state.thread != null ||
                                 projectAvailable &&

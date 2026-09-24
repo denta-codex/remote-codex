@@ -2,6 +2,20 @@ package dev.codexops.core
 
 import kotlinx.serialization.json.*
 
+enum class MediaLocation {
+    DATA_URL,
+    HOST_PATH,
+    BASE64,
+    EXTERNAL_URL,
+}
+
+data class MediaRef(
+    val key: String,
+    val location: MediaLocation,
+    val value: String,
+    val status: String = "",
+)
+
 data class Entry(val turn: String, val raw: JsonObject) {
     val id
         get() = raw.str("id")
@@ -12,15 +26,81 @@ data class Entry(val turn: String, val raw: JsonObject) {
     val key
         get() = "$turn/$id"
 
+    val media: List<MediaRef>
+        get() =
+            when (kind) {
+                "userMessage" ->
+                    raw.list("content").mapIndexedNotNull { index, item ->
+                        when (item.str("type")) {
+                            "image" ->
+                                item.str("url").takeIf { it.isNotBlank() }?.let {
+                                    MediaRef(
+                                        "$key/image/$index",
+                                        if (it.startsWith("data:image/")) MediaLocation.DATA_URL
+                                        else MediaLocation.EXTERNAL_URL,
+                                        it,
+                                    )
+                                }
+                            "localImage" ->
+                                item.str("path").takeIf { it.isNotBlank() }?.let {
+                                    MediaRef("$key/local/$index", MediaLocation.HOST_PATH, it)
+                                }
+                            else -> null
+                        }
+                    }
+                "imageView" ->
+                    raw.str("path").takeIf { it.isNotBlank() }?.let {
+                        listOf(MediaRef("$key/view", MediaLocation.HOST_PATH, it))
+                    } ?: emptyList()
+                "imageGeneration" -> {
+                    val status = raw.str("status")
+                    val result = raw.str("result")
+                    val saved = raw.str("savedPath")
+                    when {
+                        result.isNotBlank() ->
+                            listOf(
+                                MediaRef(
+                                    "$key/generated",
+                                    if (result.startsWith("data:image/")) MediaLocation.DATA_URL
+                                    else MediaLocation.BASE64,
+                                    result,
+                                    status,
+                                )
+                            )
+                        saved.isNotBlank() ->
+                            listOf(
+                                MediaRef(
+                                    "$key/generated",
+                                    MediaLocation.HOST_PATH,
+                                    saved,
+                                    status,
+                                )
+                            )
+                        else -> emptyList()
+                    }
+                }
+                else -> emptyList()
+            }
+
     val text: String
         get() =
             when (kind) {
                 "userMessage" ->
-                    raw.list("content").joinToString("\n") {
-                        if (it.str("type") == "text") it.str("text") else "[${it.str("type")}]"
-                    }
+                    raw.list("content")
+                        .mapNotNull {
+                            when (it.str("type")) {
+                                "text" -> it.str("text")
+                                "image", "localImage" -> null
+                                else -> "[${it.str("type")}]"
+                            }
+                        }
+                        .joinToString("\n")
                 "agentMessage",
                 "plan" -> raw.str("text")
+                "imageView" -> ""
+                "imageGeneration" ->
+                    if (media.isNotEmpty()) ""
+                    else raw.str("status").ifBlank { "Image generation did not produce an image" }
                 "commandExecution" ->
                     listOf(raw.str("command"), raw.str("aggregatedOutput"), raw.str("status"))
                         .filter { it.isNotEmpty() }

@@ -1,7 +1,9 @@
 package dev.codexops.client
 
+import android.net.Uri
 import dev.codexops.core.Decision
 import dev.codexops.core.Entry
+import dev.codexops.core.MediaRef
 import kotlinx.serialization.json.JsonObject
 
 data class HostIdentity(
@@ -24,12 +26,6 @@ enum class ExecutionTarget {
     CurrentWorkspace,
     NewWorktree,
 }
-
-data class ComposerAttachment(
-    val id: String,
-    val displayName: String,
-    val localUri: String,
-)
 
 data class CodexProject(
     val id: String,
@@ -57,7 +53,6 @@ data class NewTaskOptions(
     val reasoningEffort: String? = null,
     val approvalPolicy: String? = null,
     val collaborationMode: String? = null,
-    val attachments: List<ComposerAttachment> = emptyList(),
 ) {
     fun hasExecutionDestination(): Boolean =
         projectId == null && executionTarget == ExecutionTarget.Projectless ||
@@ -83,6 +78,7 @@ data class ScreenState(
     val entries: List<Entry> = emptyList(),
     val historyCursor: String? = null,
     val draft: String = "",
+    val attachments: List<DraftAttachment> = emptyList(),
     val newTaskOptions: NewTaskOptions = NewTaskOptions(),
     val models: List<ServerModelOption> = emptyList(),
     val modelCatalogStatus: ModelCatalogStatus = ModelCatalogStatus.Unavailable,
@@ -140,6 +136,16 @@ interface ConversationActions {
     fun older()
 
     fun draft(value: String)
+
+    fun addAttachments(uris: List<Uri>)
+
+    fun prepareCamera(): Uri?
+
+    fun finishCamera(success: Boolean)
+
+    fun removeAttachment(id: String)
+
+    suspend fun loadMedia(media: MediaRef): ByteArray
 
     fun send()
 

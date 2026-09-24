@@ -15,10 +15,11 @@ separate worktrees.
   boundary. Feature code should depend on these contracts rather than concrete transport or
   Room/DataStore implementations.
 
-`NewTaskOptions` represents project, workspace target, model/reasoning, permissions, mode, and
-attachments. Its defaults preserve the existing behavior: projectless execution and server
-defaults with no attachments. Adding a selector should update this value; RPC wiring belongs to
-the feature that introduces the selector and must retain the operation journal guarantees.
+`NewTaskOptions` represents project, workspace target, model/reasoning, permissions, and mode.
+Its defaults preserve projectless execution and server defaults. Persisted `DraftAttachment`
+values live directly in `ScreenState` because images can be composed for both new and existing
+tasks. Adding a selector should update the appropriate state; RPC wiring belongs to the feature
+that introduces it and must retain the operation journal guarantees.
 
 `HostIdentity` carries the host-specific endpoint and expected Codex home. Grace remains the only
 configured host, but task and UI state no longer rely on scattered endpoint or display-name

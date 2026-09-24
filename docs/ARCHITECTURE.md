@@ -17,8 +17,9 @@ The host bearer token is a systemd encrypted user credential loaded at service
 start. Android scans its versioned setup QR and stores the token with an Android
 Keystore key. Authentication applies only to the forwarder upgrade; stock RPC
 remains unchanged.
-Android has no SSH transport. SSH is for deployment/recovery. Interactive preview
-endpoints remain deferred.
+Android has no SSH transport. SSH is for deployment/recovery. Image transfer uses
+stock `fs/createDirectory`, `fs/writeFile`, and `fs/readFile` RPC over the same WSS
+connection; there is no additional HTTP upload or preview endpoint.
 
 The project-owned private updater is deliberately outside the stock RPC surface.
 Authenticated `GET /remote-codex/v1/updates/stable/latest.json` and immutable
@@ -62,7 +63,8 @@ detached worktree, and reads `git worktree list --porcelain` for reconciliation.
 It never fetches, creates a branch, removes a worktree, or manages general Git state.
 
 Each mutating setup/send stage is journaled before dispatch: destination creation,
-worktree addition, task creation, and input submission. Known paths, revisions, and
+worktree addition, task creation, attachment directory/file writes, and input
+submission. Known paths, revisions, uploaded host paths, and
 task IDs are saved before the next stage. Reconnect recovery inspects deterministic
 directories, Git's authoritative worktree list, and filtered stock task pages. It
 continues only after confirming the prior stage or when the next mutation was never
@@ -70,6 +72,21 @@ attempted; it does not replay an uncertain mutation. An unacknowledged operation
 blocks further submission until the user inspects it. A reviewed record is retained
 locally; the composer can be explicitly unlocked. A successful acknowledgement
 removes the draft. Offline sending is not queued.
+
+Selected and camera images are imported immediately into app-private draft storage,
+and their descriptors are persisted with the text draft. Originals are preserved.
+Before the turn mutation, images are written sequentially beneath
+`$CODEX_HOME/attachments/remote-android/<thread>/<operation>` and referenced with
+stock `localImage` items. An uncertain image write or turn submission remains
+journaled and is never retried automatically. Limits match the ChatGPT Android
+remote client: 20 MiB per image and 50 MiB combined. Supported inputs are JPEG,
+PNG, WebP, and non-animated GIF.
+
+Timeline entries retain stock `image`, `localImage`, `imageView`, and
+`imageGeneration` media. Host paths are fetched lazily with `fs/readFile`; data URLs
+and generation results are decoded locally. Raw host images use a bounded app cache
+and sampled rendering. External HTTP image URLs require an explicit tap and are
+never fetched automatically.
 
 Stock 0.154.0 can briefly return `list_turns is not supported yet` or `no rollout
 found` just after creation. This is retried only on history/resume reads, for a
@@ -90,7 +107,7 @@ do not include uncommitted checkout changes. Worktrees are deliberately retained
 cleanup, branch/ref selection, setup environments, and general Git management are
 outside this feature.
 
-Limits: no push notifications, media, terminal emulator, model/mode selectors, or
-interactive previews. Activity text is bounded for phone rendering; full output
+Limits: no push notifications, non-image files, terminal emulator, collaboration-mode
+selectors, or interactive command previews. Activity text is bounded for phone rendering; full output
 remains on Grace. End-to-end physical-device behavior is a release acceptance step,
 not inferred from successful builds.

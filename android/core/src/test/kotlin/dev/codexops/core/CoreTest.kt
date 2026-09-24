@@ -16,6 +16,146 @@ import org.junit.Test
 
 class CoreTest {
     @Test
+    fun imageItemsRemainStructuredAndDoNotBecomePlaceholderText() {
+        val entry =
+            Entry(
+                "turn",
+                obj(
+                    "id" to s("user"),
+                    "type" to s("userMessage"),
+                    "content" to
+                        JsonArray(
+                            listOf(
+                                obj("type" to s("text"), "text" to s("look")),
+                                obj("type" to s("localImage"), "path" to s("/tmp/a.png")),
+                                obj(
+                                    "type" to s("image"),
+                                    "url" to s("data:image/png;base64,AA=="),
+                                ),
+                            )
+                        ),
+                ),
+            )
+        assertEquals("look", entry.text)
+        assertEquals(2, entry.media.size)
+        assertEquals(MediaLocation.HOST_PATH, entry.media[0].location)
+        assertEquals(MediaLocation.DATA_URL, entry.media[1].location)
+
+        val view =
+            Entry(
+                "turn",
+                obj("id" to s("view"), "type" to s("imageView"), "path" to s("/tmp/b.png")),
+            )
+        val generation =
+            Entry(
+                "turn",
+                obj(
+                    "id" to s("generation"),
+                    "type" to s("imageGeneration"),
+                    "status" to s("completed"),
+                    "result" to s("AA=="),
+                ),
+            )
+        assertEquals(MediaLocation.HOST_PATH, view.media.single().location)
+        assertEquals(MediaLocation.BASE64, generation.media.single().location)
+    }
+
+    @Test
+    fun failedImageGenerationKeepsItsStatus() {
+        val entry =
+            Entry(
+                "turn",
+                obj(
+                    "id" to s("generation"),
+                    "type" to s("imageGeneration"),
+                    "status" to s("failed"),
+                ),
+            )
+        assertTrue(entry.media.isEmpty())
+        assertEquals("failed", entry.text)
+    }
+
+    @Test
+    fun imageLimitsNamesAndImageOnlyInputMatchPolicy() {
+        ImagePolicy.validateSize(MAX_IMAGE_BYTES)
+        ImagePolicy.validateCombined(listOf(MAX_IMAGE_BYTES, MAX_IMAGE_BYTES, 10L * 1024 * 1024))
+        assertThrows(IllegalArgumentException::class.java) {
+            ImagePolicy.validateSize(MAX_IMAGE_BYTES + 1)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ImagePolicy.validateCombined(listOf(MAX_IMAGE_BYTES, MAX_IMAGE_BYTES, MAX_IMAGE_BYTES))
+        }
+        assertEquals(
+            "2-my-photo.png",
+            safeAttachmentName(2, "my photo.HEIC", ImageFormat("image/png", "png")),
+        )
+        val imageOnly = turnInput("", listOf("/host/a.png"))
+        assertEquals("localImage", imageOnly.single().jsonObject.str("type"))
+        val mixed = turnInput("hello", listOf("/host/a.png", "/host/b.jpg"))
+        assertEquals(
+            listOf("text", "localImage", "localImage"),
+            mixed.map { it.jsonObject.str("type") },
+        )
+    }
+
+    @Test
+    fun filesystemHelpersUseStockWireShapes() = runBlocking {
+        val methods = mutableListOf<String>()
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse().withWebSocketUpgrade(
+                object : WebSocketListener() {
+                    override fun onMessage(ws: WebSocket, text: String) {
+                        val message = wire.parseToJsonElement(text).jsonObject
+                        val method = message.str("method")
+                        if (method.isEmpty() || method == "initialized") return
+                        methods += method
+                        val result =
+                            when (method) {
+                                "initialize" -> obj("codexHome" to s("/test"))
+                                "fs/readFile" ->
+                                    obj(
+                                        "dataBase64" to
+                                            s(
+                                                Base64.getEncoder()
+                                                    .encodeToString("image".toByteArray())
+                                            )
+                                    )
+                                else -> obj()
+                            }
+                        if (method == "fs/writeFile") {
+                            assertEquals("/test/a.png", message.map("params").str("path"))
+                            assertEquals(
+                                "image",
+                                String(
+                                    Base64.getDecoder()
+                                        .decode(message.map("params").str("dataBase64"))
+                                ),
+                            )
+                        }
+                        ws.send(obj("id" to message["id"], "result" to result).toString())
+                    }
+                }
+            )
+        )
+        server.start()
+        val rpc = Rpc(true)
+        try {
+            rpc.connect(
+                server.url("/").toString().replace("http://localhost:", "ws://127.0.0.1:"),
+                "test",
+            )
+            rpc.createDirectory("/test/images")
+            rpc.writeFile("/test/a.png", "image".toByteArray())
+            assertEquals("image", String(rpc.readFile("/test/a.png")))
+            assertTrue(methods.containsAll(listOf("fs/createDirectory", "fs/writeFile", "fs/readFile")))
+        } finally {
+            rpc.dispose()
+            server.shutdown()
+        }
+    }
+
+    @Test
     fun rejectedHandshakePreservesStatusWithoutResponseBody() = runBlocking {
         val server = MockWebServer()
         server.enqueue(MockResponse().setResponseCode(401).setBody("private response body"))

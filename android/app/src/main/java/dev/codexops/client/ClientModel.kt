@@ -3,10 +3,12 @@ package dev.codexops.client
 import android.app.Application
 import android.net.ConnectivityManager
 import android.net.Network
+import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.codexops.core.*
+import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -27,6 +29,8 @@ constructor(
     private val updater = AppUpdater(app, endpoint, allowLoopbackTest)
     private val workspaces = StockWorkspaceAdapter(rpc)
     private val timeline = Timeline()
+    private val attachmentStore = AttachmentStore(app)
+    private val mediaRepository = MediaRepository(app)
     private val _state = MutableStateFlow(ScreenState(host = host))
     val state = _state.asStateFlow()
     private var connectionJob: Job? = null
@@ -36,6 +40,7 @@ constructor(
     private var listSelection = 0
     private var modelCatalogSelection = 0
     private var hydrating = false
+    private var codexHome = expectedHome
     private val buffered = mutableListOf<JsonObject>()
     private val requests = linkedMapOf<String, Decision>()
     private val network = app.getSystemService(ConnectivityManager::class.java)
@@ -104,6 +109,7 @@ constructor(
                         require(init.str("codexHome") == host.expectedCodexHome) {
                             "Unexpected Codex account"
                         }
+                        codexHome = init.str("codexHome")
                         _state.update {
                             it.copy(connection = "Connected to ${host.displayName}", ready = true)
                         }
@@ -455,6 +461,7 @@ constructor(
             buffered.clear()
             hydrating = false
             val draft = local.get("draft/new")
+            val attachments = restoreAttachments("new")
             val journal = parse(local.get("journal/new"))
             val savedOptions = parseNewTaskOptions(local.get("options/new"))
             val options = journal?.let { optionsFromJournal(it, savedOptions) } ?: savedOptions
@@ -468,6 +475,7 @@ constructor(
                     decisions = emptyList(),
                     historyCursor = null,
                     draft = draft,
+                    attachments = attachments,
                     newTaskOptions = options,
                     threadModel = null,
                     threadReasoningEffort = null,
@@ -515,6 +523,7 @@ constructor(
                 entries = emptyList(),
                 activeTurn = null,
                 historyCursor = null,
+                attachments = emptyList(),
                 newTaskOptions = NewTaskOptions(),
                 threadModel = null,
                 threadReasoningEffort = null,
@@ -524,17 +533,21 @@ constructor(
             )
         }
         var draft = local.get("draft/$id")
+        var attachments = restoreAttachments(id)
         var journal = parse(local.get("journal/$id"))
         if (journal?.str("stage") == "accepted") {
             if (draft == journal.str("text")) {
                 local.remove("draft/$id")
                 draft = ""
+                attachments.forEach(attachmentStore::delete)
+                local.remove("attachments/$id")
+                attachments = emptyList()
             }
             local.remove("journal/$id")
             journal = null
         }
         if (n != selection) return
-        _state.update { it.copy(draft = draft, journal = journal) }
+        _state.update { it.copy(draft = draft, attachments = attachments, journal = journal) }
         try {
             val response =
                 readEventually(
@@ -743,6 +756,95 @@ constructor(
         viewModelScope.launch { local.put("draft/$key", value) }
     }
 
+    override fun addAttachments(uris: List<Uri>) {
+        val before = _state.value
+        if (before.busy || before.journal != null || uris.isEmpty()) return
+        val n = selection
+        val key = before.thread ?: "new"
+        viewModelScope.launch {
+            var values = before.attachments
+            for (uri in uris) {
+                try {
+                    val added = attachmentStore.import(uri, values.sumOf { it.byteSize })
+                    if (n != selection || (_state.value.thread ?: "new") != key) {
+                        attachmentStore.delete(added)
+                        return@launch
+                    }
+                    values += added
+                    persistAttachments(key, values)
+                    _state.update { it.copy(attachments = values, error = null) }
+                } catch (e: Exception) {
+                    _state.update {
+                        it.copy(error = e.message ?: "The selected image could not be added.")
+                    }
+                    break
+                }
+            }
+        }
+    }
+
+    override fun prepareCamera(): Uri? {
+        val before = _state.value
+        if (before.busy || before.journal != null) return null
+        return runCatching { attachmentStore.prepareCamera() }
+            .onFailure {
+                _state.update { state -> state.copy(error = "The camera could not be opened.") }
+            }
+            .getOrNull()
+    }
+
+    override fun finishCamera(success: Boolean) {
+        val before = _state.value
+        val n = selection
+        val key = before.thread ?: "new"
+        viewModelScope.launch {
+            try {
+                val added =
+                    attachmentStore.finishCamera(success, before.attachments.sumOf { it.byteSize })
+                        ?: return@launch
+                if (n != selection || (_state.value.thread ?: "new") != key) {
+                    attachmentStore.delete(added)
+                    return@launch
+                }
+                val values = before.attachments + added
+                persistAttachments(key, values)
+                _state.update { it.copy(attachments = values, error = null) }
+            } catch (e: Exception) {
+                _state.update {
+                    it.copy(error = e.message ?: "The camera image could not be added.")
+                }
+            }
+        }
+    }
+
+    override fun removeAttachment(id: String) {
+        val before = _state.value
+        if (before.busy || before.journal != null) return
+        val removed = before.attachments.find { it.id == id } ?: return
+        val values = before.attachments.filterNot { it.id == id }
+        val key = before.thread ?: "new"
+        _state.update { it.copy(attachments = values) }
+        viewModelScope.launch {
+            persistAttachments(key, values)
+            attachmentStore.delete(removed)
+        }
+    }
+
+    override suspend fun loadMedia(media: MediaRef): ByteArray =
+        mediaRepository.load(media) { rpc.readFile(it) }
+
+    private suspend fun restoreAttachments(key: String): List<DraftAttachment> =
+        runCatching { attachmentStore.restore(local.get("attachments/$key")) }
+            .getOrElse {
+                local.remove("attachments/$key")
+                emptyList()
+            }
+
+    private suspend fun persistAttachments(key: String, values: List<DraftAttachment>) {
+        if (values.isEmpty()) local.remove("attachments/$key")
+        else local.put("attachments/$key", attachmentStore.serialize(values))
+    }
+
     override fun send() {
         val before = _state.value
         val hasTurnStartOverrides =
@@ -752,7 +854,7 @@ constructor(
         if (
             !before.ready ||
                 before.busy ||
-                before.draft.isBlank() ||
+                (before.draft.isBlank() && before.attachments.isEmpty()) ||
                 before.journal != null ||
                 before.thread == null && !before.newTaskOptions.hasExecutionDestination() ||
                 hasTurnStartOverrides &&
@@ -785,6 +887,8 @@ constructor(
                     "model" to before.newTaskOptions.model?.let(::s),
                     "reasoningEffort" to before.newTaskOptions.reasoningEffort?.let(::s),
                     "threadId" to before.thread?.let(::s),
+                    "expectedTurnId" to before.activeTurn?.let(::s),
+                    "attachments" to JsonArray(before.attachments.map { it.json() }),
                 )
             local.put("journal/$originalKey", journal.toString())
             _state.update { it.copy(journal = journal) }
@@ -889,13 +993,15 @@ constructor(
                 key = id
                 local.put("journal/$key", journal.toString())
                 local.put("draft/$key", journal.str("text"))
+                persistAttachments(key, journalAttachments(journal))
                 local.remove("journal/new")
                 local.remove("draft/new")
+                local.remove("attachments/new")
                 local.remove("options/new")
                 _state.update {
                     it.copy(
                         thread = id,
-                        title = journal.str("text").take(80),
+                        title = journal.str("text").take(80).ifBlank { "Image message" },
                         journal = journal,
                         threadModel =
                             thread.str("model").takeIf(String::isNotBlank)
@@ -906,10 +1012,59 @@ constructor(
                 }
                 stage = "taskReady"
             }
+            val attachments = journalAttachments(journal)
+            if (id != null && stage == "taskReady" && attachments.isNotEmpty()) {
+                ImagePolicy.validateCombined(attachments.map { it.byteSize })
+                val safeThread = id.replace(Regex("[^A-Za-z0-9._-]"), "-")
+                val remoteDirectory =
+                    "$codexHome/attachments/remote-android/$safeThread/${journal.str("operation")}"
+                record("creatingAttachmentDirectory", "remoteDirectory" to s(remoteDirectory))
+                rpc.createDirectory(remoteDirectory)
+                record("attachmentDirectoryReady")
+                stage = "attachmentDirectoryReady"
+            }
+            if (
+                id != null &&
+                    stage in setOf("attachmentDirectoryReady", "attachmentUploaded")
+            ) {
+                val remoteDirectory = journal.str("remoteDirectory")
+                val remotePaths = journal.list("remotePaths").map { it.str("path") }.toMutableList()
+                var uploadedCount = journal.str("uploadedCount").toIntOrNull() ?: 0
+                for (index in uploadedCount until attachments.size) {
+                    val attachment = attachments[index]
+                    val file = File(attachment.localPath)
+                    val format = ImagePolicy.inspect(file)
+                    check(file.length() == attachment.byteSize) {
+                        "A draft image changed before it could be sent."
+                    }
+                    val remotePath =
+                        "$remoteDirectory/${safeAttachmentName(index + 1, attachment.displayName, format)}"
+                    val pendingPaths = remotePaths + remotePath
+                    record(
+                        "uploadingAttachment",
+                        "uploadIndex" to JsonPrimitive(index),
+                        "remotePaths" to JsonArray(pendingPaths.map { obj("path" to s(it)) }),
+                    )
+                    rpc.writeFile(remotePath, withContext(Dispatchers.IO) { file.readBytes() })
+                    remotePaths += remotePath
+                    uploadedCount = index + 1
+                    record(
+                        "attachmentUploaded",
+                        "uploadedCount" to JsonPrimitive(uploadedCount),
+                        "remotePaths" to JsonArray(remotePaths.map { obj("path" to s(it)) }),
+                    )
+                }
+                record("attachmentsReady")
+                stage = "attachmentsReady"
+            }
             if (id != null && stage == "taskReady") {
+                record("attachmentsReady")
+                stage = "attachmentsReady"
+            }
+            if (id != null && stage == "attachmentsReady") {
                 record("sending")
-                val input =
-                    JsonArray(listOf(obj("type" to s("text"), "text" to s(journal.str("text")))))
+                val remotePaths = journal.list("remotePaths").map { it.str("path") }
+                val input = turnInput(journal.str("text"), remotePaths)
                 if (expectedTurn == null)
                     rpc.call(
                         "turn/start",
@@ -932,7 +1087,16 @@ constructor(
                 record("accepted")
                 local.remove("journal/$key")
                 local.remove("draft/$key")
-                _state.update { it.copy(draft = "", journal = null, error = null) }
+                local.remove("attachments/$key")
+                attachments.forEach(attachmentStore::delete)
+                _state.update {
+                    it.copy(
+                        draft = "",
+                        attachments = emptyList(),
+                        journal = null,
+                        error = null,
+                    )
+                }
             }
         } catch (e: CancellationException) {
             throw e
@@ -982,6 +1146,13 @@ constructor(
             workingDirectory = str("cwd"),
             worktreeRoot = str("worktreeRoot").ifEmpty { null },
         )
+
+    private fun journalAttachments(journal: JsonObject): List<DraftAttachment> {
+        val raw = journal["attachments"] as? JsonArray ?: return emptyList()
+        val restored = attachmentStore.restore(raw.toString())
+        require(restored.size == raw.size) { "A draft image is no longer available." }
+        return restored
+    }
 
     private suspend fun recoverNew(userInitiated: Boolean = false) {
         var journal = _state.value.journal ?: return
@@ -1072,6 +1243,32 @@ constructor(
                         executeSubmission(journal, found)
                     }
                 }
+                "creatingAttachmentDirectory" -> {
+                    val found = journal.str("threadId")
+                    if (found.isNotEmpty() && workspaces.directoryExists(journal.str("remoteDirectory"))) {
+                        record("attachmentDirectoryReady")
+                        journal = adoptRecoveredTask(journal, found)
+                        executeSubmission(journal, found)
+                    } else
+                        record(
+                            stage,
+                            "The attachment directory could not be confirmed. Nothing was retried automatically.",
+                            true,
+                        )
+                }
+                "attachmentDirectoryReady", "attachmentUploaded", "attachmentsReady" -> {
+                    val found = journal.str("threadId")
+                    if (found.isNotEmpty()) {
+                        journal = adoptRecoveredTask(journal, found, stage)
+                        executeSubmission(journal, found)
+                    }
+                }
+                "uploadingAttachment" ->
+                    record(
+                        stage,
+                        "An image write may have reached the host. It was not retried automatically.",
+                        true,
+                    )
                 "sending", "accepted" -> {
                     val known = journal.str("threadId")
                     val found = if (known.isNotEmpty()) known else findPreparedTask(journal)
@@ -1081,8 +1278,10 @@ constructor(
                             JsonObject(journal + ("threadId" to s(found))).toString(),
                         )
                         local.put("draft/$found", journal.str("text"))
+                        persistAttachments(found, journalAttachments(journal))
                         local.remove("journal/new")
                         local.remove("draft/new")
+                        local.remove("attachments/new")
                         loadTask(found)
                     }
                 }
@@ -1102,22 +1301,28 @@ constructor(
         }
     }
 
-    private suspend fun adoptRecoveredTask(journal: JsonObject, id: String): JsonObject {
+    private suspend fun adoptRecoveredTask(
+        journal: JsonObject,
+        id: String,
+        stage: String = "taskReady",
+    ): JsonObject {
         val adopted =
             JsonObject(
                 journal.filterKeys { it !in setOf("failure", "uncertain") } +
                     ("threadId" to s(id)) +
-                    ("stage" to s("taskReady"))
+                    ("stage" to s(stage))
             )
         local.put("journal/$id", adopted.toString())
         local.put("draft/$id", adopted.str("text"))
+        persistAttachments(id, journalAttachments(adopted))
         local.remove("journal/new")
         local.remove("draft/new")
+        local.remove("attachments/new")
         local.remove("options/new")
         _state.update {
             it.copy(
                 thread = id,
-                title = adopted.str("text").take(80),
+                title = adopted.str("text").take(80).ifBlank { "Image message" },
                 journal = adopted,
             )
         }
@@ -1157,7 +1362,17 @@ constructor(
         val before = _state.value
         if (!before.ready || before.busy || before.journal == null) return
         if (before.thread != null) {
-            viewModelScope.launch { guarded { loadTask(before.thread) } }
+            val stage = before.journal.str("stage")
+            if (stage in setOf("attachmentDirectoryReady", "attachmentUploaded", "attachmentsReady")) {
+                _state.update { it.copy(busy = true, error = null) }
+                viewModelScope.launch {
+                    executeSubmission(
+                        before.journal,
+                        before.thread,
+                        before.journal.str("expectedTurnId").ifEmpty { null },
+                    )
+                }
+            } else viewModelScope.launch { guarded { loadTask(before.thread) } }
         } else {
             viewModelScope.launch { recoverNew(userInitiated = true) }
         }
@@ -1313,16 +1528,6 @@ constructor(
             "reasoningEffort" to options.reasoningEffort?.let(::s),
             "approvalPolicy" to options.approvalPolicy?.let(::s),
             "collaborationMode" to options.collaborationMode?.let(::s),
-            "attachments" to
-                JsonArray(
-                    options.attachments.map { attachment ->
-                        obj(
-                            "id" to s(attachment.id),
-                            "displayName" to s(attachment.displayName),
-                            "localUri" to s(attachment.localUri),
-                        )
-                    }
-                ),
         )
 
     private fun parseNewTaskOptions(value: String): NewTaskOptions {
@@ -1338,13 +1543,6 @@ constructor(
             reasoningEffort = saved.str("reasoningEffort").ifBlank { null },
             approvalPolicy = saved.str("approvalPolicy").ifBlank { null },
             collaborationMode = saved.str("collaborationMode").ifBlank { null },
-            attachments =
-                saved.list("attachments").mapNotNull { attachment ->
-                    val id = attachment.str("id")
-                    val uri = attachment.str("localUri")
-                    if (id.isBlank() || uri.isBlank()) null
-                    else ComposerAttachment(id, attachment.str("displayName"), uri)
-                },
         )
     }
 

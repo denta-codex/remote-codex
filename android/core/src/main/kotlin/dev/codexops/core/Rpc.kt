@@ -2,6 +2,7 @@ package dev.codexops.core
 
 import java.net.URI
 import java.nio.ByteBuffer
+import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.*
@@ -173,7 +174,7 @@ class Rpc(private val allowLoopbackTest: Boolean = false) {
                 call(
                     "initialize",
                     obj(
-                        "clientInfo" to obj("name" to s("remote-codex"), "version" to s("0.1.5")),
+                        "clientInfo" to obj("name" to s("remote-codex"), "version" to s("0.1.6")),
                         "capabilities" to obj("experimentalApi" to JsonPrimitive(true)),
                     ),
                 )
@@ -185,7 +186,11 @@ class Rpc(private val allowLoopbackTest: Boolean = false) {
         }
     }
 
-    suspend fun call(method: String, params: JsonObject = obj()): JsonObject {
+    suspend fun call(
+        method: String,
+        params: JsonObject = obj(),
+        timeoutMillis: Long = 30000,
+    ): JsonObject {
         val id = next.incrementAndGet()
         val waiter = CompletableDeferred<JsonObject>()
         synchronized(guard) {
@@ -198,10 +203,33 @@ class Rpc(private val allowLoopbackTest: Boolean = false) {
             }
         }
         return try {
-            withTimeout(30000) { waiter.await() }
+            withTimeout(timeoutMillis) { waiter.await() }
         } finally {
             pending.remove(id.toString())
         }
+    }
+
+    suspend fun createDirectory(path: String) {
+        call(
+            "fs/createDirectory",
+            obj("path" to s(path), "recursive" to JsonPrimitive(true)),
+        )
+    }
+
+    suspend fun writeFile(path: String, bytes: ByteArray) {
+        call(
+            "fs/writeFile",
+            obj(
+                "path" to s(path),
+                "dataBase64" to s(Base64.getEncoder().encodeToString(bytes)),
+            ),
+            120000,
+        )
+    }
+
+    suspend fun readFile(path: String): ByteArray {
+        val result = call("fs/readFile", obj("path" to s(path)), 60000)
+        return Base64.getDecoder().decode(result.str("dataBase64"))
     }
 
     fun respond(id: JsonElement, result: JsonObject, epoch: Long) {

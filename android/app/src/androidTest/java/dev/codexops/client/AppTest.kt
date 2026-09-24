@@ -1,6 +1,8 @@
 package dev.codexops.client
 
 import android.app.Application
+import android.graphics.Bitmap
+import android.net.Uri
 import android.os.SystemClock
 import androidx.activity.compose.setContent
 import androidx.compose.ui.test.*
@@ -11,6 +13,9 @@ import androidx.lifecycle.ViewModelStore
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.codexops.core.*
+import java.io.File
+import java.util.Base64
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
@@ -28,9 +33,12 @@ class AppTest {
     private val prepared = AtomicInteger()
     private val modelLists = AtomicInteger()
     @Volatile private var dropSend = false
+    @Volatile private var dropWrite = false
     @Volatile private var fastModelAvailable = true
     @Volatile private var peer: WebSocket? = null
     @Volatile private var acceptedText = ""
+    @Volatile private var acceptedInput = JsonArray(emptyList())
+    private val remoteFiles = ConcurrentHashMap<String, String>()
     @Volatile private var lastThreadStartParams: JsonObject? = null
     @Volatile private var lastTurnStartParams: JsonObject? = null
     @Volatile private var historyOverride: JsonObject? = null
@@ -247,13 +255,34 @@ class AppTest {
                                                     }
                                                 }
                                             }
+                                            "fs/createDirectory" -> obj()
+                                            "fs/writeFile" -> {
+                                                if (dropWrite) {
+                                                    ws.cancel()
+                                                    return
+                                                }
+                                                remoteFiles[params.str("path")] =
+                                                    params.str("dataBase64")
+                                                obj()
+                                            }
+                                            "fs/readFile" ->
+                                                obj(
+                                                    "dataBase64" to
+                                                        s(remoteFiles[params.str("path")].orEmpty())
+                                                )
                                             "thread/turns/list" -> history()
                                             "turn/start",
                                             "turn/steer" -> {
                                                 if (method == "turn/start") lastTurnStartParams = params
                                                 sent.incrementAndGet()
+                                                acceptedInput =
+                                                    params["input"] as? JsonArray
+                                                        ?: JsonArray(emptyList())
                                                 acceptedText =
-                                                    params.list("input").first().str("text")
+                                                    params.list("input")
+                                                        .firstOrNull { it.str("type") == "text" }
+                                                        ?.str("text")
+                                                        .orEmpty()
                                                 if (dropSend) {
                                                     ws.cancel()
                                                     return
@@ -274,22 +303,33 @@ class AppTest {
                                             "item/completed",
                                             obj(
                                                 "turnId" to s("turn-test"),
-                                                "item" to
-                                                    obj(
-                                                        "id" to s("u"),
-                                                        "type" to s("userMessage"),
-                                                        "content" to
-                                                            JsonArray(
-                                                                listOf(
-                                                                    obj(
-                                                                        "type" to s("text"),
-                                                                        "text" to s(acceptedText),
-                                                                    )
-                                                                )
+                                                        "item" to
+                                                            obj(
+                                                                "id" to s("u"),
+                                                                "type" to s("userMessage"),
+                                                                "content" to acceptedInput,
                                                             ),
-                                                    ),
                                             ),
                                         )
+                                        acceptedInput
+                                            .mapNotNull { it as? JsonObject }
+                                            .firstOrNull { it.str("type") == "localImage" }
+                                            ?.str("path")
+                                            ?.let { path ->
+                                                emit(
+                                                    ws,
+                                                    "item/completed",
+                                                    obj(
+                                                        "turnId" to s("turn-test"),
+                                                        "item" to
+                                                            obj(
+                                                                "id" to s("view"),
+                                                                "type" to s("imageView"),
+                                                                "path" to s(path),
+                                                            ),
+                                                    ),
+                                                )
+                                            }
                                         emit(
                                             ws,
                                             "item/agentMessage/delta",
@@ -322,10 +362,13 @@ class AppTest {
                     "draft/new",
                     "journal/new",
                     "options/new",
+                    "attachments/new",
                     "draft/task-test",
                     "journal/task-test",
+                    "attachments/task-test",
                     "draft/project-task",
                     "journal/project-task",
+                    "attachments/project-task",
                 )
                 .forEach { local.remove(it) }
         }
@@ -454,20 +497,25 @@ class AppTest {
 
     private fun history(): JsonObject {
         historyOverride?.let { return it }
-        if (acceptedText.isEmpty()) return obj("data" to JsonArray(emptyList()))
+        if (acceptedInput.isEmpty()) return obj("data" to JsonArray(emptyList()))
         val user =
             obj(
                 "id" to s("u"),
                 "type" to s("userMessage"),
-                "content" to JsonArray(listOf(obj("type" to s("text"), "text" to s(acceptedText)))),
+                "content" to acceptedInput,
             )
         val assistant =
             obj("id" to s("a"), "type" to s("agentMessage"), "text" to s("Hello from Grace"))
+        val image =
+            acceptedInput.mapNotNull { it as? JsonObject }
+                .firstOrNull { it.str("type") == "localImage" }
+                ?.str("path")
+                ?.let { obj("id" to s("view"), "type" to s("imageView"), "path" to s(it)) }
         val turn =
             obj(
                 "id" to s("turn-test"),
                 "status" to s("completed"),
-                "items" to JsonArray(listOf(user, assistant)),
+                "items" to JsonArray(listOfNotNull(user, image, assistant)),
             )
         return obj("data" to JsonArray(listOf(turn)))
     }
@@ -481,6 +529,14 @@ class AppTest {
                 .toString()
         )
     }
+
+    private fun fixtureImage(name: String = "fixture.png"): File =
+        File(app.cacheDir, name).also { file ->
+            file.outputStream().use { output ->
+                Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+                    .compress(Bitmap.CompressFormat.PNG, 100, output)
+            }
+        }
 
     private fun longHistory(tallLastMessage: Boolean = false): JsonObject {
         val turns = (1..20).map { index ->
@@ -704,6 +760,51 @@ class AppTest {
     }
 
     @Test
+    fun imageOnlyUploadsAndRendersThroughStockRpc() {
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) {
+            model.state.value.thread == "task-test" && !model.state.value.busy
+        }
+        val image = fixtureImage()
+        compose.runOnUiThread { model.addAttachments(listOf(Uri.fromFile(image))) }
+        compose.waitUntil(5000) { model.state.value.attachments.size == 1 }
+        compose.onNodeWithTag("draft-attachment").assertIsDisplayed()
+        compose.onNodeWithTag("send").assertIsEnabled().performClick()
+        compose.waitUntil(15000) {
+            sent.get() == 1 && model.state.value.entries.any { it.kind == "imageView" }
+        }
+        assertEquals(listOf("localImage"), acceptedInput.map { it.jsonObject.str("type") })
+        assertEquals(1, remoteFiles.size)
+        compose.waitUntil(10000) {
+            compose.onAllNodesWithTag("message-image").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onAllNodesWithTag("message-image")[0].performClick()
+        compose.onNodeWithTag("close-image").assertIsDisplayed().performClick()
+    }
+
+    @Test
+    fun uncertainAttachmentWriteIsNotReplayed() {
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) {
+            model.state.value.thread == "task-test" && !model.state.value.busy
+        }
+        val image = fixtureImage("uncertain.png")
+        compose.runOnUiThread { model.addAttachments(listOf(Uri.fromFile(image))) }
+        compose.waitUntil(5000) { model.state.value.attachments.size == 1 }
+        dropWrite = true
+        compose.onNodeWithTag("send").performClick()
+        compose.waitUntil(15000) {
+            !model.state.value.busy && model.state.value.journal != null
+        }
+        assertEquals(0, sent.get())
+        assertEquals("uploadingAttachment", model.state.value.journal?.str("stage"))
+        compose.runOnUiThread { model.connect() }
+        compose.waitUntil(15000) { model.state.value.ready && !model.state.value.busy }
+        assertEquals(0, sent.get())
+        compose.onNodeWithTag("send").assertIsNotEnabled()
+    }
+
+    @Test
     fun projectsAndChatsFilterTaskBrowser() {
         assertEquals(listOf("Remote Codex", "Notes"), model.state.value.projects.map { it.name })
         demoPause(2000)
@@ -867,8 +968,11 @@ class AppTest {
         compose.waitUntil { model.state.value.page == "chat" }
         demoPause()
         compose.onNodeWithTag("composer").performTextInput("Keep this idea")
+        val image = fixtureImage("persist.png")
+        compose.runOnUiThread { model.addAttachments(listOf(Uri.fromFile(image))) }
         compose.waitUntil(5000) {
-            runBlocking { LocalStore(app).get("draft/new") } == "Keep this idea"
+            runBlocking { LocalStore(app).get("draft/new") } == "Keep this idea" &&
+                model.state.value.attachments.size == 1
         }
         demoPause(2500)
         compose.runOnUiThread {
@@ -878,8 +982,12 @@ class AppTest {
             compose.activity.setContent { RemoteTheme { App(model) } }
             model.newChat()
         }
-        compose.waitUntil { model.state.value.draft == "Keep this idea" }
+        compose.waitUntil {
+            model.state.value.draft == "Keep this idea" &&
+                model.state.value.attachments.size == 1
+        }
         compose.onNodeWithTag("composer").assertTextContains("Keep this idea")
+        compose.onNodeWithTag("draft-attachment").assertIsDisplayed()
         demoPause(3500)
     }
 

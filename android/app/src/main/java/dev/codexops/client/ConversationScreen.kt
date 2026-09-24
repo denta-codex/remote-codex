@@ -125,7 +125,7 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
         items(st.decisions.reversed(), key = { it.key }) { decision ->
             DecisionCard(decision, st, actions)
         }
-        items(messages.asReversed(), key = { it.key }) { entry -> Message(entry) }
+        items(messages.asReversed(), key = { it.key }) { entry -> Message(entry, actions) }
         if (st.historyCursor != null)
             item(key = "history") {
                 TextButton(onClick = actions::older, modifier = Modifier.fillMaxWidth()) {
@@ -190,7 +190,7 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
 }
 
 @Composable
-private fun Message(entry: Entry) {
+private fun Message(entry: Entry, actions: ConversationActions) {
     var expanded by rememberSaveable(entry.key) { mutableStateOf(false) }
     if (entry.kind == "userMessage")
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -199,17 +199,29 @@ private fun Message(entry: Entry) {
                 color = MaterialTheme.colorScheme.surfaceVariant,
                 shape = RoundedCornerShape(20.dp, 20.dp, 4.dp, 20.dp),
             ) {
-                SelectionContainer {
-                    Text(
-                        entry.text,
-                        Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                        lineHeight = 23.sp,
-                    )
+                Column(
+                    Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    MediaGallery(entry.media, actions)
+                    if (entry.text.isNotBlank())
+                        SelectionContainer {
+                            Text(entry.text, lineHeight = 23.sp)
+                        }
                 }
             }
         }
     else if (entry.kind == "agentMessage" || entry.kind == "plan")
-        SelectionContainer { Markdown(entry.text.take(100000)) }
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            MediaGallery(entry.media, actions)
+            if (entry.text.isNotBlank())
+                SelectionContainer { Markdown(entry.text.take(100000)) }
+        }
+    else if (entry.kind == "imageView" || entry.kind == "imageGeneration")
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            MediaGallery(entry.media, actions)
+            if (entry.text.isNotBlank()) Text(entry.text, fontSize = 13.sp)
+        }
     else
         Surface(
             shape = RoundedCornerShape(14.dp),
@@ -217,6 +229,7 @@ private fun Message(entry: Entry) {
             color = MaterialTheme.colorScheme.surface,
         ) {
             Column {
+                MediaGallery(entry.media, actions)
                 Row(
                     Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(14.dp),
                     verticalAlignment = Alignment.CenterVertically,

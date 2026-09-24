@@ -114,7 +114,7 @@ internal fun SettingsScreen(st: ScreenState, actions: SettingsActions) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(
-            "Remote Codex ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})\nText-first preview · ${st.host.displayName} / agent",
+            "Remote Codex ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})\nText and images · ${st.host.displayName} / agent",
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

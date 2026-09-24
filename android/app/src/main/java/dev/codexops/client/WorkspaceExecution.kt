@@ -215,7 +215,10 @@ internal class StockWorkspaceAdapter(private val rpc: RemoteSession) {
                 "creatingWorktreeRoot" -> "Preparing worktree destination…"
                 "worktreeRootReady", "creatingWorktree" -> "Creating isolated worktree…"
                 "workspaceReady", "creatingTask" -> "Creating task…"
-                "taskReady", "sending" -> "Sending message…"
+                "taskReady", "creatingAttachmentDirectory" -> "Preparing images…"
+                "attachmentDirectoryReady", "uploadingAttachment", "attachmentUploaded" ->
+                    "Uploading images…"
+                "attachmentsReady", "sending" -> "Sending message…"
                 else -> "Updating…"
             }
     }

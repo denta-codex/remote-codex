@@ -17,6 +17,29 @@
 - No live deployment, update publication, Taildrop delivery, or physical-phone
   installation was performed.
 
+## September 24, 2026 — image support reconciled with Rust transport
+
+- Merged the current `main` line into the image-support branch, retaining the Rust
+  byte tunnel, Java-WebSocket continuation framing, projects/worktrees, model
+  controls, and the refactored Compose navigation.
+- Added persisted multiple-image drafts, Photos and camera capture, image-only and
+  mixed turn input, stock filesystem upload/read helpers, structured timeline media,
+  sampled inline rendering, and tap-to-expand viewing. Originals remain limited to
+  20 MiB each and 50 MiB combined.
+- Attachment directory creation, individual file writes, and turn submission are
+  journaled. An uncertain image write is retained for review and is not replayed
+  automatically.
+- `scripts/check` passed, including the Rust checks/tests, exact 20 MiB fragmented
+  stock-server round trip, Kotlin tests, Android build, unit tests, lint, and
+  instrumentation APK assembly.
+- All 17 fixture-backed instrumentation tests passed on the worktree-owned Android
+  16 emulator; the credential-gated live test skipped as designed. The new coverage
+  exercises image-only upload and inline/full-screen rendering, uncertain image-write
+  no-replay, and attachment restoration after ViewModel recreation. The disposable
+  emulator was stopped afterward.
+- Prepared Android version 0.1.6 / code 7 so it remains newer than the delivered
+  Rust-transport 0.1.5 build. No deployment or phone delivery was performed.
+
 ## September 24, 2026 — Rust tunnel and fragmented Android transport
 
 - Preserved the detached image and machine-profile work on separate named branches;
