@@ -13,42 +13,20 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.*
 
-const val ENDPOINT = "wss://grace.taila198f.ts.net/codex/rpc"
-
-data class ScreenState(
-    val page: String = "home",
-    val connection: String = "Offline",
-    val ready: Boolean = false,
-    val configured: Boolean = false,
-    val tasks: List<JsonObject> = emptyList(),
-    val listCursor: String? = null,
-    val query: String = "",
-    val archived: Boolean = false,
-    val thread: String? = null,
-    val title: String = "New chat",
-    val entries: List<Entry> = emptyList(),
-    val historyCursor: String? = null,
-    val draft: String = "",
-    val activeTurn: String? = null,
-    val decisions: List<Decision> = emptyList(),
-    val busy: Boolean = false,
-    val error: String? = null,
-    val journal: JsonObject? = null,
-    val attention: Boolean = false,
-)
-
 class ClientModel
 @JvmOverloads
 constructor(
     app: Application,
-    private val endpoint: String = ENDPOINT,
-    private val expectedHome: String = "/home/agent/.codex",
+    private val endpoint: String = GraceHost.endpoint,
+    private val expectedHome: String = GraceHost.expectedCodexHome,
     allowLoopbackTest: Boolean = false,
-) : AndroidViewModel(app) {
-    private val local = LocalStore(app)
-    private val rpc = Rpc(allowLoopbackTest)
+) : AndroidViewModel(app), ClientActions {
+    private val host =
+        GraceHost.copy(endpoint = endpoint, expectedCodexHome = expectedHome)
+    private val local: ClientStore = LocalStore(app)
+    private val rpc: RemoteSession = StockRemoteSession(allowLoopbackTest)
     private val timeline = Timeline()
-    private val _state = MutableStateFlow(ScreenState())
+    private val _state = MutableStateFlow(ScreenState(host = host))
     val state = _state.asStateFlow()
     private var connectionJob: Job? = null
     private var foreground = false
@@ -80,7 +58,7 @@ constructor(
         if (value && !_state.value.ready) connect()
     }
 
-    fun connect() {
+    override fun connect() {
         if (connectionJob?.isActive == true || _state.value.busy) return
         connectionJob =
             viewModelScope.launch {
@@ -113,11 +91,13 @@ constructor(
                     while (rpc.events.tryReceive().isSuccess) {}
                     publish()
                     try {
-                        val init = rpc.connect(endpoint, token)
-                        require(init.str("codexHome") == expectedHome) {
+                        val init = rpc.connect(host.endpoint, token)
+                        require(init.str("codexHome") == host.expectedCodexHome) {
                             "Unexpected Codex account"
                         }
-                        _state.update { it.copy(connection = "Connected to Grace", ready = true) }
+                        _state.update {
+                            it.copy(connection = "Connected to ${host.displayName}", ready = true)
+                        }
                         refreshList()
                         val id = _state.value.thread
                         if (id != null && _state.value.page == "chat") loadTask(id)
@@ -141,14 +121,15 @@ constructor(
                                 connection = "Disconnected",
                                 error = when {
                                     e is ConnectionFailure && e.httpStatus == 401 ->
-                                        "Grace rejected the connection credential. Scan the setup QR again in Settings."
+                                        "${host.displayName} rejected the connection credential. Scan the setup QR again in Settings."
                                     e is ConnectionFailure && e.httpStatus != null ->
-                                        "Grace rejected the WebSocket connection (HTTP ${e.httpStatus})."
+                                        "${host.displayName} rejected the WebSocket connection (HTTP ${e.httpStatus})."
                                     e is ConnectionFailure ->
-                                        "Cannot reach Grace (${e.transport}). Check Tailscale and reconnect."
+                                        "Cannot reach ${host.displayName} (${e.transport}). Check Tailscale and reconnect."
                                     e is RpcRejected ->
-                                        "Grace rejected connection setup (RPC ${e.code})."
-                                    else -> "Cannot connect to Grace (${e.javaClass.simpleName})."
+                                        "${host.displayName} rejected connection setup (RPC ${e.code})."
+                                    else ->
+                                        "Cannot connect to ${host.displayName} (${e.javaClass.simpleName})."
                                 },
                             )
                         }
@@ -160,7 +141,7 @@ constructor(
             }
     }
 
-    fun saveCredential(value: String) {
+    override fun saveCredential(value: String) {
         viewModelScope.launch {
             try {
                 require(value.trim().length >= 43)
@@ -178,18 +159,18 @@ constructor(
         }
     }
 
-    fun settings() {
+    override fun settings() {
         _state.update { it.copy(page = "settings", error = null) }
     }
 
-    fun home() {
+    override fun home() {
         if (_state.value.busy) return
         selection++
         _state.update { it.copy(page = "home", error = null) }
         viewModelScope.launch { guarded { refreshList() } }
     }
 
-    fun query(value: String) {
+    override fun query(value: String) {
         _state.update { it.copy(query = value) }
         val n = ++listSelection
         viewModelScope.launch {
@@ -198,12 +179,12 @@ constructor(
         }
     }
 
-    fun archived(value: Boolean) {
+    override fun archived(value: Boolean) {
         _state.update { it.copy(archived = value) }
         viewModelScope.launch { guarded { refreshList() } }
     }
 
-    fun moreTasks() {
+    override fun moreTasks() {
         viewModelScope.launch { guarded { refreshList(true) } }
     }
 
@@ -252,7 +233,7 @@ constructor(
         }
     }
 
-    fun newChat() {
+    override fun newChat() {
         if (_state.value.busy) return
         viewModelScope.launch {
             selection++
@@ -271,6 +252,7 @@ constructor(
                     decisions = emptyList(),
                     historyCursor = null,
                     draft = draft,
+                    newTaskOptions = NewTaskOptions(),
                     journal = journal,
                     error = null,
                     attention = false,
@@ -280,7 +262,7 @@ constructor(
         }
     }
 
-    fun openTask(id: String) {
+    override fun openTask(id: String) {
         if (_state.value.busy) return
         viewModelScope.launch { guarded { loadTask(id) } }
     }
@@ -381,7 +363,11 @@ constructor(
         }
     }
 
-    fun older() {
+    override fun updateNewTaskOptions(options: NewTaskOptions) {
+        _state.update { it.copy(newTaskOptions = options) }
+    }
+
+    override fun older() {
         viewModelScope.launch {
             guarded {
                 val before = _state.value
@@ -410,13 +396,13 @@ constructor(
         }
     }
 
-    fun draft(value: String) {
+    override fun draft(value: String) {
         _state.update { it.copy(draft = value) }
         val key = _state.value.thread ?: "new"
         viewModelScope.launch { local.put("draft/$key", value) }
     }
 
-    fun send() {
+    override fun send() {
         val before = _state.value
         if (!before.ready || before.busy || before.draft.isBlank() || before.journal != null) return
         _state.update { it.copy(busy = true, error = null) }
@@ -563,7 +549,7 @@ constructor(
         }
     }
 
-    fun unlockAfterReview() {
+    override fun unlockAfterReview() {
         viewModelScope.launch {
             val key = _state.value.thread ?: "new"
             val record = _state.value.journal ?: return@launch
@@ -573,7 +559,7 @@ constructor(
         }
     }
 
-    fun stop() {
+    override fun stop() {
         viewModelScope.launch {
             guarded {
                 val st = _state.value
@@ -583,12 +569,13 @@ constructor(
         }
     }
 
-    fun answer(d: Decision, result: JsonObject) {
+    override fun answer(decision: Decision, result: JsonObject) {
         viewModelScope.launch {
             guarded {
-                if (requests[d.key] != d || !_state.value.ready) throw ConnectionLost()
-                rpc.respond(d.id, result, d.epoch)
-                requests.remove(d.key)
+                if (requests[decision.key] != decision || !_state.value.ready)
+                    throw ConnectionLost()
+                rpc.respond(decision.id, result, decision.epoch)
+                requests.remove(decision.key)
                 publish()
             }
         }

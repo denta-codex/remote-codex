@@ -20,18 +20,18 @@ import kotlinx.coroutines.withContext
 
 private val Context.preferences by preferencesDataStore("connection")
 
-class LocalStore(private val context: Context) {
+class LocalStore(private val context: Context) : ClientStore {
     private val db =
         Room.databaseBuilder(context, LocalDatabase::class.java, "remote-codex.db").build()
     private val lock = Mutex()
 
-    suspend fun get(id: String): String =
+    override suspend fun get(id: String): String =
         lock.withLock { withContext(Dispatchers.IO) { db.records().get(id) ?: "" } }
 
-    suspend fun put(id: String, value: String) =
+    override suspend fun put(id: String, value: String) =
         lock.withLock { withContext(Dispatchers.IO) { db.records().put(Record(id, value)) } }
 
-    suspend fun remove(id: String) =
+    override suspend fun remove(id: String) =
         lock.withLock { withContext(Dispatchers.IO) { db.records().remove(id) } }
 
     private fun key(): SecretKey {
@@ -52,7 +52,7 @@ class LocalStore(private val context: Context) {
                 .generateKey()
     }
 
-    suspend fun token(): String =
+    override suspend fun token(): String =
         withContext(Dispatchers.IO) {
             val data =
                 context.preferences.data.first()[stringPreferencesKey("credential")]
@@ -64,7 +64,7 @@ class LocalStore(private val context: Context) {
             }
         }
 
-    suspend fun saveToken(value: String) {
+    override suspend fun saveToken(value: String) {
         val encrypted =
             withContext(Dispatchers.IO) {
                 Cipher.getInstance("AES/GCM/NoPadding").run {

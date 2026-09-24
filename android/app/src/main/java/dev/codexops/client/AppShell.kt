@@ -1,0 +1,126 @@
+package dev.codexops.client
+
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+
+@Composable
+fun RemoteTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
+    val colors =
+        if (darkTheme)
+            darkColorScheme(
+                primary = Color(0xFFE6E6E2), onPrimary = Color(0xFF20211F),
+                background = Color(0xFF171816), surface = Color(0xFF171816),
+                onBackground = Color(0xFFE8E9E4), onSurface = Color(0xFFE8E9E4),
+                surfaceVariant = Color(0xFF262723), onSurfaceVariant = Color(0xFFA6AAA0),
+                outline = Color(0xFF55594F), outlineVariant = Color(0xFF34372F),
+                secondaryContainer = Color(0xFF29392F), onSecondaryContainer = Color(0xFFD6EBDD),
+            )
+        else
+            lightColorScheme(
+                primary = Color(0xFF292D27), onPrimary = Color.White,
+                background = Color(0xFFFAFAF7), surface = Color(0xFFFAFAF7),
+                onBackground = Color(0xFF22251F), onSurface = Color(0xFF22251F),
+                surfaceVariant = Color(0xFFEEEFE9), onSurfaceVariant = Color(0xFF676D61),
+                outline = Color(0xFF818779), outlineVariant = Color(0xFFDDDFD5),
+                secondaryContainer = Color(0xFFE5EEE4), onSecondaryContainer = Color(0xFF263D2C),
+            )
+    MaterialTheme(colorScheme = colors, content = content)
+}
+
+@Composable
+internal fun Glyph(
+    resource: Int,
+    description: String? = null,
+    modifier: Modifier = Modifier.size(20.dp),
+) {
+    Icon(painterResource(resource), contentDescription = description, modifier = modifier)
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun App(model: ClientModel) {
+    val st by model.state.collectAsStateWithLifecycle()
+    BackHandler(st.page != "home") { model.home() }
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text(
+                            when (st.page) {
+                                "chat" -> st.title
+                                "settings" -> "Settings"
+                                else -> "Remote Codex"
+                            },
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Box(Modifier.size(6.dp).background(
+                                if (st.ready) Color(0xFF669477) else MaterialTheme.colorScheme.outline,
+                                CircleShape,
+                            ))
+                            Text(st.connection, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                },
+                navigationIcon = {
+                    if (st.page != "home") IconButton(onClick = model::home) { Glyph(R.drawable.ic_back, "Tasks") }
+                },
+                actions = {
+                    if (st.page != "settings")
+                        IconButton(onClick = model::settings) { Glyph(R.drawable.ic_settings, "Settings") }
+                },
+            )
+        },
+        containerColor = MaterialTheme.colorScheme.background,
+    ) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
+            st.error?.let {
+                Surface(color = MaterialTheme.colorScheme.errorContainer) {
+                    Text(
+                        it,
+                        Modifier.fillMaxWidth().padding(12.dp),
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        fontSize = 13.sp,
+                    )
+                }
+            }
+            if (!st.ready && st.configured && st.page != "settings")
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Drafts stay on this phone.", Modifier.weight(1f), fontSize = 12.sp)
+                    TextButton(onClick = model::connect) {
+                        Glyph(R.drawable.ic_refresh)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Reconnect")
+                    }
+                }
+            when (st.page) {
+                "settings" -> SettingsScreen(st, model)
+                "chat" -> key(st.thread) { ConversationScreen(st, model) }
+                else -> HomeScreen(st, model)
+            }
+        }
+    }
+}
