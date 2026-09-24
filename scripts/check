@@ -5,5 +5,10 @@ export JAVA_HOME="${JAVA_HOME:-$(mise where java@temurin-17.0.20+8)}"
 export ANDROID_HOME="${ANDROID_HOME:-/home/agent/Android/Sdk}"
 export PATH="$JAVA_HOME/bin:$PATH"
 export REMOTE_CODEX_TEST_CODEX="${REMOTE_CODEX_TEST_CODEX:-$(command -v codex)}"
-(cd forwarder && go test -race ./... && go vet ./...)
+(
+    cd forwarder
+    mise x rust@1.95.0 -- cargo fmt --all -- --check
+    mise x rust@1.95.0 -- cargo clippy --locked --all-targets -- -D warnings
+    mise x rust@1.95.0 -- cargo test --locked
+)
 android/gradlew -p android --no-daemon :core:test :app:testDebugUnitTest :app:assembleDebug :app:lintDebug :app:assembleDebugAndroidTest

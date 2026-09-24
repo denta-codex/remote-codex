@@ -1,5 +1,28 @@
 # Validation
 
+## September 24, 2026 — Rust tunnel and fragmented Android transport
+
+- Preserved the detached image and machine-profile work on separate named branches;
+  neither was merged into this transport branch.
+- Replaced the Go reverse proxy with a Rust 1.95 service that keeps the same binary,
+  environment, endpoint, credential and systemd contracts. The Rust service parses
+  only the two HTTP handshakes and copies upgraded bytes unchanged.
+- Replaced Android's OkHttp WebSocket with Java-WebSocket 1.6.0. Outbound stock RPC
+  uses 256 KiB continuation frames, requests no extensions and retains connection
+  generations, typed failures, bounded events and mutation-safe reconnect behavior.
+- Rust unit tests cover authentication, route/origin rejection, credential and Unix
+  socket checks, header sanitization, exact upgraded bytes and the eight-client cap.
+  The isolated stock gate writes and reads an exact 20 MiB file through the Rust
+  tunnel, accepts the roughly 28 MiB response and reads a server-owned task from a
+  second connection.
+- Kotlin tests cover the previous HTTP 401 diagnostic, a base64-expanded 20 MiB
+  request, UTF-8 across a fragment boundary, absence of compression negotiation and
+  a single 28 MiB incoming text frame. No live deployment or phone delivery occurred.
+- `scripts/check` passed. All 14 fixture-backed Android tests also passed on the
+  worktree-owned Android 16 emulator with main's fixture-only correction `8a931e4`
+  temporarily overlaid; the overlay was removed afterward so branch reconciliation
+  remains separate. The credential-gated live test skipped as designed.
+
 ## September 24, 2026 — projects and workspace execution parity
 
 - Checked the stock 0.154.0 schemas for paginated `project/list`, nullable

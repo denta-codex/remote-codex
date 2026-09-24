@@ -1,9 +1,16 @@
 package dev.codexops.core
 
+import java.util.Base64
+import java.net.InetSocketAddress
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
 import okhttp3.*
 import okhttp3.mockwebserver.*
+import org.java_websocket.drafts.Draft_6455
+import org.java_websocket.handshake.ClientHandshake
+import org.java_websocket.server.WebSocketServer
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -18,7 +25,7 @@ class CoreTest {
             val failure = runCatching {
                 rpc.connect("ws://127.0.0.1:${server.port}/codex/rpc", "private token")
             }.exceptionOrNull()
-            assertTrue(failure is ConnectionFailure)
+            assertTrue(failure?.javaClass?.name, failure is ConnectionFailure)
             assertEquals(401, (failure as ConnectionFailure).httpStatus)
             assertFalse(failure.toString().contains("private"))
         } finally {
@@ -140,6 +147,120 @@ class CoreTest {
         } finally {
             rpc.dispose()
             server.shutdown()
+        }
+        Unit
+    }
+
+    @Test
+    fun fragmentedTransportCarriesImageBoundaryAndLargeResponse() = runBlocking {
+        val server = MockWebServer()
+        val uploaded = CompletableDeferred<ByteArray>()
+        server.enqueue(
+            MockResponse()
+                .withWebSocketUpgrade(
+                    object : WebSocketListener() {
+                        override fun onMessage(webSocket: WebSocket, text: String) {
+                            val message = wire.parseToJsonElement(text).jsonObject
+                            val method = message.str("method")
+                            if (method.isEmpty() || method == "initialized") return
+                            val result =
+                                when (method) {
+                                    "initialize" -> obj("codexHome" to s("/test"))
+                                    "fs/writeFile" -> {
+                                        uploaded.complete(
+                                            Base64.getDecoder()
+                                                .decode(message.map("params").str("dataBase64"))
+                                        )
+                                        obj()
+                                    }
+                                    "unicode/boundary" ->
+                                        obj("value" to message.map("params")["value"])
+                                    else -> obj()
+                                }
+                            webSocket.send(
+                                obj("id" to message["id"], "result" to result).toString()
+                            )
+                        }
+                    }
+                )
+        )
+        server.start()
+        val rpc = Rpc(true)
+        try {
+            rpc.connect(
+                server.url("/codex/rpc").toString().replace("http://localhost:", "ws://127.0.0.1:"),
+                "test",
+            )
+            assertNull(server.takeRequest().getHeader("Sec-WebSocket-Extensions"))
+            val boundary = ByteArray(20 * 1024 * 1024)
+            "remote-codex-image-boundary".toByteArray().copyInto(boundary)
+            rpc.call(
+                "fs/writeFile",
+                obj(
+                    "path" to s("/test/20-mib.png"),
+                    "dataBase64" to s(Base64.getEncoder().encodeToString(boundary)),
+                ),
+            )
+            assertArrayEquals(boundary, withTimeout(2000) { uploaded.await() })
+            val unicode = "a".repeat(256 * 1024 - 1) + "🙂 after boundary"
+            assertEquals(
+                unicode,
+                rpc.call("unicode/boundary", obj("value" to s(unicode))).str("value"),
+            )
+        } finally {
+            rpc.dispose()
+            server.shutdown()
+        }
+        Unit
+    }
+
+    @Test
+    fun acceptsStockSizedSingleFrameResponse() = runBlocking {
+        val started = CountDownLatch(1)
+        val inboundSize = 28 * 1024 * 1024
+        val server =
+            object :
+                WebSocketServer(
+                    InetSocketAddress("127.0.0.1", 0),
+                    listOf(Draft_6455(emptyList(), 100 * 1024 * 1024)),
+                ) {
+                override fun onOpen(webSocket: org.java_websocket.WebSocket, request: ClientHandshake) {}
+
+                override fun onClose(
+                    webSocket: org.java_websocket.WebSocket,
+                    code: Int,
+                    reason: String,
+                    remote: Boolean,
+                ) {}
+
+                override fun onMessage(webSocket: org.java_websocket.WebSocket, text: String) {
+                    val message = wire.parseToJsonElement(text).jsonObject
+                    val method = message.str("method")
+                    if (method.isEmpty() || method == "initialized") return
+                    val result =
+                        if (method == "initialize") obj("codexHome" to s("/test"))
+                        else obj("blob" to s("z".repeat(inboundSize)))
+                    webSocket.send(obj("id" to message["id"], "result" to result).toString())
+                }
+
+                override fun onError(
+                    webSocket: org.java_websocket.WebSocket?,
+                    error: Exception,
+                ) {}
+
+                override fun onStart() {
+                    started.countDown()
+                }
+            }
+        server.start()
+        assertTrue(started.await(5, TimeUnit.SECONDS))
+        val rpc = Rpc(true)
+        try {
+            rpc.connect("ws://127.0.0.1:${server.port}/codex/rpc", "test")
+            assertEquals(inboundSize, rpc.call("fs/readLarge").str("blob").length)
+        } finally {
+            rpc.dispose()
+            server.stop(1000)
         }
         Unit
     }

@@ -1,13 +1,15 @@
 # Remote Codex 0.1.3
 
-Android uses OkHttp WSS over the existing Tailscale app. Persistent Tailscale Serve
-(`--bg`) terminates TLS and proxies the root route to 127.0.0.1:8787. The Go service
+Android uses Java-WebSocket WSS over the existing Tailscale app. Persistent Tailscale Serve
+(`--bg`) terminates TLS and proxies the root route to 127.0.0.1:8787. The Rust service
 accepts only authenticated `/codex/rpc` upgrades and connects one Unix stream per
 client to the existing stock Codex socket. It strips its bearer credential before
 forwarding. There is no RPC rewriting, backend task store, or new Codex process.
 The forwarder also removes WebSocket extension offers: the stock control socket
-closes handshakes offering `permessage-deflate`, which OkHttp offers by default.
-Without extension negotiation both endpoints exchange ordinary WebSocket frames.
+closes handshakes offering `permessage-deflate`. Android does not offer extensions,
+and the forwarder strips them defensively before the stock handshake. After the
+upgrade, Rust copies bytes without decoding WebSocket messages, preserving client
+fragment boundaries and backpressure.
 
 Android owns presentation, encrypted connection credentials, drafts, and submission
 records. Stock Codex owns execution, configuration, task IDs and durable history.
@@ -22,6 +24,11 @@ The protocol module separates responses, notifications, and server requests even
 when IDs overlap. Events carry a local connection generation; old-generation
 requests cannot be answered. History uses 20-turn pages. Bounded read retries
 cover the observed initial persistence delay; mutations are never replayed.
+Android serializes each stock JSON-RPC message once and emits 256 KiB RFC 6455
+continuation frames, with a 100 MiB message ceiling. This removes OkHttp's 16 MiB
+outgoing queue limit while leaving the stock RPC document unchanged. Reconnect
+creates a new stock session and reloads server-owned state; there is no sequence,
+acknowledgement, replay, or custom chunk envelope between Android and the host.
 
 The client pages the stock `project/list` catalog and keeps project identity and
 thread assignment server-owned. The task browser can show all tasks, projectless
