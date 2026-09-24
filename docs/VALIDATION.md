@@ -1,16 +1,16 @@
 # Validation
 
-## September 24, 2026 — existing-project Android parity
+## September 24, 2026 — projects and workspace execution parity
 
 - Checked the stock 0.154.0 schemas for paginated `project/list`, nullable
   `thread/list.projectId`, and `thread/start.projectId`. The ignored ChatGPT Android
   1.2026.258 reference confirmed its named/projectless selection states, the
   `__codex_projectless_chats` Chats presentation, and `project/list` records with
   `id`, `name`, and `roots[].path`.
-- The Android task browser now presents All, projectless Chats, and every paged
-  existing project, and filters task reads by the selected project. New chats still
-  default to projectless; selecting a project uses its first stock root as the
-  current workspace and never creates a directory or worktree.
+- The Android task browser presents All, projectless Chats, and every paged existing
+  project, and filters task reads by the selected project. New chats default to
+  projectless; selecting a project offers its current first root or a new isolated
+  detached worktree from local `origin/HEAD` under the connected Codex home.
 - Project choice is persisted with `NewTaskOptions` and copied into the operation
   journal before mutation dispatch. Reconnect recovery uses project plus cwd to
   find a server-owned thread and does not replay `thread/start` or `turn/start`.
@@ -22,6 +22,20 @@
   `thread/start`, retained projectless directory preparation, and uncertain project
   journal recovery with zero mutation replay. The credential-gated live connection
   test was skipped; no live deployment or phone delivery was performed.
+- Added pure JVM coverage for destination planning, invalid selections, selected
+  `project/read` validation, detached Git argv, exact worktree reconciliation, and
+  the narrower projectless sandbox policy.
+- Ten fixture-backed Android tests passed on this worktree's disposable Android 16
+  emulator. New cases cover current-checkout and worktree RPC wiring, plus
+  deliberately lost `git worktree add` and `thread/start` responses. Reconnect
+  observed the deterministic registered worktree/task, did not repeat either
+  creation, and proceeded to one input submission. The credential-gated live
+  connection test remained skipped as designed.
+- `scripts/check` passed, including Go race/vet and isolated stock lifecycle tests,
+  Kotlin/JVM tests, Android debug build, lint, and instrumentation APK assembly.
+- No live deployment, physical-phone delivery, or worktree cleanup was performed.
+  Project browsing populates `projectId` and the selected absolute root in
+  `workingDirectory` for the workspace adapter.
 
 ## September 23, 2026 — 0.1.3 live Android connection fix
 

@@ -32,6 +32,14 @@ class AppTest {
     @Volatile private var historyOverride: JsonObject? = null
     @Volatile private var fixtureTitle = "Fixture task"
     @Volatile private var lastThreadStart: JsonObject? = null
+    private val worktreeAdds = AtomicInteger()
+    private val threadStarts = AtomicInteger()
+    @Volatile private var dropWorktreeReply = false
+    @Volatile private var dropThreadStartReply = false
+    @Volatile private var createdWorktreePath = ""
+    @Volatile private var createdTaskCwd = ""
+    @Volatile private var createdTaskProject = ""
+    @Volatile private var threadStartParams: JsonObject? = null
     private val app
         get() = ApplicationProvider.getApplicationContext<Application>()
     private val demo by lazy {
@@ -59,6 +67,10 @@ class AppTest {
                                     val m = wire.parseToJsonElement(text).jsonObject
                                     val method = m.str("method")
                                     val params = m.map("params")
+                                    val command =
+                                        (params["command"] as? JsonArray)
+                                            ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+                                            ?: emptyList()
                                     if (method.isEmpty() || method == "initialized") return
                                     val result =
                                         when (method) {
@@ -91,11 +103,38 @@ class AppTest {
                                                                 )
                                                             )
                                                     )
+                                            "project/read" -> {
+                                                val projectId = params.str("projectId")
+                                                val (name, root) =
+                                                    when (projectId) {
+                                                        "project-remote" ->
+                                                            "Remote Codex" to "/fixture/remote-codex"
+                                                        "project-notes" -> "Notes" to "/fixture/notes"
+                                                        else -> "Fixture project" to "/fixture/repo"
+                                                    }
+                                                obj("project" to project(projectId, name, root))
+                                            }
                                             "thread/list" ->
                                                 obj(
                                                     "data" to
                                                         JsonArray(
-                                                            fixtureTasks(params)
+                                                            if (
+                                                                createdTaskCwd.isNotEmpty() &&
+                                                                    params.str("cwd") == createdTaskCwd
+                                                            )
+                                                                listOf(
+                                                                    obj(
+                                                                        "id" to s("task-test"),
+                                                                        "name" to s("Recovered task"),
+                                                                        "cwd" to s(createdTaskCwd),
+                                                                        "projectId" to
+                                                                            (createdTaskProject
+                                                                                    .takeIf(String::isNotEmpty)
+                                                                                    ?.let(::s)
+                                                                                ?: JsonNull),
+                                                                    )
+                                                                )
+                                                            else fixtureTasks(params)
                                                         )
                                                 )
                                             "thread/search" ->
@@ -128,6 +167,15 @@ class AppTest {
                                                 )
                                             "thread/start" -> {
                                                 lastThreadStart = params
+                                                threadStartParams = params
+                                                threadStarts.incrementAndGet()
+                                                createdTaskCwd = params.str("cwd")
+                                                createdTaskProject = params.str("projectId")
+                                                if (dropThreadStartReply) {
+                                                    dropThreadStartReply = false
+                                                    ws.cancel()
+                                                    return
+                                                }
                                                 obj(
                                                     "thread" to
                                                         obj(
@@ -138,8 +186,54 @@ class AppTest {
                                                 )
                                             }
                                             "command/exec" -> {
-                                                prepared.incrementAndGet()
-                                                obj("exitCode" to JsonPrimitive(0))
+                                                when {
+                                                    "symbolic-ref" in command ->
+                                                        obj(
+                                                            "exitCode" to JsonPrimitive(0),
+                                                            "stdout" to
+                                                                s("refs/remotes/origin/main\n"),
+                                                        )
+                                                    "rev-parse" in command ->
+                                                        obj(
+                                                            "exitCode" to JsonPrimitive(0),
+                                                            "stdout" to s("a".repeat(40) + "\n"),
+                                                        )
+                                                    command.containsAll(
+                                                        listOf("worktree", "add", "--detach")
+                                                    ) -> {
+                                                        createdWorktreePath = command[command.size - 2]
+                                                        worktreeAdds.incrementAndGet()
+                                                        demoPause(1800)
+                                                        if (dropWorktreeReply) {
+                                                            dropWorktreeReply = false
+                                                            ws.cancel()
+                                                            return
+                                                        }
+                                                        obj("exitCode" to JsonPrimitive(0))
+                                                    }
+                                                    command.containsAll(
+                                                        listOf("worktree", "list", "--porcelain")
+                                                    ) ->
+                                                        obj(
+                                                            "exitCode" to JsonPrimitive(0),
+                                                            "stdout" to
+                                                                s(
+                                                                    "worktree /fixture/repo\nHEAD ${"b".repeat(40)}\n\n" +
+                                                                        if (createdWorktreePath.isEmpty()) ""
+                                                                        else "worktree $createdWorktreePath\nHEAD ${"a".repeat(40)}\ndetached\n"
+                                                                ),
+                                                        )
+                                                    else -> {
+                                                        if (
+                                                            command.firstOrNull() == "mkdir" &&
+                                                                command.lastOrNull()?.startsWith(
+                                                                    "/home/agent/Documents/RemoteCodex/"
+                                                                ) == true
+                                                        )
+                                                            prepared.incrementAndGet()
+                                                        obj("exitCode" to JsonPrimitive(0))
+                                                    }
+                                                }
                                             }
                                             "thread/turns/list" -> history()
                                             "turn/start",
@@ -593,8 +687,10 @@ class AppTest {
             obj(
                 "operation" to s("fixture-operation"),
                 "text" to s("Recover this project task"),
-                "stage" to s("creating"),
+                "stage" to s("creatingTask"),
                 "cwd" to s("/fixture/remote-codex"),
+                "sourceCwd" to s("/fixture/remote-codex"),
+                "executionTarget" to s(ExecutionTarget.CurrentWorkspace.name),
                 "projectId" to s("project-remote"),
             )
         runBlocking {
@@ -671,5 +767,129 @@ class AppTest {
         compose.waitUntil { model.state.value.draft == "Keep this idea" }
         compose.onNodeWithTag("composer").assertTextContains("Keep this idea")
         demoPause(3500)
+    }
+
+    @Test
+    fun selectedProjectCanRunInANewIsolatedWorktree() {
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil { model.state.value.page == "chat" }
+        demoPause()
+        compose.runOnUiThread {
+            model.updateNewTaskOptions(
+                NewTaskOptions(
+                    projectId = "project-1",
+                    workingDirectory = "/fixture/repo",
+                    executionTarget = ExecutionTarget.CurrentWorkspace,
+                )
+            )
+        }
+        compose.onNodeWithTag("workspace-current").assertIsSelected()
+        demoPause(2200)
+        compose.onNodeWithTag("workspace-new-worktree").performClick()
+        compose.onNodeWithTag("workspace-new-worktree").assertIsSelected()
+        demoPause(1800)
+        compose.onNodeWithTag("composer").performTextInput("Change this in isolation")
+        demoPause(2200)
+        compose.onNodeWithTag("send").performClick()
+
+        compose.waitUntil(15000) {
+            sent.get() == 1 &&
+                model.state.value.journal == null &&
+                model.state.value.entries.any { it.text == "Hello from Grace" }
+        }
+        compose.onNodeWithText("Hello from Grace").assertIsDisplayed()
+        assertEquals(1, worktreeAdds.get())
+        assertEquals("project-1", threadStartParams!!.str("projectId"))
+        assertEquals(createdWorktreePath, threadStartParams!!.str("cwd"))
+        assertTrue(createdWorktreePath.startsWith("/fixture/worktrees/remote-codex-"))
+        assertTrue(createdWorktreePath.endsWith("/workspace"))
+        demoPause(3500)
+    }
+
+    @Test
+    fun selectedProjectCanUseItsCurrentWorkspaceWithoutGitMutation() {
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil { model.state.value.page == "chat" }
+        compose.runOnUiThread {
+            model.updateNewTaskOptions(
+                NewTaskOptions(
+                    projectId = "project-1",
+                    workingDirectory = "/fixture/repo",
+                    executionTarget = ExecutionTarget.CurrentWorkspace,
+                )
+            )
+        }
+        compose.onNodeWithTag("workspace-current").assertIsSelected()
+        compose.onNodeWithTag("composer").performTextInput("Use the selected checkout")
+        compose.onNodeWithTag("send").performClick()
+
+        compose.waitUntil(15000) { sent.get() == 1 && model.state.value.journal == null }
+        assertEquals(0, worktreeAdds.get())
+        assertEquals("project-1", threadStartParams!!.str("projectId"))
+        assertEquals("/fixture/repo", threadStartParams!!.str("cwd"))
+    }
+
+    @Test
+    fun uncertainWorktreeCreationIsInspectedAndNotRepeated() {
+        dropWorktreeReply = true
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil { model.state.value.page == "chat" }
+        compose.runOnUiThread {
+            model.updateNewTaskOptions(
+                NewTaskOptions(
+                    projectId = "project-1",
+                    workingDirectory = "/fixture/repo",
+                    executionTarget = ExecutionTarget.NewWorktree,
+                )
+            )
+        }
+        compose.onNodeWithTag("composer").performTextInput("Recover this setup once")
+        compose.onNodeWithTag("send").performClick()
+        compose.waitUntil(15000) {
+            !model.state.value.busy &&
+                model.state.value.journal?.str("stage") == "creatingWorktree"
+        }
+        assertEquals(1, worktreeAdds.get())
+
+        compose.runOnUiThread { model.connect() }
+        compose.waitUntil(20000) {
+            model.state.value.ready &&
+                sent.get() == 1 &&
+                model.state.value.journal == null
+        }
+        assertEquals("An uncertain worktree mutation must not be replayed", 1, worktreeAdds.get())
+        assertEquals(createdWorktreePath, threadStartParams!!.str("cwd"))
+    }
+
+    @Test
+    fun uncertainTaskCreationIsFoundAndNotRepeated() {
+        dropThreadStartReply = true
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil { model.state.value.page == "chat" }
+        compose.runOnUiThread {
+            model.updateNewTaskOptions(
+                NewTaskOptions(
+                    projectId = "project-1",
+                    workingDirectory = "/fixture/repo",
+                    executionTarget = ExecutionTarget.CurrentWorkspace,
+                )
+            )
+        }
+        compose.onNodeWithTag("composer").performTextInput("Create this task once")
+        compose.onNodeWithTag("send").performClick()
+        compose.waitUntil(15000) {
+            !model.state.value.busy &&
+                model.state.value.journal?.str("stage") == "creatingTask"
+        }
+        assertEquals(1, threadStarts.get())
+
+        compose.runOnUiThread { model.connect() }
+        compose.waitUntil(20000) {
+            model.state.value.ready &&
+                sent.get() == 1 &&
+                model.state.value.journal == null
+        }
+        assertEquals("An uncertain task mutation must not be replayed", 1, threadStarts.get())
+        assertEquals("task-test", model.state.value.thread)
     }
 }
