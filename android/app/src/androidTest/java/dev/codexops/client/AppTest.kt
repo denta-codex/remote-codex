@@ -1,11 +1,13 @@
 package dev.codexops.client
 
 import android.app.Application
+import android.os.SystemClock
 import androidx.activity.compose.setContent
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.lifecycle.ViewModelStore
 import androidx.test.core.app.ApplicationProvider
+import androidx.test.platform.app.InstrumentationRegistry
 import dev.codexops.core.*
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.*
@@ -26,6 +28,13 @@ class AppTest {
     @Volatile private var acceptedText = ""
     private val app
         get() = ApplicationProvider.getApplicationContext<Application>()
+    private val demo by lazy {
+        InstrumentationRegistry.getArguments().getString("demo") == "true"
+    }
+
+    private fun demoPause(milliseconds: Long = 1500) {
+        if (demo) SystemClock.sleep(milliseconds)
+    }
 
     @Before
     fun setup() {
@@ -177,6 +186,7 @@ class AppTest {
             model.saveCredential("fixture-credential-0000000000000000000000000000000000000")
         }
         compose.waitUntil(15000) { model.state.value.ready && model.state.value.tasks.isNotEmpty() }
+        demoPause()
     }
 
     private fun history(): JsonObject {
@@ -221,7 +231,9 @@ class AppTest {
     fun textChatStreamsAndCanReopen() {
         compose.onNodeWithText("＋  New chat").performClick()
         compose.waitUntil { model.state.value.page == "chat" }
+        demoPause()
         compose.onNodeWithTag("composer").performTextInput("What is running on Grace?")
+        demoPause()
         compose.onNodeWithTag("send").performClick()
         compose.waitUntil(15000) { model.state.value.entries.any { it.text == "Hello from Grace" } }
         assertEquals(1, sent.get())
@@ -229,14 +241,20 @@ class AppTest {
             compose.onAllNodesWithText("Hello from Grace").fetchSemanticsNodes().isNotEmpty()
         }
         compose.onNodeWithText("Hello from Grace").assertIsDisplayed()
+        demoPause(2500)
         compose.runOnUiThread {
             model.home()
             model.openTask("task-test")
+        }
+        compose.waitUntil(5000) {
+            model.state.value.thread == "task-test" && model.state.value.busy
         }
         compose.waitUntil(15000) {
             !model.state.value.busy &&
                 model.state.value.entries.any { it.text == "Hello from Grace" }
         }
+        compose.onNodeWithText("Hello from Grace").assertIsDisplayed()
+        demoPause(3000)
     }
 
     @Test
@@ -244,14 +262,18 @@ class AppTest {
         dropSend = true
         compose.runOnUiThread { model.openTask("task-test") }
         compose.waitUntil(10000) { model.state.value.page == "chat" && !model.state.value.busy }
+        demoPause()
         compose.onNodeWithTag("composer").performTextInput("Do this once")
+        demoPause()
         compose.onNodeWithTag("send").performClick()
         compose.waitUntil(15000) { !model.state.value.busy && model.state.value.journal != null }
+        demoPause(2500)
         compose.runOnUiThread { model.connect() }
         compose.waitUntil(15000) { model.state.value.ready && !model.state.value.busy }
         assertEquals(1, sent.get())
         assertNotNull(model.state.value.journal)
         compose.onNodeWithTag("send").assertIsNotEnabled()
+        demoPause(2000)
     }
 
     @Test
@@ -275,24 +297,30 @@ class AppTest {
                 .toString()
         )
         compose.waitUntil(5000) { model.state.value.decisions.size == 1 }
+        demoPause(2500)
         compose.runOnUiThread { model.newChat() }
         compose.waitUntil { model.state.value.thread == null }
+        demoPause()
         compose.runOnUiThread { model.openTask("task-test") }
         compose.waitUntil(10000) {
             !model.state.value.busy && model.state.value.decisions.size == 1
         }
+        demoPause(2000)
         emit(peer!!, "serverRequest/resolved", obj("requestId" to JsonPrimitive(77)))
         compose.waitUntil(5000) { model.state.value.decisions.isEmpty() }
+        demoPause(2000)
     }
 
     @Test
     fun draftSurvivesNewModel() {
         compose.runOnUiThread { model.newChat() }
         compose.waitUntil { model.state.value.page == "chat" }
+        demoPause()
         compose.onNodeWithTag("composer").performTextInput("Keep this idea")
         compose.waitUntil(5000) {
             runBlocking { LocalStore(app).get("draft/new") } == "Keep this idea"
         }
+        demoPause(2500)
         compose.runOnUiThread {
             store.clear()
             model = ClientModel(app, "ws://127.0.0.1:${server.port}/rpc", "/fixture", true)
@@ -301,5 +329,7 @@ class AppTest {
             model.newChat()
         }
         compose.waitUntil { model.state.value.draft == "Keep this idea" }
+        compose.onNodeWithTag("composer").assertTextContains("Keep this idea")
+        demoPause(3500)
     }
 }

@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+source scripts/emulator-common
+
+usage() {
+    echo 'Usage: scripts/emulator-record TEST_METHOD [--output PATH.mp4]' >&2
+    exit 2
+}
+
+method=''
+output=''
+while (( $# > 0 )); do
+    case "$1" in
+        --output)
+            (( $# >= 2 )) || usage
+            output="$2"
+            shift 2
+            ;;
+        -* ) usage ;;
+        *)
+            [[ -z "$method" ]] || usage
+            method="$1"
+            shift
+            ;;
+    esac
+done
+
+[[ "$method" =~ ^[A-Za-z][A-Za-z0-9_]*$ ]] || usage
+[[ -z "$output" || "$output" == *.mp4 ]] || {
+    echo 'Recording output must end in .mp4' >&2
+    exit 2
+}
+
+rc_require_runtime
+rc_require_active
+rc_export_build_environment
+command -v rg >/dev/null || { echo 'rg is required' >&2; exit 1; }
+test_source=android/app/src/androidTest/java/dev/codexops/client/AppTest.kt
+if ! rg -U -q "@Test[[:space:]]+fun ${method}\\(\\)" "$test_source"; then
+    echo "Unknown AppTest method: $method" >&2
+    exit 2
+fi
+
+serial="$(rc_state_value serial)"
+if [[ -z "$output" ]]; then
+    output="artifacts/demos/${method}-$(date +%Y%m%d-%H%M%S).mp4"
+fi
+output_dir="$(dirname "$output")"
+output_name="$(basename "$output")"
+mkdir -p -m 0700 "$output_dir"
+output_dir="$(cd "$output_dir" && pwd -P)"
+output="$output_dir/$output_name"
+[[ ! -e "$output" ]] || { echo "Output already exists: $output" >&2; exit 1; }
+
+lock_file="$RC_RUNTIME_ROOT/recording-$RC_WORKTREE_KEY.lock"
+exec 8>"$lock_file"
+if ! flock -n 8; then
+    echo 'A recording is already running for this worktree.' >&2
+    exit 1
+fi
+
+umask 077
+remote_video="/sdcard/remote-codex-demo-$RC_WORKTREE_KEY-$$.mp4"
+local_video="$output.tmp.$$"
+instrument_output="$RC_RUNTIME_ROOT/instrument-$RC_WORKTREE_KEY-$$.txt"
+record_pid=''
+
+stop_recording() {
+    if [[ "$record_pid" =~ ^[0-9]+$ ]]; then
+        "$RC_ADB" -s "$serial" shell kill -2 "$record_pid" >/dev/null 2>&1 || true
+        for _ in $(seq 1 20); do
+            if ! "$RC_ADB" -s "$serial" shell kill -0 "$record_pid" >/dev/null 2>&1; then
+                break
+            fi
+            sleep 0.25
+        done
+        "$RC_ADB" -s "$serial" shell kill -15 "$record_pid" >/dev/null 2>&1 || true
+        record_pid=''
+    fi
+}
+
+cleanup() {
+    stop_recording
+    "$RC_ADB" -s "$serial" shell rm -f "$remote_video" >/dev/null 2>&1 || true
+    "$RC_ADB" -s "$serial" shell pm clear dev.codexops.client.debug >/dev/null 2>&1 || true
+    rm -f -- "$local_video" "$instrument_output"
+    flock -u 8 >/dev/null 2>&1 || true
+    exec 8>&-
+    rm -f -- "$lock_file"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM HUP
+
+if [[ -n "$("$RC_ADB" -s "$serial" shell pidof screenrecord 2>/dev/null | tr -d '\r')" ]]; then
+    echo "Another screen recording is already running on $serial." >&2
+    exit 1
+fi
+
+echo "Building and installing the fixture app on $serial."
+android/gradlew -p android --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest
+"$RC_ADB" -s "$serial" install -r android/app/build/outputs/apk/debug/app-debug.apk >/dev/null
+"$RC_ADB" -s "$serial" install -r \
+    android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk >/dev/null
+"$RC_ADB" -s "$serial" shell pm clear dev.codexops.client.debug >/dev/null
+
+record_pid="$(
+    "$RC_ADB" -s "$serial" shell \
+        "screenrecord --bit-rate 6000000 --time-limit 180 '$remote_video' >/dev/null 2>&1 & echo \$!" |
+        tr -d '\r'
+)"
+[[ "$record_pid" =~ ^[0-9]+$ ]] || { echo 'Could not start screen recording.' >&2; exit 1; }
+sleep 1
+
+set +e
+"$RC_ADB" -s "$serial" shell am instrument -w \
+    -e class "dev.codexops.client.AppTest#$method" \
+    -e demo true \
+    dev.codexops.client.debug.test/androidx.test.runner.AndroidJUnitRunner |
+    tee "$instrument_output"
+instrument_status=${PIPESTATUS[0]}
+set -e
+stop_recording
+
+if (( instrument_status != 0 )) || ! rg -q '^OK \(1 test\)' "$instrument_output"; then
+    echo "Instrumentation demo failed: $method" >&2
+    exit 1
+fi
+
+"$RC_ADB" -s "$serial" pull "$remote_video" "$local_video" >/dev/null
+[[ -s "$local_video" ]] || { echo 'Android produced an empty recording.' >&2; exit 1; }
+mv -- "$local_video" "$output"
+echo "Recorded fixture demo: $output"

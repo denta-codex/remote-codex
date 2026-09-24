@@ -3,6 +3,7 @@
 **/build/
 local.properties
 dist/
+artifacts/
 *.jks
 *.p12
 *.keystore

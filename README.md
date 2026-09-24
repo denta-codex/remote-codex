@@ -35,6 +35,7 @@ Each worktree can run an isolated, disposable emulator from that base AVD:
 scripts/emulator-start             # build, install and open; expires after one hour
 scripts/emulator-start --ttl 2h    # override the lifetime
 scripts/emulator-test              # run instrumentation on this worktree's emulator
+scripts/emulator-record textChatStreamsAndCanReopen
 scripts/emulator-stop              # stop it early
 ```
 
@@ -46,6 +47,9 @@ from another terminal reuses this worktree's live emulator and installs the curr
 debug build. It opens a window when a desktop display is available and runs
 headlessly on a remote host. Fresh emulators must be paired again for interactive live testing;
 `scripts/check-live-android` retains its separate temporary credential flow.
+`emulator-record` captures one named `AppTest` method with fixture data and writes
+the ignored MP4 under `artifacts/demos/`. Pass `--output /absolute/path/demo.mp4`
+to place a requested clip elsewhere. Its optional demo pauses do not slow normal tests.
 
 Signing defaults to `/home/agent/.local/share/remote-codex/signing` outside the repo.
 Keep the PKCS12 file and password secure and backed up. The independently recorded
