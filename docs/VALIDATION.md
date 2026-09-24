@@ -18,10 +18,33 @@
 - Kotlin tests cover the previous HTTP 401 diagnostic, a base64-expanded 20 MiB
   request, UTF-8 across a fragment boundary, absence of compression negotiation and
   a single 28 MiB incoming text frame. No live deployment or phone delivery occurred.
-- `scripts/check` passed. All 14 fixture-backed Android tests also passed on the
-  worktree-owned Android 16 emulator with main's fixture-only correction `8a931e4`
-  temporarily overlaid; the overlay was removed afterward so branch reconciliation
-  remains separate. The credential-gated live test skipped as designed.
+- `scripts/check` passed. After reconciliation with main, all 14 fixture-backed
+  Android tests also passed on the worktree-owned Android 16 emulator. The
+  credential-gated live test skipped as designed.
+- Repeated instrumentation exposed the obsolete asynchronous OkHttp cleanup path;
+  Java-WebSocket disposal now closes synchronously during ViewModel cleanup. The
+  uninstrumented 14-test fixture suite then passed and the emulator was stopped.
+- `scripts/release` passed for the reconciled version 0.1.4 / code 5 app and Rust
+  forwarder. The signed APK SHA-256 is
+  `a60a519a09b511d11ce13e13bb9ce0def2e8f0320b9ccb7e09056b92d243e983`;
+  the Rust forwarder SHA-256 is
+  `742ab98ba95018cb0fc2c334b9a2f4a500b8bef200632c22ed1069a7f22d0fc7`.
+
+## September 24, 2026 — integrated 0.1.4 Android release
+
+- Merged the Projects, workspace/worktree execution, and server-backed model
+  controls feature branches into `main`, resolving their shared composer, client
+  state machine, recovery journal, and fixture-server changes as one architecture.
+- `scripts/check` passed after integration. The worktree-owned Android 16 emulator
+  then ran all 14 fixture-backed tests without failures; the credential-gated live
+  connection test was skipped as designed. The disposable emulator was stopped.
+- `scripts/release` passed its repeated checks, release lint, package identity,
+  non-debuggable, and signing-certificate verification. The signed APK is version
+  0.1.4 / code 5. SHA-256:
+  `f68029bf91861702f76c0f9d0ebbe2e6059d9187ccf8306fdd7ffb618fea6e98`.
+- Taildrop delivery completed to the active
+  `motorola-razr-ultra-2025-2` Tailscale node. Installation remains an explicit
+  user step; no ADB installation or live deployment was performed.
 
 ## September 24, 2026 — projects and workspace execution parity
 

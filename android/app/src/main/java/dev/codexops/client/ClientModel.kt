@@ -8,7 +8,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.codexops.core.*
 import java.util.UUID
-import kotlin.concurrent.thread
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.*
@@ -1246,8 +1245,6 @@ constructor(
 
     override fun onCleared() {
         network.unregisterNetworkCallback(callback)
-        // OkHttp may close a live socket while evicting its connection pool.
-        // ViewModel cleanup runs on the main thread, where Android forbids that I/O.
-        thread(name = "remote-codex-rpc-cleanup") { rpc.dispose() }
+        rpc.dispose()
     }
 }
