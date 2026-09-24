@@ -1,4 +1,4 @@
-# Remote Codex 0.1.7
+# Remote Codex 0.1.8
 
 Android uses Java-WebSocket WSS over the existing Tailscale app. Persistent Tailscale Serve
 (`--bg`) terminates TLS and proxies the root route to 127.0.0.1:8787. The Rust service
@@ -90,6 +90,12 @@ and generation results are decoded locally. Raw host images use a bounded app ca
 and sampled rendering. External HTTP image URLs require an explicit tap and are
 never fetched automatically.
 
+Plan mode is exposed only when the stock `collaborationMode/list` capability
+advertises it. The selected stock collaboration setting is sent with `turn/start`;
+completed plans render in a dedicated card and full-screen viewer. Implementing a
+completed plan starts a new turn in the advertised default mode and is never
+simulated when the server capability is absent.
+
 Stock 0.154.0 can briefly return `list_turns is not supported yet` or `no rollout
 found` just after creation. This is retried only on history/resume reads, for a
 bounded interval. The first live turn already has a subscription and is rendered
@@ -109,7 +115,7 @@ do not include uncommitted checkout changes. Worktrees are deliberately retained
 cleanup, branch/ref selection, setup environments, and general Git management are
 outside this feature.
 
-Limits: no push notifications, non-image files, terminal emulator, collaboration-mode
-selectors, or interactive command previews. Activity text is bounded for phone rendering; full output
+Limits: no push notifications, non-image files, terminal emulator, or interactive
+command previews. Activity text is bounded for phone rendering; full output
 remains on Grace. End-to-end physical-device behavior is a release acceptance step,
 not inferred from successful builds.

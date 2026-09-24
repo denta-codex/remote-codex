@@ -174,7 +174,7 @@ class Rpc(private val allowLoopbackTest: Boolean = false) {
                 call(
                     "initialize",
                     obj(
-                        "clientInfo" to obj("name" to s("remote-codex"), "version" to s("0.1.6")),
+                        "clientInfo" to obj("name" to s("remote-codex"), "version" to s("0.1.8")),
                         "capabilities" to obj("experimentalApi" to JsonPrimitive(true)),
                     ),
                 )

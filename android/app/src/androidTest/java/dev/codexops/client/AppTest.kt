@@ -68,6 +68,10 @@ class AppTest {
 
     @Before
     fun setup() {
+        // The rule starts MainActivity with its production model before this fixture is installed.
+        // Dispose that model so a credential left by another test cannot keep reconnecting behind
+        // the mock-backed UI and starve timing-sensitive instrumentation work.
+        compose.runOnUiThread { compose.activity.viewModelStore.clear() }
         server = MockWebServer()
         server.dispatcher =
             object : okhttp3.mockwebserver.Dispatcher() {
@@ -752,6 +756,7 @@ class AppTest {
             model.foreground(false)
             store.clear()
         }
+        runBlocking { LocalStore(app).saveToken("") }
         server.shutdown()
     }
 

@@ -4,11 +4,12 @@ Target: Motorola Razr Ultra 2025, explicit Taildrop DNS name from inventory.
 Record Android version, APK version/code, signer fingerprint, Codex version and date.
 
 - [x] Install signed 0.1.3 APK, scan the setup QR in Settings; Tailscale enabled.
-- [ ] Upgrade to signed 0.1.6 (versionCode 7) without losing credentials or drafts.
+- [ ] Upgrade to signed 0.1.8 (versionCode 9) without losing credentials or drafts.
 - [x] Authenticated WSS connection to Grace reports Connected on the Razr (2026-09-23).
 - [ ] Invalid QR and canceled scan leave an existing credential intact; manual entry works.
 - [ ] Select Remote Codex as default assistant; cold/warm gesture opens New chat.
 - [ ] Send text, observe streaming, follow up, steer while busy, and stop.
+- [ ] Enter Plan mode, answer a blocking question, view the completed plan full screen, and implement it.
 - [ ] Send one image-only turn and one text-plus-multiple-images turn from Photos.
 - [ ] Capture and send a camera image without granting broad media permissions.
 - [ ] Reopen the task and expand user, generated, and Codex-opened images.

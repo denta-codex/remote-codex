@@ -1,5 +1,20 @@
 # Validation
 
+## September 24, 2026 — integrated image and plan release
+
+- Merged image attachments and stock-advertised plan mode onto the current `main`
+  line. Machine profiles remain split out for a later review.
+- Advanced Android to 0.1.8 / code 9 because the private stable channel already
+  contains the immutable 0.1.7 / code 8 update.
+- `scripts/check` passed after integration, including Rust tests, Kotlin tests,
+  Android unit tests, debug assembly, and lint.
+- All 20 fixture-backed Android instrumentation tests passed on the worktree-owned
+  Android 16 emulator; the credential-gated live test skipped as designed. The
+  disposable emulator was stopped afterward.
+- The fixture suite now disposes the production activity model before installing
+  its mock-backed model and clears its temporary credential between tests. This
+  prevents background endpoint reconnects from starving instrumentation work.
+
 ## September 24, 2026 — decoupled Android update publication
 
 - Advanced the Android release to 0.1.7 / code 8 for the first in-app update test.
