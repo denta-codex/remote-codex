@@ -816,14 +816,13 @@ class AppTest {
         compose.waitUntil(15000) {
             model.state.value.thread == "project-task" &&
                 !model.state.value.busy &&
-                model.state.value.journal?.str("projectId") == "project-remote"
+                sent.get() == 1 &&
+                model.state.value.journal == null
         }
 
-        assertEquals(0, sent.get())
         assertNull(lastThreadStart)
         assertEquals("", runBlocking { LocalStore(app).get("journal/new") })
-        assertTrue(runBlocking { LocalStore(app).get("journal/project-task") }.isNotEmpty())
-        compose.onNodeWithText("Delivery needs review").assertIsDisplayed()
+        assertEquals("", runBlocking { LocalStore(app).get("journal/project-task") })
     }
 
     @Test
@@ -891,8 +890,8 @@ class AppTest {
         compose.runOnUiThread {
             model.updateNewTaskOptions(
                 NewTaskOptions(
-                    projectId = "project-1",
-                    workingDirectory = "/fixture/repo",
+                    projectId = "project-remote",
+                    workingDirectory = "/fixture/remote-codex",
                     executionTarget = ExecutionTarget.CurrentWorkspace,
                 )
             )
@@ -913,7 +912,7 @@ class AppTest {
         }
         compose.onNodeWithText("Hello from Grace").assertIsDisplayed()
         assertEquals(1, worktreeAdds.get())
-        assertEquals("project-1", threadStartParams!!.str("projectId"))
+        assertEquals("project-remote", threadStartParams!!.str("projectId"))
         assertEquals(createdWorktreePath, threadStartParams!!.str("cwd"))
         assertTrue(createdWorktreePath.startsWith("/fixture/worktrees/remote-codex-"))
         assertTrue(createdWorktreePath.endsWith("/workspace"))
@@ -927,8 +926,8 @@ class AppTest {
         compose.runOnUiThread {
             model.updateNewTaskOptions(
                 NewTaskOptions(
-                    projectId = "project-1",
-                    workingDirectory = "/fixture/repo",
+                    projectId = "project-remote",
+                    workingDirectory = "/fixture/remote-codex",
                     executionTarget = ExecutionTarget.CurrentWorkspace,
                 )
             )
@@ -939,8 +938,8 @@ class AppTest {
 
         compose.waitUntil(15000) { sent.get() == 1 && model.state.value.journal == null }
         assertEquals(0, worktreeAdds.get())
-        assertEquals("project-1", threadStartParams!!.str("projectId"))
-        assertEquals("/fixture/repo", threadStartParams!!.str("cwd"))
+        assertEquals("project-remote", threadStartParams!!.str("projectId"))
+        assertEquals("/fixture/remote-codex", threadStartParams!!.str("cwd"))
     }
 
     @Test
@@ -951,8 +950,8 @@ class AppTest {
         compose.runOnUiThread {
             model.updateNewTaskOptions(
                 NewTaskOptions(
-                    projectId = "project-1",
-                    workingDirectory = "/fixture/repo",
+                    projectId = "project-remote",
+                    workingDirectory = "/fixture/remote-codex",
                     executionTarget = ExecutionTarget.NewWorktree,
                 )
             )
@@ -983,8 +982,8 @@ class AppTest {
         compose.runOnUiThread {
             model.updateNewTaskOptions(
                 NewTaskOptions(
-                    projectId = "project-1",
-                    workingDirectory = "/fixture/repo",
+                    projectId = "project-remote",
+                    workingDirectory = "/fixture/remote-codex",
                     executionTarget = ExecutionTarget.CurrentWorkspace,
                 )
             )
