@@ -1,5 +1,28 @@
 # Validation
 
+## September 24, 2026 — existing-project Android parity
+
+- Checked the stock 0.154.0 schemas for paginated `project/list`, nullable
+  `thread/list.projectId`, and `thread/start.projectId`. The ignored ChatGPT Android
+  1.2026.258 reference confirmed its named/projectless selection states, the
+  `__codex_projectless_chats` Chats presentation, and `project/list` records with
+  `id`, `name`, and `roots[].path`.
+- The Android task browser now presents All, projectless Chats, and every paged
+  existing project, and filters task reads by the selected project. New chats still
+  default to projectless; selecting a project uses its first stock root as the
+  current workspace and never creates a directory or worktree.
+- Project choice is persisted with `NewTaskOptions` and copied into the operation
+  journal before mutation dispatch. Reconnect recovery uses project plus cwd to
+  find a server-owned thread and does not replay `thread/start` or `turn/start`.
+- `scripts/check` passed: Go race tests/vet, Kotlin core tests, Android debug build,
+  lint, and debug instrumentation APK assembly.
+- All ten fixture-backed Android tests passed on the worktree-owned Android 16
+  emulator. Coverage includes paginated project loading, project/Chats filtering,
+  project selection across ViewModel recreation and reconnect, exact project-root
+  `thread/start`, retained projectless directory preparation, and uncertain project
+  journal recovery with zero mutation replay. The credential-gated live connection
+  test was skipped; no live deployment or phone delivery was performed.
+
 ## September 23, 2026 — 0.1.3 live Android connection fix
 
 - Razr 0.1.2 remained disconnected after the shutdown fix. Credential-free HTTPS

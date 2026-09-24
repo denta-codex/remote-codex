@@ -98,6 +98,7 @@ constructor(
                         _state.update {
                             it.copy(connection = "Connected to ${host.displayName}", ready = true)
                         }
+                        refreshProjects()
                         refreshList()
                         val id = _state.value.thread
                         if (id != null && _state.value.page == "chat") loadTask(id)
@@ -167,7 +168,12 @@ constructor(
         if (_state.value.busy) return
         selection++
         _state.update { it.copy(page = "home", error = null) }
-        viewModelScope.launch { guarded { refreshList() } }
+        viewModelScope.launch {
+            guarded {
+                refreshProjects()
+                refreshList()
+            }
+        }
     }
 
     override fun query(value: String) {
@@ -184,8 +190,68 @@ constructor(
         viewModelScope.launch { guarded { refreshList() } }
     }
 
+    override fun projectFilter(value: TaskProjectFilter) {
+        _state.update { it.copy(projectFilter = value) }
+        viewModelScope.launch { guarded { refreshList() } }
+    }
+
     override fun moreTasks() {
         viewModelScope.launch { guarded { refreshList(true) } }
+    }
+
+    private suspend fun refreshProjects() {
+        if (!_state.value.ready) return
+        val projects = linkedMapOf<String, CodexProject>()
+        val cursors = mutableSetOf<String>()
+        var cursor: String? = null
+        var requests = 0
+        do {
+            check(requests++ < 100) { "Project loading exceeded its request limit" }
+            val result =
+                rpc.call(
+                    "project/list",
+                    obj(
+                        "cursor" to cursor?.let(::s),
+                        "limit" to JsonPrimitive(50),
+                        "sortKey" to s("position"),
+                        "sortDirection" to s("asc"),
+                    ),
+                )
+            result.list("data").forEach { row ->
+                val id = row.str("id")
+                if (id.isNotEmpty()) {
+                    projects[id] =
+                        CodexProject(
+                            id = id,
+                            name = row.str("name").ifBlank { "Untitled project" },
+                            roots = row.list("roots").map { it.str("path") }.filter(String::isNotBlank),
+                        )
+                }
+            }
+            check(projects.size <= 5000) { "Project loading exceeded its catalog limit" }
+            cursor = result.cursor()
+            check(cursor == null || cursors.add(cursor!!)) { "Project loading repeated a page" }
+        } while (cursor != null)
+        val values = projects.values.toList()
+        _state.update { before ->
+            val filter = before.projectFilter
+            val availableFilter =
+                if (filter is TaskProjectFilter.Project && values.none { it.id == filter.id })
+                    TaskProjectFilter.All
+                else filter
+            val selected = before.newTaskOptions.projectId?.let { id -> values.find { it.id == id } }
+            val options =
+                if (before.thread == null && selected?.primaryRoot != null)
+                    before.newTaskOptions.copy(
+                        workingDirectory = selected.primaryRoot,
+                        executionTarget = ExecutionTarget.CurrentWorkspace,
+                    )
+                else before.newTaskOptions
+            before.copy(projects = values, projectFilter = availableFilter, newTaskOptions = options)
+        }
+        if (_state.value.page == "chat" && _state.value.thread == null) {
+            local.put("options/new", newTaskOptionsJson(_state.value.newTaskOptions).toString())
+        }
     }
 
     private suspend fun refreshList(more: Boolean = false) {
@@ -216,6 +282,14 @@ constructor(
                     ),
                 "cursor" to if (more) before.listCursor?.let(::s) else null,
                 "searchTerm" to before.query.takeIf { it.isNotBlank() }?.let(::s),
+                "projectId" to
+                    if (before.query.isNotBlank()) null
+                    else
+                        when (val filter = before.projectFilter) {
+                            TaskProjectFilter.All -> null
+                            TaskProjectFilter.Projectless -> JsonNull
+                            is TaskProjectFilter.Project -> s(filter.id)
+                        },
             )
         val result =
             rpc.call(if (before.query.isBlank()) "thread/list" else "thread/search", params)
@@ -227,6 +301,14 @@ constructor(
                             result.list("data").map { row ->
                                 if (before.query.isBlank()) row else row.map("thread")
                             })
+                        .filter { task ->
+                            when (val filter = before.projectFilter) {
+                                TaskProjectFilter.All -> true
+                                TaskProjectFilter.Projectless ->
+                                    task["projectId"] == null || task["projectId"] is JsonNull
+                                is TaskProjectFilter.Project -> task.str("projectId") == filter.id
+                            }
+                        }
                         .distinctBy { t -> t.str("id") },
                 listCursor = result.cursor(),
             )
@@ -242,6 +324,8 @@ constructor(
             hydrating = false
             val draft = local.get("draft/new")
             val journal = parse(local.get("journal/new"))
+            val savedOptions = parseNewTaskOptions(local.get("options/new"))
+            val options = journal?.let { optionsFromJournal(it, savedOptions) } ?: savedOptions
             _state.update {
                 it.copy(
                     page = "chat",
@@ -252,7 +336,7 @@ constructor(
                     decisions = emptyList(),
                     historyCursor = null,
                     draft = draft,
-                    newTaskOptions = NewTaskOptions(),
+                    newTaskOptions = options,
                     journal = journal,
                     error = null,
                     attention = false,
@@ -365,6 +449,8 @@ constructor(
 
     override fun updateNewTaskOptions(options: NewTaskOptions) {
         _state.update { it.copy(newTaskOptions = options) }
+        if (_state.value.thread == null)
+            viewModelScope.launch { local.put("options/new", newTaskOptionsJson(options).toString()) }
     }
 
     override fun older() {
@@ -404,17 +490,32 @@ constructor(
 
     override fun send() {
         val before = _state.value
-        if (!before.ready || before.busy || before.draft.isBlank() || before.journal != null) return
+        val selectedProject =
+            before.newTaskOptions.projectId?.let { id -> before.projects.firstOrNull { it.id == id } }
+        if (
+            !before.ready ||
+                before.busy ||
+                before.draft.isBlank() ||
+                before.journal != null ||
+                (before.thread == null &&
+                    before.newTaskOptions.projectId != null &&
+                    selectedProject?.primaryRoot == null)
+        ) return
         _state.update { it.copy(busy = true, error = null) }
         viewModelScope.launch {
             val originalKey = before.thread ?: "new"
             val operation = UUID.randomUUID().toString()
+            val projectId = if (before.thread == null) before.newTaskOptions.projectId else null
+            val cwd =
+                if (before.thread == null && projectId != null) selectedProject!!.primaryRoot!!
+                else "/home/agent/Documents/RemoteCodex/$operation"
             var journal =
                 obj(
                     "operation" to s(operation),
                     "text" to s(before.draft),
                     "stage" to s("preparing"),
-                    "cwd" to s("/home/agent/Documents/RemoteCodex/$operation"),
+                    "cwd" to s(cwd),
+                    "projectId" to (projectId?.let(::s) ?: JsonNull),
                     "threadId" to before.thread?.let(::s),
                 )
             var key = originalKey
@@ -427,37 +528,39 @@ constructor(
                 record("preparing")
                 var id = before.thread
                 if (id == null) {
-                    val mkdir =
-                        rpc.call(
-                            "command/exec",
-                            obj(
-                                "command" to
-                                    JsonArray(
-                                        listOf(
-                                            s("mkdir"),
-                                            s("-p"),
-                                            s("-m"),
-                                            s("0700"),
-                                            s("--"),
-                                            s(journal.str("cwd")),
-                                        )
-                                    ),
-                                "cwd" to s("/home/agent/Documents/RemoteCodex"),
-                                "sandboxPolicy" to
-                                    obj(
-                                        "type" to s("workspaceWrite"),
-                                        "writableRoots" to
-                                            JsonArray(
-                                                listOf(s("/home/agent/Documents/RemoteCodex"))
-                                            ),
-                                        "networkAccess" to JsonPrimitive(false),
-                                    ),
-                                "timeoutMs" to JsonPrimitive(10000),
-                                "outputBytesCap" to JsonPrimitive(2048),
-                            ),
-                        )
-                    check(mkdir.str("exitCode") == "0") {
-                        "Could not prepare the conversation directory"
+                    if (projectId == null) {
+                        val mkdir =
+                            rpc.call(
+                                "command/exec",
+                                obj(
+                                    "command" to
+                                        JsonArray(
+                                            listOf(
+                                                s("mkdir"),
+                                                s("-p"),
+                                                s("-m"),
+                                                s("0700"),
+                                                s("--"),
+                                                s(journal.str("cwd")),
+                                            )
+                                        ),
+                                    "cwd" to s("/home/agent/Documents/RemoteCodex"),
+                                    "sandboxPolicy" to
+                                        obj(
+                                            "type" to s("workspaceWrite"),
+                                            "writableRoots" to
+                                                JsonArray(
+                                                    listOf(s("/home/agent/Documents/RemoteCodex"))
+                                                ),
+                                            "networkAccess" to JsonPrimitive(false),
+                                        ),
+                                    "timeoutMs" to JsonPrimitive(10000),
+                                    "outputBytesCap" to JsonPrimitive(2048),
+                                ),
+                            )
+                        check(mkdir.str("exitCode") == "0") {
+                            "Could not prepare the conversation directory"
+                        }
                     }
                     record("creating")
                     val result =
@@ -468,12 +571,14 @@ constructor(
                                 "historyMode" to s("paginated"),
                                 "ephemeral" to JsonPrimitive(false),
                                 "threadSource" to s("agent_created_thread"),
-                                "projectId" to JsonNull,
+                                "projectId" to (projectId?.let(::s) ?: JsonNull),
                             ),
                         )
                     id = result.map("thread").str("id")
                     check(id.isNotEmpty())
-                    check(result.map("thread").str("projectId").isEmpty()) {
+                    val assignedProject =
+                        (result.map("thread")["projectId"] as? JsonPrimitive)?.contentOrNull
+                    check(assignedProject == projectId) {
                         "Unexpected project assignment; no message sent"
                     }
                     journal = JsonObject(journal + ("threadId" to s(id)))
@@ -484,6 +589,7 @@ constructor(
                     local.put("draft/$key", before.draft)
                     local.remove("journal/new")
                     local.remove("draft/new")
+                    local.remove("options/new")
                     _state.update { it.copy(thread = id, title = before.draft.take(80)) }
                 }
                 record("sending")
@@ -535,7 +641,11 @@ constructor(
             else
                 rpc.call(
                         "thread/list",
-                        obj("cwd" to s(journal.str("cwd")), "limit" to JsonPrimitive(10)),
+                        obj(
+                            "cwd" to s(journal.str("cwd")),
+                            "projectId" to (journal["projectId"] ?: JsonNull),
+                            "limit" to JsonPrimitive(10),
+                        ),
                     )
                     .list("data")
                     .singleOrNull()
@@ -545,6 +655,7 @@ constructor(
             local.put("draft/$found", journal.str("text"))
             local.remove("journal/new")
             local.remove("draft/new")
+            local.remove("options/new")
             loadTask(found)
         }
     }
@@ -590,6 +701,15 @@ constructor(
             }
             if (foreground && connectionJob?.isActive != true) {
                 connect()
+            }
+            return
+        }
+        if (event.str("method") == "project/changed") {
+            viewModelScope.launch {
+                guarded {
+                    refreshProjects()
+                    refreshList()
+                }
             }
             return
         }
@@ -658,6 +778,61 @@ constructor(
 
     private fun parse(value: String) =
         runCatching { wire.parseToJsonElement(value).jsonObject }.getOrNull()
+
+    private fun newTaskOptionsJson(options: NewTaskOptions) =
+        obj(
+            "projectId" to options.projectId?.let(::s),
+            "workingDirectory" to options.workingDirectory?.let(::s),
+            "executionTarget" to s(options.executionTarget.name),
+            "model" to options.model?.let(::s),
+            "reasoningEffort" to options.reasoningEffort?.let(::s),
+            "approvalPolicy" to options.approvalPolicy?.let(::s),
+            "collaborationMode" to options.collaborationMode?.let(::s),
+            "attachments" to
+                JsonArray(
+                    options.attachments.map { attachment ->
+                        obj(
+                            "id" to s(attachment.id),
+                            "displayName" to s(attachment.displayName),
+                            "localUri" to s(attachment.localUri),
+                        )
+                    }
+                ),
+        )
+
+    private fun parseNewTaskOptions(value: String): NewTaskOptions {
+        val saved = parse(value) ?: return NewTaskOptions()
+        val target =
+            runCatching { ExecutionTarget.valueOf(saved.str("executionTarget")) }
+                .getOrDefault(ExecutionTarget.Projectless)
+        return NewTaskOptions(
+            projectId = saved.str("projectId").ifBlank { null },
+            workingDirectory = saved.str("workingDirectory").ifBlank { null },
+            executionTarget = target,
+            model = saved.str("model").ifBlank { null },
+            reasoningEffort = saved.str("reasoningEffort").ifBlank { null },
+            approvalPolicy = saved.str("approvalPolicy").ifBlank { null },
+            collaborationMode = saved.str("collaborationMode").ifBlank { null },
+            attachments =
+                saved.list("attachments").mapNotNull { attachment ->
+                    val id = attachment.str("id")
+                    val uri = attachment.str("localUri")
+                    if (id.isBlank() || uri.isBlank()) null
+                    else ComposerAttachment(id, attachment.str("displayName"), uri)
+                },
+        )
+    }
+
+    private fun optionsFromJournal(journal: JsonObject, saved: NewTaskOptions): NewTaskOptions {
+        val projectId = (journal["projectId"] as? JsonPrimitive)?.contentOrNull
+        return saved.copy(
+            projectId = projectId,
+            workingDirectory = journal.str("cwd").takeIf { projectId != null },
+            executionTarget =
+                if (projectId == null) ExecutionTarget.Projectless
+                else ExecutionTarget.CurrentWorkspace,
+        )
+    }
 
     override fun onCleared() {
         network.unregisterNetworkCallback(callback)
