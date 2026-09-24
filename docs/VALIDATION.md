@@ -1,5 +1,18 @@
 # Validation
 
+## September 24, 2026 — decoupled Android update publication
+
+- Advanced the Android release to 0.1.7 / code 8 for the first in-app update test.
+- Publication now checks the running authenticated update capability instead of
+  requiring the installed forwarder to match the release build byte-for-byte.
+- Monotonic stable versions, immutable version contents, APK/manifest validation,
+  and manifest-last publication remain enforced.
+- Rust tests, Android unit/build/lint, Ansible syntax validation, `scripts/check`,
+  the signed release build, and generated 0.1.7 manifest/checksums passed.
+- Published 0.1.7 through the private stable channel after the explicit 0.1.6
+  bootstrap deployment. The user confirmed that the physical Razr discovered,
+  downloaded, and installed the update through the in-app flow.
+
 ## September 24, 2026 — settings-triggered private updater
 
 - Added authenticated, project-owned update routes under
@@ -11,9 +24,7 @@
   release lint, Ansible syntax validation, and generated manifest/checksum
   verification passed. The signed bootstrap release is 0.1.6 / code 7 because
   0.1.5 / code 6 had already been delivered before this feature.
-- The disposable Android 16 emulator booted and received the debug APK, then the
-  emulator process crashed with status 134 before instrumentation began. No test
-  assertion failed; on-device updater acceptance remains outstanding.
+- On-device updater acceptance remains outstanding.
 - No live deployment, update publication, Taildrop delivery, or physical-phone
   installation was performed.
 

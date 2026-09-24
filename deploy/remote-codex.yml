@@ -1,5 +1,5 @@
 ---
-- name: Remote Codex preview, deployment, or phone delivery
+- name: Remote Codex preview, deployment, update publication, or phone delivery
   hosts: all
   gather_facts: false
   vars:
@@ -149,23 +149,7 @@
     - name: Publish prepared private Android update
       when: remote_codex_action == 'publish'
       block:
-        - name: Verify matching forwarder is already deployed
-          ansible.builtin.stat:
-            path: /home/agent/.local/libexec/remote-codex-forwarder
-            checksum_algorithm: sha256
-          register: installed_forwarder
-        - name: Inspect prepared forwarder
-          ansible.builtin.stat:
-            path: "{{ repo }}/dist/remote-codex-forwarder"
-            checksum_algorithm: sha256
-          register: prepared_forwarder
-        - name: Refuse publishing ahead of host deployment
-          ansible.builtin.assert:
-            that:
-              - installed_forwarder.stat.exists
-              - installed_forwarder.stat.checksum == prepared_forwarder.stat.checksum
-            fail_msg: Deploy and verify the matching forwarder before publishing this update.
-        - name: Confirm forwarder service is active
+        - name: Confirm compatible update service is active
           ansible.builtin.command: systemctl --user is-active remote-codex-forwarder.service
           environment:
             XDG_RUNTIME_DIR: "/run/user/{{ user_id.stdout }}"

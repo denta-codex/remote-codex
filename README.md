@@ -75,9 +75,10 @@ Serve routes, then installs the user service and configures private Serve with
 `--bg`. It does not change or restart Codex. Delivery targets the single phone in
 inventory. The user opens the APK and confirms installation.
 
-Publish is a separate, explicit phone-delivery step. It refuses to run until the
-matching forwarder is deployed, copies the signed APK to an immutable private
-release path, and atomically advances the stable manifest. In app Settings,
+Publish is a separate, explicit phone-delivery step. It requires a running host
+that exposes the authenticated update extension, but Android-only releases do not
+require an identical forwarder build. It copies the signed APK to an immutable
+private release path and atomically advances the stable manifest. In app Settings,
 **Check for updates** contacts only the authenticated
 `/remote-codex/v1/updates/` extension routes. **Download and install** verifies
 the manifest, APK hash, package, version and signing certificate before asking

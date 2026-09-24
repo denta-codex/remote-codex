@@ -1,4 +1,4 @@
-# Remote Codex 0.1.6
+# Remote Codex 0.1.7
 
 Android uses Java-WebSocket WSS over the existing Tailscale app. Persistent Tailscale Serve
 (`--bg`) terminates TLS and proxies the root route to 127.0.0.1:8787. The Rust service
@@ -29,8 +29,10 @@ serve files from the forwarder's read-only update root. Their manifest schema is
 bridge. Update discovery is user initiated in Settings. Android downloads into
 app-private storage, verifies the expected package, higher version, SHA-256 and
 pinned signing certificate, then commits a `PackageInstaller` session that always
-requires user confirmation. Publishing is explicit, host-first and manifest-last;
-Taildrop remains available for bootstrap and recovery.
+requires user confirmation. Publishing is explicit and manifest-last. It checks
+that the installed host supports the authenticated update extension, but it does
+not couple an Android-only release to the exact forwarder binary produced by the
+release build. Taildrop remains available for bootstrap and recovery.
 
 The protocol module separates responses, notifications, and server requests even
 when IDs overlap. Events carry a local connection generation; old-generation
