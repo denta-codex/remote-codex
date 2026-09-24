@@ -95,6 +95,7 @@ data class ScreenState(
     val error: String? = null,
     val journal: JsonObject? = null,
     val attention: Boolean = false,
+    val update: UpdateState = UpdateState(),
 )
 
 interface AppNavigation {
@@ -121,6 +122,14 @@ interface HomeActions {
 
 interface SettingsActions {
     fun saveCredential(value: String)
+
+    fun checkForUpdates()
+
+    fun downloadAndInstallUpdate()
+
+    fun cancelUpdateDownload()
+
+    fun updateInstallPermissionRequired()
 }
 
 interface ConversationActions {

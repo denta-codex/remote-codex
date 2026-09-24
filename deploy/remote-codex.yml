@@ -10,7 +10,7 @@
   tasks:
     - name: Validate selected action
       ansible.builtin.assert:
-        that: remote_codex_action in ['preview', 'deploy', 'deliver']
+        that: remote_codex_action in ['preview', 'deploy', 'publish', 'deliver']
     - name: Verify executing identity
       ansible.builtin.command: id -un
       register: identity
@@ -41,6 +41,24 @@
       changed_when: false
       check_mode: false
       when: remote_codex_action != 'preview'
+    - name: Read prepared update manifest
+      ansible.builtin.include_vars:
+        file: "{{ repo }}/dist/updates/stable/latest.json"
+        name: release_manifest
+      when: remote_codex_action in ['publish', 'deliver']
+    - name: Validate prepared update manifest
+      ansible.builtin.assert:
+        that:
+          - release_manifest.schema == 'dev.codexops.remote-codex.update/v1'
+          - release_manifest.channel == 'stable'
+          - release_manifest.packageName == 'dev.codexops.client'
+          - release_manifest.versionCode | int > 0
+          - release_manifest.versionName | length > 0
+          - release_manifest.apkUrl == '/remote-codex/v1/updates/releases/' + (release_manifest.versionCode | string) + '/remote-codex.apk'
+          - release_manifest.apkSize | int > 0
+          - release_manifest.sha256 is match('^[0-9a-f]{64}$')
+          - release_manifest.signingCertificateSha256 == lookup('ansible.builtin.file', repo + '/docs/signing-certificate.sha256')
+      when: remote_codex_action in ['publish', 'deliver']
     - name: Deploy forwarder and persistent private route
       when: remote_codex_action == 'deploy'
       block:
@@ -64,6 +82,7 @@
             - /home/agent/.local/libexec
             - /home/agent/.config/systemd/user
             - "{{ secret_dir }}"
+            - "{{ secret_dir }}/updates"
             - /home/agent/Documents/RemoteCodex
         - name: Provision encrypted connection credential only if absent
           ansible.builtin.shell: |
@@ -127,15 +146,120 @@
           ansible.builtin.assert:
             that: linger.stdout == 'yes'
             fail_msg: Enable user lingering for agent before claiming reboot persistence.
+    - name: Publish prepared private Android update
+      when: remote_codex_action == 'publish'
+      block:
+        - name: Verify matching forwarder is already deployed
+          ansible.builtin.stat:
+            path: /home/agent/.local/libexec/remote-codex-forwarder
+            checksum_algorithm: sha256
+          register: installed_forwarder
+        - name: Inspect prepared forwarder
+          ansible.builtin.stat:
+            path: "{{ repo }}/dist/remote-codex-forwarder"
+            checksum_algorithm: sha256
+          register: prepared_forwarder
+        - name: Refuse publishing ahead of host deployment
+          ansible.builtin.assert:
+            that:
+              - installed_forwarder.stat.exists
+              - installed_forwarder.stat.checksum == prepared_forwarder.stat.checksum
+            fail_msg: Deploy and verify the matching forwarder before publishing this update.
+        - name: Confirm forwarder service is active
+          ansible.builtin.command: systemctl --user is-active remote-codex-forwarder.service
+          environment:
+            XDG_RUNTIME_DIR: "/run/user/{{ user_id.stdout }}"
+          changed_when: false
+          check_mode: false
+        - name: Confirm private update route requires authentication
+          ansible.builtin.uri:
+            url: http://127.0.0.1:8787/remote-codex/v1/updates/stable/latest.json
+            status_code: 401
+          when: not ansible_check_mode
+        - name: Prepare private update directories
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            mode: '0700'
+          loop:
+            - "{{ secret_dir }}/updates"
+            - "{{ secret_dir }}/updates/releases"
+            - "{{ secret_dir }}/updates/releases/{{ release_manifest.versionCode }}"
+            - "{{ secret_dir }}/updates/stable"
+        - name: Inspect existing immutable APK
+          ansible.builtin.stat:
+            path: "{{ secret_dir }}/updates/releases/{{ release_manifest.versionCode }}/remote-codex.apk"
+            checksum_algorithm: sha256
+          register: published_apk
+        - name: Inspect current stable manifest
+          ansible.builtin.stat:
+            path: "{{ secret_dir }}/updates/stable/latest.json"
+          register: stable_manifest_file
+        - name: Read current stable manifest
+          ansible.builtin.slurp:
+            src: "{{ secret_dir }}/updates/stable/latest.json"
+          register: stable_manifest_content
+          when: stable_manifest_file.stat.exists
+        - name: Refuse moving the stable channel backward
+          ansible.builtin.assert:
+            that:
+              - (stable_manifest_content.content | b64decode | from_json).versionCode <= release_manifest.versionCode
+              - (stable_manifest_content.content | b64decode | from_json).versionCode != release_manifest.versionCode or (stable_manifest_content.content | b64decode | from_json).sha256 == release_manifest.sha256
+            fail_msg: Stable already points to a newer or different release; publish a higher versionCode.
+          when: stable_manifest_file.stat.exists
+        - name: Inspect prepared signed APK
+          ansible.builtin.stat:
+            path: "{{ repo }}/dist/updates/releases/{{ release_manifest.versionCode }}/remote-codex.apk"
+            checksum_algorithm: sha256
+          register: prepared_apk
+        - name: Confirm prepared APK matches manifest
+          ansible.builtin.assert:
+            that:
+              - prepared_apk.stat.exists
+              - prepared_apk.stat.size == release_manifest.apkSize
+              - prepared_apk.stat.checksum == release_manifest.sha256
+        - name: Refuse changing an existing release
+          ansible.builtin.assert:
+            that:
+              - not published_apk.stat.exists or published_apk.stat.checksum == release_manifest.sha256
+            fail_msg: This versionCode already contains a different APK; publish a higher versionCode.
+        - name: Copy immutable signed APK
+          ansible.builtin.copy:
+            src: "{{ repo }}/dist/updates/releases/{{ release_manifest.versionCode }}/remote-codex.apk"
+            dest: "{{ secret_dir }}/updates/releases/{{ release_manifest.versionCode }}/remote-codex.apk"
+            mode: '0600'
+            force: false
+        - name: Publish stable manifest atomically
+          ansible.builtin.copy:
+            src: "{{ repo }}/dist/updates/stable/latest.json"
+            dest: "{{ secret_dir }}/updates/stable/latest.json"
+            mode: '0600'
+        - name: Verify authenticated manifest endpoint
+          ansible.builtin.uri:
+            url: http://127.0.0.1:8787/remote-codex/v1/updates/stable/latest.json
+            headers:
+              Authorization: "Bearer {{ lookup('ansible.builtin.pipe', 'systemd-creds decrypt --user --name=connection-token ' + secret_dir + '/connection-token.cred -') }}"
+            return_content: true
+          register: published_manifest
+          no_log: true
+          when: not ansible_check_mode
+        - name: Confirm published version
+          ansible.builtin.assert:
+            that: (published_manifest.content | from_json).versionCode == release_manifest.versionCode
+          when: not ansible_check_mode
     - name: Deliver prepared APK to the explicit phone
       ansible.builtin.command:
-        argv: [tailscale, file, cp, "{{ repo }}/dist/remote-codex-0.1.5.apk", "{{ remote_codex_phone }}:"]
+        argv: [tailscale, file, cp, "{{ repo }}/dist/updates/releases/{{ release_manifest.versionCode }}/remote-codex.apk", "{{ remote_codex_phone }}:"]
       become: true
       when: remote_codex_action == 'deliver'
     - name: Report delivery honestly
       ansible.builtin.debug:
         msg: Delivered; awaiting Android installation confirmation.
       when: remote_codex_action == 'deliver' and not ansible_check_mode
+    - name: Report private update publication
+      ansible.builtin.debug:
+        msg: "Published Remote Codex {{ release_manifest.versionName }} ({{ release_manifest.versionCode }}); installation remains user initiated."
+      when: remote_codex_action == 'publish' and not ansible_check_mode
   handlers:
     - name: Restart forwarder
       when: not ansible_check_mode

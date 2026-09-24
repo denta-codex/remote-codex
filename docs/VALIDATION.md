@@ -1,5 +1,22 @@
 # Validation
 
+## September 24, 2026 — settings-triggered private updater
+
+- Added authenticated, project-owned update routes under
+  `/remote-codex/v1/updates/`; the stock `/codex/rpc` bridge remains unchanged.
+- Added manual Settings discovery, app-private download progress/cancellation,
+  manifest/hash/package/version/signer verification, and user-confirmed Android
+  `PackageInstaller` handling. There is no background or silent installation.
+- Rust route/authentication/path tests, Android updater unit tests, `scripts/check`,
+  release lint, Ansible syntax validation, and generated manifest/checksum
+  verification passed. The signed bootstrap release is 0.1.6 / code 7 because
+  0.1.5 / code 6 had already been delivered before this feature.
+- The disposable Android 16 emulator booted and received the debug APK, then the
+  emulator process crashed with status 134 before instrumentation began. No test
+  assertion failed; on-device updater acceptance remains outstanding.
+- No live deployment, update publication, Taildrop delivery, or physical-phone
+  installation was performed.
+
 ## September 24, 2026 — Rust tunnel and fragmented Android transport
 
 - Preserved the detached image and machine-profile work on separate named branches;
