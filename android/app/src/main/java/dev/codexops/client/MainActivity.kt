@@ -3,12 +3,15 @@ package dev.codexops.client
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
+import android.os.Build
 import androidx.activity.ComponentActivity
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -21,7 +24,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -30,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mikepenz.markdown.m3.Markdown
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import dev.codexops.core.*
 import kotlinx.serialization.json.*
 
@@ -51,6 +55,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         setContent { RemoteTheme { App(model) } }
         if (savedInstanceState == null && intent.action == "dev.codexops.client.NEW_CHAT")
             model.newChat()
@@ -75,20 +80,16 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun RemoteTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme =
-            darkColorScheme(
-                primary = Color(0xFFB6F568),
-                onPrimary = Color(0xFF152008),
-                background = Color(0xFF101410),
-                surface = Color(0xFF101410),
-                surfaceVariant = Color(0xFF202820),
-                onSurface = Color(0xFFE7ECE2),
-                onSurfaceVariant = Color(0xFFA7B1A1),
-                outline = Color(0xFF414C3D),
-            ),
-        content = content,
-    )
+    val darkTheme = isSystemInDarkTheme()
+    val context = LocalContext.current
+    val colors =
+        when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && darkTheme -> dynamicDarkColorScheme(context)
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> dynamicLightColorScheme(context)
+            darkTheme -> darkColorScheme()
+            else -> lightColorScheme()
+        }
+    MaterialTheme(colorScheme = colors, content = content)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -234,6 +235,8 @@ private fun Home(st: ScreenState, model: ClientModel) {
 @Composable
 private fun Settings(st: ScreenState, model: ClientModel) {
     var credential by remember { mutableStateOf("") }
+    var scanError by remember { mutableStateOf<String?>(null) }
+    val context = androidx.compose.ui.platform.LocalContext.current
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp),
@@ -254,6 +257,31 @@ private fun Settings(st: ScreenState, model: ClientModel) {
                 fontSize = 12.sp,
             )
         }
+        OutlinedButton(
+            onClick = {
+                try {
+                    GmsBarcodeScanning.getClient(context).startScan()
+                        .addOnSuccessListener { barcode ->
+                            val token = parseSetupQr(barcode.rawValue)
+                            if (token == null) scanError = "Not a Remote Codex setup QR."
+                            else {
+                                scanError = null
+                                model.saveCredential(token)
+                            }
+                        }
+                        .addOnCanceledListener { }
+                        .addOnFailureListener {
+                            scanError = "Scanner unavailable. Enter the credential manually."
+                        }
+                } catch (_: Exception) {
+                    scanError = "Scanner unavailable. Enter the credential manually."
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Scan setup QR")
+        }
+        scanError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         OutlinedTextField(
             credential,
             { credential = it },
@@ -278,7 +306,6 @@ private fun Settings(st: ScreenState, model: ClientModel) {
         }
         HorizontalDivider()
         Text("Assistant shortcut", fontWeight = FontWeight.SemiBold)
-        val context = androidx.compose.ui.platform.LocalContext.current
         OutlinedButton(
             onClick = {
                 context.startActivity(Intent(android.provider.Settings.ACTION_VOICE_INPUT_SETTINGS))
@@ -481,12 +508,18 @@ private fun Message(entry: Entry) {
 
 @Composable
 private fun DecisionCard(d: Decision, st: ScreenState, model: ClientModel) {
-    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF26301E))) {
+    Card(
+        colors =
+            CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+    ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(
                 "Your input is needed",
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
             )
             val p = d.params
             if (d.method == "item/tool/requestUserInput") {

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Run in a private interactive terminal. The plaintext token stays in the pipe.
+set -euo pipefail
+
+[[ -t 0 && -t 1 ]] || { echo 'Use a private interactive terminal, not captured command output.' >&2; exit 1; }
+credential=/home/agent/.local/share/remote-codex/connection-token.cred
+[[ -f "$credential" ]] || { echo 'Remote Codex is not deployed yet.' >&2; exit 1; }
+command -v qrencode >/dev/null || { echo 'qrencode is required.' >&2; exit 1; }
+tput smcup
+trap 'tput rmcup' EXIT
+printf 'Remote Codex setup QR — scan from app Settings. Press Enter to close.\n\n'
+systemd-creds decrypt --user --name=connection-token "$credential" - | {
+    IFS= read -r token
+    [[ "$token" =~ ^[0-9a-f]{64}$ ]] || exit 1
+    printf 'remote-codex-setup-v1:%s' "$token"
+} | qrencode -t ANSIUTF8 -l M
+IFS= read -r _

@@ -16,6 +16,11 @@
       register: identity
       changed_when: false
       check_mode: false
+    - name: Find user manager runtime directory
+      ansible.builtin.command: id -u
+      register: user_id
+      changed_when: false
+      check_mode: false
     - name: Verify host
       ansible.builtin.command: hostname
       register: host
@@ -60,13 +65,24 @@
             - /home/agent/.config/systemd/user
             - "{{ secret_dir }}"
             - /home/agent/Documents/RemoteCodex
-        - name: Provision connection credential only if absent
+        - name: Provision encrypted connection credential only if absent
           ansible.builtin.shell: |
+            set -euo pipefail
             umask 077
-            openssl rand -hex 32 > "{{ secret_dir }}/connection-token"
+            tmp="$(mktemp "{{ secret_dir }}/.connection-token.XXXXXX")"
+            trap 'rm -f "$tmp"' EXIT
+            openssl rand -hex 32 | systemd-creds encrypt --user --name=connection-token - "$tmp"
+            chmod 0600 "$tmp"
+            mv "$tmp" "{{ secret_dir }}/connection-token.cred"
           args:
-            creates: "{{ secret_dir }}/connection-token"
+            executable: /bin/bash
+            creates: "{{ secret_dir }}/connection-token.cred"
           no_log: true
+        - name: Verify encrypted credential can be decrypted by agent
+          ansible.builtin.shell: systemd-creds decrypt --user --name=connection-token "{{ secret_dir }}/connection-token.cred" - >/dev/null
+          changed_when: false
+          no_log: true
+          when: not ansible_check_mode
         - name: Install validated forwarder
           ansible.builtin.copy:
             src: "{{ repo }}/dist/remote-codex-forwarder"
@@ -87,6 +103,8 @@
             enabled: true
             state: started
             daemon_reload: true
+          environment:
+            XDG_RUNTIME_DIR: "/run/user/{{ user_id.stdout }}"
         - name: Flush service restart before verification
           when: not ansible_check_mode
           ansible.builtin.meta: flush_handlers
@@ -98,6 +116,7 @@
         - name: Configure persistent Tailscale Serve without resetting other routes
           ansible.builtin.command:
             argv: [tailscale, serve, --bg, --https=443, --set-path=/, 'http://127.0.0.1:8787']
+          become: true
           when: (serve.stdout | from_json).get('Web', {}).get(route_host, {}).get('Handlers', {}).get('/', {}).get('Proxy', '') != 'http://127.0.0.1:8787'
         - name: Confirm service persistence prerequisite
           ansible.builtin.command: loginctl show-user agent --property=Linger --value
@@ -110,7 +129,8 @@
             fail_msg: Enable user lingering for agent before claiming reboot persistence.
     - name: Deliver prepared APK to the explicit phone
       ansible.builtin.command:
-        argv: [tailscale, file, cp, "{{ repo }}/dist/remote-codex-0.1.0.apk", "{{ remote_codex_phone }}:"]
+        argv: [tailscale, file, cp, "{{ repo }}/dist/remote-codex-0.1.3.apk", "{{ remote_codex_phone }}:"]
+      become: true
       when: remote_codex_action == 'deliver'
     - name: Report delivery honestly
       ansible.builtin.debug:
@@ -124,3 +144,5 @@
         scope: user
         daemon_reload: true
         state: restarted
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ user_id.stdout }}"

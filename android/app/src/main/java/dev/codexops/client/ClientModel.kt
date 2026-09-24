@@ -3,10 +3,12 @@ package dev.codexops.client
 import android.app.Application
 import android.net.ConnectivityManager
 import android.net.Network
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.codexops.core.*
 import java.util.UUID
+import kotlin.concurrent.thread
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.*
@@ -122,14 +124,32 @@ constructor(
                         else if (_state.value.page == "chat") recoverNew()
                         return@launch
                     } catch (e: Exception) {
+                        if (e is CancellationException) throw e
+                        // Deliberately omit throwable messages and stack traces: these may
+                        // contain server data. Log only transport status/type for diagnosis.
+                        val reason = when (e) {
+                            is ConnectionFailure -> "http=${e.httpStatus} transport=${e.transport}"
+                            is RpcRejected -> "rpc=${e.code}"
+                            else -> e.javaClass.simpleName
+                        }
+                        Log.w("RemoteCodexConnection", reason)
                         rpc.close()
                         requests.clear()
                         _state.update {
                             it.copy(
                                 ready = false,
                                 connection = "Disconnected",
-                                error =
-                                    "Cannot connect to Grace. Check Tailscale and the connection credential.",
+                                error = when {
+                                    e is ConnectionFailure && e.httpStatus == 401 ->
+                                        "Grace rejected the connection credential. Scan the setup QR again in Settings."
+                                    e is ConnectionFailure && e.httpStatus != null ->
+                                        "Grace rejected the WebSocket connection (HTTP ${e.httpStatus})."
+                                    e is ConnectionFailure ->
+                                        "Cannot reach Grace (${e.transport}). Check Tailscale and reconnect."
+                                    e is RpcRejected ->
+                                        "Grace rejected connection setup (RPC ${e.code})."
+                                    else -> "Cannot connect to Grace (${e.javaClass.simpleName})."
+                                },
                             )
                         }
                         publish()
@@ -654,6 +674,8 @@ constructor(
 
     override fun onCleared() {
         network.unregisterNetworkCallback(callback)
-        rpc.dispose()
+        // OkHttp may close a live socket while evicting its connection pool.
+        // ViewModel cleanup runs on the main thread, where Android forbids that I/O.
+        thread(name = "remote-codex-rpc-cleanup") { rpc.dispose() }
     }
 }

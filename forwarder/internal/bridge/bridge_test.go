@@ -75,7 +75,7 @@ func TestUpgradeForwardsBothDirectionsAndStripsCredential(t *testing.T) {
 	}
 	received := make(chan string, 1)
 	upstream := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		received <- r.Header.Get("Authorization") + r.URL.String()
+		received <- r.Header.Get("Authorization") + r.Header.Get("Sec-WebSocket-Extensions") + r.URL.String()
 		conn, rw, err := w.(http.Hijacker).Hijack()
 		if err != nil {
 			return
@@ -100,6 +100,7 @@ func TestUpgradeForwardsBothDirectionsAndStripsCredential(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+testToken)
 	req.Header.Set("Upgrade", "websocket")
 	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Sec-WebSocket-Extensions", "permessage-deflate")
 	req.Write(conn)
 	reader := bufio.NewReader(conn)
 	response, err := http.ReadResponse(reader, req)
@@ -110,7 +111,7 @@ func TestUpgradeForwardsBothDirectionsAndStripsCredential(t *testing.T) {
 		t.Fatal(response.Status)
 	}
 	if got := <-received; got != "/" {
-		t.Fatalf("upstream credential or path leaked: %q", got)
+		t.Fatalf("upstream credential, extension, or path leaked: %q", got)
 	}
 	frame := []byte{0x81, 0x03, 'r', 'p', 'c'}
 	conn.Write(frame)

@@ -9,6 +9,26 @@ import org.junit.Test
 
 class CoreTest {
     @Test
+    fun rejectedHandshakePreservesStatusWithoutResponseBody() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setResponseCode(401).setBody("private response body"))
+        server.start()
+        val rpc = Rpc(true)
+        try {
+            val failure = runCatching {
+                rpc.connect("ws://127.0.0.1:${server.port}/codex/rpc", "private token")
+            }.exceptionOrNull()
+            assertTrue(failure is ConnectionFailure)
+            assertEquals(401, (failure as ConnectionFailure).httpStatus)
+            assertFalse(failure.toString().contains("private"))
+        } finally {
+            rpc.dispose()
+            server.shutdown()
+        }
+        Unit
+    }
+
+    @Test
     fun completedSnapshotReplacesStreamAndPrependingDoesNotDuplicate() {
         val t = Timeline()
         t.event(

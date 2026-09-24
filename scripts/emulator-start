@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+source scripts/emulator-common
+
+ttl="1h"
+if (( $# > 0 )); then
+    [[ "$1" == "--ttl" && $# == 2 ]] || {
+        echo 'Usage: scripts/emulator-start [--ttl 30m|2h]' >&2
+        exit 2
+    }
+    ttl="$2"
+fi
+[[ "$ttl" =~ ^[1-9][0-9]*[smh]$ ]] || {
+    echo 'TTL must be a positive number followed by s, m, or h' >&2
+    exit 2
+}
+
+case "${ttl: -1}" in
+    s) ttl_seconds=$(( 10#${ttl::-1} )) ;;
+    m) ttl_seconds=$(( 10#${ttl::-1} * 60 )) ;;
+    h) ttl_seconds=$(( 10#${ttl::-1} * 3600 )) ;;
+esac
+
+rc_require_runtime
+scripts/setup-worktree >/dev/null
+rc_export_build_environment
+display_mode=window
+if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+    display_mode=headless
+fi
+
+mkdir -p -m 0700 "$RC_STATE_DIR"
+exec 9>"$RC_LOCK_FILE"
+flock 9
+
+new_instance=true
+if rc_state_active; then
+    new_instance=false
+    serial="$(rc_state_value serial)"
+    expires_at="$(rc_state_value expires_at)"
+else
+    rc_remove_runtime
+    mkdir -p -m 0700 "$RC_STATE_DIR"
+    connected="$($RC_ADB devices | sed -n 's/^\(emulator-[0-9][0-9]*\)[[:space:]].*/\1/p')"
+    listeners="$(ss -H -ltn 2>/dev/null || true)"
+    port=''
+    for candidate in $(seq 5554 2 5682); do
+        if rg -l "^port=$candidate$" "$RC_RUNTIME_ROOT"/*/state >/dev/null 2>&1; then
+            continue
+        fi
+        if printf '%s\n' "$connected" | rg -Fxq "emulator-$candidate"; then
+            continue
+        fi
+        if printf '%s\n' "$listeners" | rg -q "[:.]($candidate|$((candidate + 1)))$"; then
+            continue
+        fi
+        port="$candidate"
+        break
+    done
+    [[ -n "$port" ]] || { echo 'No free Android emulator ports are available' >&2; exit 1; }
+
+    serial="emulator-$port"
+    expires_at=$(( $(date +%s) + ttl_seconds ))
+    wrapper_pid="$BASHPID"
+    pid_start_ticks="$(rc_pid_start_ticks "$wrapper_pid")"
+    state_tmp="$RC_STATE_FILE.$wrapper_pid"
+    {
+        printf 'pid=%s\n' "$wrapper_pid"
+        printf 'pid_start_ticks=%s\n' "$pid_start_ticks"
+        printf 'port=%s\n' "$port"
+        printf 'serial=%s\n' "$serial"
+        printf 'expires_at=%s\n' "$expires_at"
+        printf 'worktree=%s\n' "$RC_REPO_ROOT"
+    } >"$state_tmp"
+    mv -f -- "$state_tmp" "$RC_STATE_FILE"
+    emulator_args=("@$RC_AVD_NAME" -read-only -no-snapshot -no-boot-anim -port "$port")
+    if [[ "$display_mode" == headless ]]; then
+        emulator_args+=(-no-window)
+    fi
+    timeout --foreground --signal=TERM --kill-after=15s "$ttl" \
+        "$RC_EMULATOR" "${emulator_args[@]}" >"$RC_LOG_FILE" 2>&1 &
+    emulator_pid=$!
+    state_tmp="$RC_STATE_FILE.$wrapper_pid"
+    {
+        sed '/^emulator_pid=/d' "$RC_STATE_FILE"
+        printf 'emulator_pid=%s\n' "$emulator_pid"
+    } >"$state_tmp"
+    mv -f -- "$state_tmp" "$RC_STATE_FILE"
+    cleanup() {
+        "$RC_ADB" -s "$serial" emu kill >/dev/null 2>&1 || true
+        kill -TERM "$emulator_pid" 2>/dev/null || true
+        if [[ "$(rc_state_value pid)" == "$wrapper_pid" ]]; then
+            rc_remove_runtime
+        fi
+    }
+    terminate() {
+        exit 130
+    }
+    trap cleanup EXIT
+    trap terminate INT TERM HUP
+fi
+
+flock -u 9
+
+instance_active() {
+    if [[ "$new_instance" == true ]]; then
+        kill -0 "$emulator_pid" 2>/dev/null
+    else
+        rc_state_active
+    fi
+}
+
+connected=false
+for _ in $(seq 1 180); do
+    if [[ "$($RC_ADB -s "$serial" get-state 2>/dev/null || true)" == device ]]; then
+        connected=true
+        break
+    fi
+    if ! instance_active; then
+        break
+    fi
+    sleep 1
+done
+if [[ "$connected" != true ]]; then
+    echo "Emulator $serial did not connect." >&2
+    rc_print_log_tail
+    exit 1
+fi
+
+booted=false
+for _ in $(seq 1 180); do
+    if [[ "$($RC_ADB -s "$serial" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == 1 ]]; then
+        booted=true
+        break
+    fi
+    if ! instance_active; then
+        break
+    fi
+    sleep 1
+done
+if [[ "$booted" != true ]]; then
+    echo "Emulator $serial did not finish booting." >&2
+    rc_print_log_tail
+    exit 1
+fi
+
+export ANDROID_SERIAL="$serial"
+android/gradlew -p android --no-daemon :app:installDebug
+"$RC_ADB" -s "$serial" shell am start \
+    -n dev.codexops.client.debug/dev.codexops.client.MainActivity >/dev/null
+
+if [[ "$new_instance" == true ]]; then
+    echo "Started $serial for this worktree; it expires at $(date -d "@$expires_at" --iso-8601=seconds)."
+    echo 'Keep this terminal open; use another terminal for scripts/emulator-test or scripts/emulator-stop.'
+    set +e
+    wait "$emulator_pid"
+    emulator_status=$?
+    set -e
+    if [[ "$emulator_status" != 0 && "$emulator_status" != 124 && "$emulator_status" != 130 && "$emulator_status" != 143 ]]; then
+        echo "Emulator exited with status $emulator_status." >&2
+        rc_print_log_tail
+        exit "$emulator_status"
+    fi
+else
+    echo "Reused $serial for this worktree and installed the current debug build; it expires at $(date -d "@$expires_at" --iso-8601=seconds)."
+fi

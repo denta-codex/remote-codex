@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+source scripts/emulator-common
+
+[[ $# == 0 ]] || { echo 'Usage: scripts/emulator-stop' >&2; exit 2; }
+rc_require_runtime
+
+exec 9>"$RC_LOCK_FILE"
+flock 9
+if ! rc_state_active; then
+    rc_remove_runtime
+    echo 'No emulator is running for this worktree.'
+    exit 0
+fi
+
+serial="$(rc_state_value serial)"
+pid="$(rc_state_value pid)"
+pid_start_ticks="$(rc_state_value pid_start_ticks)"
+"$RC_ADB" -s "$serial" emu kill >/dev/null 2>&1 || true
+
+for _ in $(seq 1 30); do
+    if [[ "$(rc_pid_start_ticks "$pid" 2>/dev/null || true)" != "$pid_start_ticks" ]]; then
+        break
+    fi
+    sleep 0.5
+done
+if [[ "$(rc_pid_start_ticks "$pid" 2>/dev/null || true)" == "$pid_start_ticks" ]]; then
+    kill -TERM "$pid" 2>/dev/null || true
+fi
+rc_remove_runtime
+echo "Stopped $serial for this worktree."

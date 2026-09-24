@@ -79,7 +79,9 @@ func TestStockLifecycle(t *testing.T) {
 	server := httptest.NewTLSServer(handler)
 	defer server.Close()
 	dial := func() *websocket.Conn {
-		c, _, err := websocket.Dial(ctx, strings.Replace(server.URL, "https://", "wss://", 1)+"/codex/rpc", &websocket.DialOptions{HTTPClient: server.Client(), HTTPHeader: http.Header{"Authorization": []string{"Bearer " + testToken}}})
+		// Match OkHttp's default compression offer. Stock control sockets close
+		// this handshake unless the forwarder declines extension negotiation.
+		c, _, err := websocket.Dial(ctx, strings.Replace(server.URL, "https://", "wss://", 1)+"/codex/rpc", &websocket.DialOptions{HTTPClient: server.Client(), HTTPHeader: http.Header{"Authorization": []string{"Bearer " + testToken}, "Sec-WebSocket-Extensions": []string{"permessage-deflate"}}})
 		if err != nil {
 			t.Fatal(err)
 		}

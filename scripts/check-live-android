@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Explicit, read-only acceptance against Grace from a disposable Android emulator.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+serial="${1:?Usage: scripts/check-live-android emulator-SERIAL}"
+[[ "$serial" =~ ^emulator-[0-9]+$ ]] || { echo 'An explicit emulator serial is required' >&2; exit 1; }
+[[ "$(adb -s "$serial" shell getprop ro.kernel.qemu | tr -d '\r')" == 1 ]] || exit 1
+export JAVA_HOME="${JAVA_HOME:-$(mise where java@temurin-17.0.20+8)}"
+export ANDROID_HOME="${ANDROID_HOME:-/home/agent/Android/Sdk}"
+export PATH="$JAVA_HOME/bin:$PATH"
+android/gradlew -p android --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest
+adb -s "$serial" install -r android/app/build/outputs/apk/debug/app-debug.apk
+adb -s "$serial" install -r android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+adb -s "$serial" shell 'run-as dev.codexops.client.debug sh -c "mkdir -p files; mkfifo -m 600 files/live-credential"'
+output="$(mktemp)"
+writer=''
+cleanup() {
+    if [[ -n "$writer" ]]; then kill "$writer" 2>/dev/null || true; wait "$writer" 2>/dev/null || true; fi
+    adb -s "$serial" shell run-as dev.codexops.client.debug rm -f files/live-credential >/dev/null 2>&1 || true
+    rm -f "$output"
+}
+trap cleanup EXIT
+# This FIFO never stores plaintext on disk; the test saves the token in Keystore-backed storage.
+systemd-creds decrypt --user --name=connection-token /home/agent/.local/share/remote-codex/connection-token.cred - |
+    timeout 60s adb -s "$serial" shell 'run-as dev.codexops.client.debug sh -c "cat > files/live-credential"' &
+writer=$!
+timeout 90s adb -s "$serial" shell am instrument -w -e class dev.codexops.client.LiveConnectionTest \
+    -e liveSmoke true dev.codexops.client.debug.test/androidx.test.runner.AndroidJUnitRunner | tee "$output"
+wait "$writer"
+writer=''
+# Android's instrumentation command can exit zero even when a test fails.
+rg -q '^OK \(1 test\)' "$output"

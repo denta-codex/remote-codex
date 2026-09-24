@@ -49,6 +49,9 @@ func New(socket, token string) (http.Handler, error) {
 		p.Out.Host = "localhost"
 		p.Out.Header.Del("Authorization")
 		p.Out.Header.Del("Cookie")
+		// Stock control sockets close handshakes offering permessage-deflate.
+		// Decline extension negotiation so both peers use ordinary frames.
+		p.Out.Header.Del("Sec-WebSocket-Extensions")
 	}, ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) { http.Error(w, "Codex unavailable", 502) }, ErrorLog: log.New(discard{}, "", 0)}
 	slots := make(chan struct{}, 8)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+source scripts/emulator-common
+
+[[ $# == 0 ]] || { echo 'Usage: scripts/emulator-test' >&2; exit 2; }
+rc_require_runtime
+rc_require_active
+rc_export_build_environment
+
+serial="$(rc_state_value serial)"
+export ANDROID_SERIAL="$serial"
+echo "Running instrumentation on $serial."
+android/gradlew -p android --no-daemon :app:connectedDebugAndroidTest

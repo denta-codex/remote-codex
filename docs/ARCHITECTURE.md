@@ -1,13 +1,20 @@
-# Remote Codex 0.1.0
+# Remote Codex 0.1.3
 
 Android uses OkHttp WSS over the existing Tailscale app. Persistent Tailscale Serve
 (`--bg`) terminates TLS and proxies the root route to 127.0.0.1:8787. The Go service
 accepts only authenticated `/codex/rpc` upgrades and connects one Unix stream per
 client to the existing stock Codex socket. It strips its bearer credential before
 forwarding. There is no RPC rewriting, backend task store, or new Codex process.
+The forwarder also removes WebSocket extension offers: the stock control socket
+closes handshakes offering `permessage-deflate`, which OkHttp offers by default.
+Without extension negotiation both endpoints exchange ordinary WebSocket frames.
 
 Android owns presentation, encrypted connection credentials, drafts, and submission
 records. Stock Codex owns execution, configuration, task IDs and durable history.
+The host bearer token is a systemd encrypted user credential loaded at service
+start. Android scans its versioned setup QR and stores the token with an Android
+Keystore key. Authentication applies only to the forwarder upgrade; stock RPC
+remains unchanged.
 Android has no SSH transport. SSH is for deployment/recovery. Additional HTTP
 transfer/preview endpoints are deferred.
 

@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+
+# Shared helpers for the disposable per-worktree Android emulator commands.
+
+RC_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+RC_ANDROID_HOME="${ANDROID_HOME:-/home/agent/Android/Sdk}"
+RC_JAVA_HOME="${JAVA_HOME:-$(mise where java@temurin-17.0.20+8)}"
+RC_ADB="$RC_ANDROID_HOME/platform-tools/adb"
+RC_EMULATOR="$RC_ANDROID_HOME/emulator/emulator"
+RC_AVD_NAME="RemoteCodexDev36"
+RC_RUNTIME_ROOT="${XDG_RUNTIME_DIR:-/tmp}/remote-codex-emulators"
+RC_WORKTREE_KEY="$(printf '%s' "$RC_REPO_ROOT" | sha256sum | cut -c1-16)"
+RC_STATE_DIR="$RC_RUNTIME_ROOT/$RC_WORKTREE_KEY"
+RC_STATE_FILE="$RC_STATE_DIR/state"
+RC_LOG_FILE="$RC_STATE_DIR/emulator.log"
+RC_LOCK_FILE="$RC_RUNTIME_ROOT/registry.lock"
+
+rc_require_runtime() {
+    command -v flock >/dev/null || { echo 'flock is required' >&2; return 1; }
+    [[ -x "$RC_ADB" ]] || { echo "Android adb not found at $RC_ADB" >&2; return 1; }
+    [[ -x "$RC_EMULATOR" ]] || {
+        echo "Android emulator not found at $RC_EMULATOR" >&2
+        return 1
+    }
+    mkdir -p -m 0700 "$RC_RUNTIME_ROOT"
+}
+
+rc_state_value() {
+    local key="$1"
+    [[ -f "$RC_STATE_FILE" ]] || return 0
+    sed -n "s/^${key}=//p" "$RC_STATE_FILE" | head -n 1
+}
+
+rc_pid_start_ticks() {
+    local pid="$1"
+    [[ "$pid" =~ ^[0-9]+$ && -r "/proc/$pid/stat" ]] || return 1
+    awk '{print $22}' "/proc/$pid/stat"
+}
+
+rc_state_active() {
+    local pid saved_ticks current_ticks
+    pid="$(rc_state_value pid)"
+    saved_ticks="$(rc_state_value pid_start_ticks)"
+    [[ "$pid" =~ ^[0-9]+$ && "$saved_ticks" =~ ^[0-9]+$ ]] || return 1
+    current_ticks="$(rc_pid_start_ticks "$pid")" || return 1
+    [[ "$current_ticks" == "$saved_ticks" ]]
+}
+
+rc_remove_state() {
+    rm -f -- "$RC_STATE_FILE"
+    rmdir -- "$RC_STATE_DIR" 2>/dev/null || true
+}
+
+rc_remove_runtime() {
+    rm -f -- "$RC_STATE_FILE" "$RC_LOG_FILE"
+    rmdir -- "$RC_STATE_DIR" 2>/dev/null || true
+}
+
+rc_require_active() {
+    if ! rc_state_active; then
+        rc_remove_runtime
+        echo 'No emulator is running for this worktree. Run scripts/emulator-start first.' >&2
+        return 1
+    fi
+}
+
+rc_print_log_tail() {
+    if [[ -f "$RC_LOG_FILE" ]]; then
+        echo "Last emulator output from $RC_LOG_FILE:" >&2
+        tail -n 40 "$RC_LOG_FILE" >&2
+    fi
+}
+
+rc_export_build_environment() {
+    export JAVA_HOME="$RC_JAVA_HOME"
+    export ANDROID_HOME="$RC_ANDROID_HOME"
+    export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH"
+}

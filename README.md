@@ -22,6 +22,31 @@ scripts/init-signing   # once for a new identity; refuses to overwrite
 scripts/release
 ```
 
+## Parallel worktree development
+
+Codex worktrees run `scripts/setup-worktree` automatically. The setup validates
+the existing managed JDK, Android SDK, Go and Codex toolchains, writes the ignored
+Android SDK location, and creates a shared clean Android 16 base AVD when needed.
+It does not install or replace toolchains.
+
+Each worktree can run an isolated, disposable emulator from that base AVD:
+
+```sh
+scripts/emulator-start             # build, install and open; expires after one hour
+scripts/emulator-start --ttl 2h    # override the lifetime
+scripts/emulator-test              # run instrumentation on this worktree's emulator
+scripts/emulator-stop              # stop it early
+```
+
+The emulator is read-only with respect to the shared base AVD. App and device data
+last for the running emulator process and are discarded when it stops. Runtime
+state is kept outside the repository. `emulator-start` stays attached to its
+terminal until the emulator stops; use another terminal for tests. Re-running it
+from another terminal reuses this worktree's live emulator and installs the current
+debug build. It opens a window when a desktop display is available and runs
+headlessly on a remote host. Fresh emulators must be paired again for interactive live testing;
+`scripts/check-live-android` retains its separate temporary credential flow.
+
 Signing defaults to `/home/agent/.local/share/remote-codex/signing` outside the repo.
 Keep the PKCS12 file and password secure and backed up. The independently recorded
 public certificate digest is `docs/signing-certificate.sha256`. Releases must match
@@ -44,13 +69,22 @@ Serve routes, then installs the user service and configures private Serve with
 `--bg`. It does not change or restart Codex. Delivery targets the single phone in
 inventory. The user opens the APK and confirms installation.
 
-The connection credential is generated once on deployment at
-`/home/agent/.local/share/remote-codex/connection-token` (0600). Enter it in Settings;
-it is never embedded in the APK. Do not print it in logs or commit it. Its compromise
-allows control of the account's Codex tasks; rotate the file and restart only the
-forwarder, then replace the credential in the app.
+Deployment creates a single user-scoped systemd encrypted credential at
+`/home/agent/.local/share/remote-codex/connection-token.cred` (0600). The user
+service receives its plaintext runtime copy through `LoadCredentialEncrypted`;
+the token is never embedded in the APK or stored as a plaintext host file.
+From a private interactive terminal, run `scripts/show-connection-qr`, then use
+**Scan setup QR** in app Settings. Manual entry remains available. The helper
+uses the terminal's alternate screen and creates no plaintext file; do not run it
+through captured command output or share the screen while pairing. The QR holds
+the bearer token, so anyone who copies it can control this account's Codex tasks.
+If it is exposed, replace the encrypted credential, restart only the forwarder,
+and pair the phone again. If the host encryption key is lost, generate a new
+credential and re-pair.
 
-The phone needs the existing Tailscale app and no SSH client or SSH server.
+The phone needs the existing Tailscale app and no SSH client or SSH server. The
+transport bearer credential is removed before any stock Codex RPC reaches the
+control socket.
 
 ## Recovery
 
@@ -71,3 +105,10 @@ android/gradlew -p android --no-daemon :app:connectedDebugAndroidTest
 ```
 
 Read [validation results and remaining acceptance](docs/VALIDATION.md).
+
+For explicit read-only acceptance against **live Grace**, start a disposable
+Android 16 emulator and run `scripts/check-live-android emulator-SERIAL`.
+This uses the actual Android client over WSS to initialize and load tasks. It
+passes the host credential through an app-private FIFO, stores it using the
+Android Keystore, and clears it after the test. No prompt or task mutation is
+submitted. Shut down and remove the disposable emulator after acceptance.

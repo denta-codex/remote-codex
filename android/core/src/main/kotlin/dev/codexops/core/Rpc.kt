@@ -28,6 +28,10 @@ class RpcRejected(val code: Int, message: String) : Exception(message)
 
 class ConnectionLost : Exception("Connection lost; a submitted operation may have been accepted")
 
+/** Only transport metadata; never include headers, response bodies, or exception messages. */
+class ConnectionFailure(val httpStatus: Int?, val transport: String) :
+    Exception("Connection failed: ${httpStatus ?: transport}")
+
 class Rpc(private val allowLoopbackTest: Boolean = false) {
     val events = Channel<JsonObject>(1024)
     private val client =
@@ -100,6 +104,10 @@ class Rpc(private val allowLoopbackTest: Boolean = false) {
                         t: Throwable,
                         response: Response?,
                     ) {
+                        if (generation != epoch) return
+                        ready.completeExceptionally(
+                            ConnectionFailure(response?.code, t.javaClass.simpleName)
+                        )
                         failed(epoch)
                     }
 
@@ -119,7 +127,7 @@ class Rpc(private val allowLoopbackTest: Boolean = false) {
                 call(
                     "initialize",
                     obj(
-                        "clientInfo" to obj("name" to s("remote-codex"), "version" to s("0.1.0")),
+                        "clientInfo" to obj("name" to s("remote-codex"), "version" to s("0.1.3")),
                         "capabilities" to obj("experimentalApi" to JsonPrimitive(true)),
                     ),
                 )

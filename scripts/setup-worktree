@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+android_home="${ANDROID_HOME:-/home/agent/Android/Sdk}"
+java_home="${JAVA_HOME:-$(mise where java@temurin-17.0.20+8)}"
+emulator="$android_home/emulator/emulator"
+platform="$android_home/platforms/android-36/android.jar"
+image="$android_home/system-images/android-36/google_apis/x86_64/source.properties"
+avd_name="RemoteCodexDev36"
+runtime_root="${XDG_RUNTIME_DIR:-/tmp}/remote-codex-emulators"
+
+[[ -x "$java_home/bin/java" ]] || { echo "Managed JDK 17 not found at $java_home" >&2; exit 1; }
+"$java_home/bin/java" -version 2>&1 | rg -q 'version "17\.' || {
+    echo "Managed JDK at $java_home is not Java 17" >&2
+    exit 1
+}
+[[ -x "$emulator" ]] || { echo "Android emulator not found at $emulator" >&2; exit 1; }
+[[ -f "$platform" ]] || { echo 'Android SDK platform 36 is missing' >&2; exit 1; }
+[[ -f "$image" ]] || { echo 'Android 36 Google APIs x86_64 system image is missing' >&2; exit 1; }
+command -v go >/dev/null || { echo 'Go is missing from PATH' >&2; exit 1; }
+command -v codex >/dev/null || { echo 'Codex is missing from PATH' >&2; exit 1; }
+command -v flock >/dev/null || { echo 'flock is missing from PATH' >&2; exit 1; }
+
+export JAVA_HOME="$java_home"
+export ANDROID_HOME="$android_home"
+export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH"
+
+if [[ ! -f android/local.properties ]]; then
+    printf 'sdk.dir=%s\n' "$android_home" > android/local.properties
+elif ! rg -q -F "sdk.dir=$android_home" android/local.properties; then
+    echo "android/local.properties exists but does not select $android_home" >&2
+    exit 1
+fi
+
+mkdir -p -m 0700 "$runtime_root"
+exec 9>"$runtime_root/setup.lock"
+flock 9
+
+if ! "$emulator" -list-avds | rg -Fxq "$avd_name"; then
+    shopt -s nullglob
+    avdmanagers=("$android_home"/cmdline-tools/*/bin/avdmanager)
+    (( ${#avdmanagers[@]} > 0 )) || { echo 'Android avdmanager is missing' >&2; exit 1; }
+    avdmanager="$(printf '%s\n' "${avdmanagers[@]}" | sort -V | tail -n 1)"
+    printf 'no\n' | "$avdmanager" create avd \
+        --name "$avd_name" \
+        --package 'system-images;android-36;google_apis;x86_64' \
+        --device 'pixel_7'
+fi
+
+avd_home="${ANDROID_AVD_HOME:-${ANDROID_USER_HOME:-$HOME/.android}/avd}"
+avd_ini="$avd_home/$avd_name.ini"
+[[ -f "$avd_ini" ]] || { echo "AVD metadata not found at $avd_ini" >&2; exit 1; }
+avd_path="$(sed -n 's/^path=//p' "$avd_ini" | head -n 1)"
+[[ -n "$avd_path" && -f "$avd_path/config.ini" ]] || {
+    echo "AVD configuration for $avd_name is unavailable" >&2
+    exit 1
+}
+rg -q '^target=android-36$' "$avd_path/config.ini" || { echo "$avd_name targets the wrong Android version" >&2; exit 1; }
+rg -q '^abi.type=x86_64$' "$avd_path/config.ini" || { echo "$avd_name uses the wrong ABI" >&2; exit 1; }
+rg -q '^tag.id=google_apis$' "$avd_path/config.ini" || { echo "$avd_name uses the wrong system image" >&2; exit 1; }
+
+echo "Worktree ready: JDK 17, Android SDK 36, Go, Codex, and $avd_name."
