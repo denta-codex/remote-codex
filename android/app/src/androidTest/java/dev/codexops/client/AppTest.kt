@@ -5,6 +5,8 @@ import android.os.SystemClock
 import androidx.activity.compose.setContent
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModelStore
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
@@ -26,6 +28,8 @@ class AppTest {
     @Volatile private var dropSend = false
     @Volatile private var peer: WebSocket? = null
     @Volatile private var acceptedText = ""
+    @Volatile private var historyOverride: JsonObject? = null
+    @Volatile private var fixtureTitle = "Fixture task"
     private val app
         get() = ApplicationProvider.getApplicationContext<Application>()
     private val demo by lazy {
@@ -64,9 +68,16 @@ class AppTest {
                                                             listOf(
                                                                 obj(
                                                                     "id" to s("task-test"),
-                                                                    "name" to s("Fixture task"),
+                                                                    "name" to s(fixtureTitle),
                                                                     "cwd" to s("/fixture"),
                                                                 )
+                                                            ) + if (fixtureTitle == "Fixture task") emptyList() else listOf(
+                                                                obj("id" to s("demo-2"), "name" to s("Review the Android build"),
+                                                                    "cwd" to s("/fixture/remote-codex"), "status" to obj("type" to s("idle"))),
+                                                                obj("id" to s("demo-3"), "name" to s("Tidy up the connection screen"),
+                                                                    "cwd" to s("/fixture/remote-codex"), "status" to obj("type" to s("notLoaded"))),
+                                                                obj("id" to s("demo-4"), "name" to s("Check the release notes"),
+                                                                    "cwd" to s("/fixture/notes"), "status" to obj("type" to s("idle"))),
                                                             )
                                                         )
                                                 )
@@ -80,7 +91,7 @@ class AppTest {
                                                                         obj(
                                                                             "id" to s("task-test"),
                                                                             "name" to
-                                                                                s("Fixture task"),
+                                                                                s(fixtureTitle),
                                                                             "cwd" to s("/fixture"),
                                                                         ),
                                                                     "snippet" to s("fixture match"),
@@ -93,7 +104,7 @@ class AppTest {
                                                     "thread" to
                                                         obj(
                                                             "id" to s("task-test"),
-                                                            "name" to s("Fixture task"),
+                                                            "name" to s(fixtureTitle),
                                                         )
                                                 )
                                             "thread/start" ->
@@ -190,6 +201,7 @@ class AppTest {
     }
 
     private fun history(): JsonObject {
+        historyOverride?.let { return it }
         if (acceptedText.isEmpty()) return obj("data" to JsonArray(emptyList()))
         val user =
             obj(
@@ -218,6 +230,115 @@ class AppTest {
         )
     }
 
+    private fun longHistory(tallLastMessage: Boolean = false): JsonObject {
+        val turns = (1..20).map { index ->
+            val user = obj(
+                "id" to s("user-$index"), "type" to s("userMessage"),
+                "content" to JsonArray(listOf(obj("type" to s("text"),
+                    "text" to s(if (index == 20) "Give the task list a little more breathing room."
+                        else "Review the spacing in section $index.")))),
+            )
+            val text = if (index == 20) {
+                (if (tallLastMessage) (1..35).joinToString("\n\n") { "Review note $it: Keep the layout clear and comfortable to read." }
+                else "### A little room to breathe\n\nThe task list has cleaner spacing, quiet dividers, and consistent icons.\n\n") +
+                    "Latest reply — ready for review."
+            } else "Checkpoint $index\n\nThe spacing looks consistent. Keep the title easy to scan and the workspace details a little quieter."
+            val command = obj("id" to s("command-$index"), "type" to s("commandExecution"),
+                "command" to s("scripts/check"), "aggregatedOutput" to s("All checks passed."), "status" to s("completed"))
+            obj("id" to s("history-$index"), "status" to s("completed"),
+                "items" to JsonArray(listOf(user) + (if (index == 20) listOf(command) else emptyList()) +
+                    obj("id" to s("reply-$index"), "type" to s("agentMessage"), "text" to s(text))))
+        }
+        return obj("data" to JsonArray(turns.reversed()))
+    }
+
+    private fun openLongHistory(tallLastMessage: Boolean = false) {
+        fixtureTitle = "Polish the task list"
+        historyOverride = longHistory(tallLastMessage)
+        compose.runOnUiThread { model.home() }
+        compose.waitUntil(5000) { model.state.value.tasks.first().str("name") == fixtureTitle }
+        demoPause(2000)
+        compose.onNodeWithText(fixtureTitle).performClick()
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.entries.size >= 40 }
+        compose.waitForIdle()
+    }
+
+    private fun latestReply() = compose.onNodeWithText("Latest reply — ready for review.", substring = true)
+
+    @Test
+    fun polishedConversationOpensAtLatestAndKeepsReadingPosition() {
+        openLongHistory()
+        latestReply().assertIsDisplayed()
+        demoPause(3000)
+        compose.onNodeWithText("Command").performClick()
+        compose.onNodeWithText("scripts/check", substring = true).assertIsDisplayed()
+        demoPause(2000)
+        compose.onNodeWithText("Command").performClick()
+        compose.onNodeWithTag("timeline").performTouchInput { swipeDown() }
+        compose.onNodeWithTag("timeline").performTouchInput { swipeDown() }
+        compose.waitForIdle()
+        val position = compose.onNodeWithTag("timeline").fetchSemanticsNode()
+            .config[SemanticsProperties.VerticalScrollAxisRange].value()
+        assertTrue("Scrolled into older messages", position > 2f)
+        demoPause(2000)
+        emit(peer!!, "item/agentMessage/delta", obj("turnId" to s("history-20"),
+            "itemId" to s("reply-20"), "delta" to s("\n\nA final spacing check is complete.")))
+        compose.waitUntil(5000) { model.state.value.entries.last().text.endsWith("complete.") }
+        compose.waitForIdle()
+        val after = compose.onNodeWithTag("timeline").fetchSemanticsNode()
+            .config[SemanticsProperties.VerticalScrollAxisRange].value()
+        assertEquals("Incoming content must not pull the reader to the bottom", position, after, .01f)
+        demoPause(2000)
+        compose.onNodeWithContentDescription("Tasks").performClick()
+        compose.waitUntil { model.state.value.page == "home" }
+        demoPause(1500)
+        compose.onNodeWithText(fixtureTitle).performClick()
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.entries.size >= 40 }
+        latestReply().assertIsDisplayed()
+        demoPause(2500)
+        compose.onNodeWithTag("composer").performTextInput("Looks good. Thanks!")
+        demoPause(2000)
+        compose.onNodeWithTag("send").performClick()
+        compose.waitUntil(10000) { model.state.value.entries.any { it.text == "Hello from Grace" } }
+        compose.onNodeWithText("Hello from Grace").assertIsDisplayed()
+        assertEquals(1, sent.get())
+        demoPause(2500)
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.onNodeWithText("Scan setup QR").assertIsDisplayed()
+        demoPause(2000)
+        compose.onNodeWithContentDescription("Tasks").performClick()
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil { model.state.value.page == "chat" && model.state.value.thread == null }
+        compose.onNodeWithText("What shall we work on?").assertIsDisplayed()
+        demoPause(2000)
+        compose.runOnUiThread {
+            model.home()
+            compose.activity.setContent { RemoteTheme(darkTheme = true) { App(model) } }
+            // Match system chrome to this fixture-only theme override. Production
+            // follows the system theme through MainActivity.enableEdgeToEdge().
+            WindowCompat.getInsetsController(compose.activity.window, compose.activity.window.decorView).apply {
+                isAppearanceLightStatusBars = false
+                isAppearanceLightNavigationBars = false
+            }
+        }
+        compose.waitUntil { model.state.value.page == "home" }
+        demoPause(2000)
+        compose.onNodeWithText(fixtureTitle).performClick()
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.entries.size >= 40 }
+        latestReply().assertIsDisplayed()
+        demoPause(3000)
+    }
+
+    @Test
+    fun tallLatestMessageOpensAtItsEndAndFollowsGrowth() {
+        openLongHistory(tallLastMessage = true)
+        latestReply().assertIsDisplayed()
+        emit(peer!!, "item/agentMessage/delta", obj("turnId" to s("history-20"),
+            "itemId" to s("reply-20"), "delta" to s("\n\nStreaming finished here.")))
+        compose.waitUntil(5000) { model.state.value.entries.last().text.endsWith("here.") }
+        compose.onNodeWithText("Streaming finished here.", substring = true).assertIsDisplayed()
+    }
+
     @After
     fun cleanup() {
         compose.runOnUiThread {
@@ -229,7 +350,7 @@ class AppTest {
 
     @Test
     fun textChatStreamsAndCanReopen() {
-        compose.onNodeWithText("＋  New chat").performClick()
+        compose.onNodeWithContentDescription("New chat").performClick()
         compose.waitUntil { model.state.value.page == "chat" }
         demoPause()
         compose.onNodeWithTag("composer").performTextInput("What is running on Grace?")
