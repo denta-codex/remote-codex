@@ -59,6 +59,11 @@ data class ScreenState(
     val historyCursor: String? = null,
     val draft: String = "",
     val newTaskOptions: NewTaskOptions = NewTaskOptions(),
+    val models: List<ServerModelOption> = emptyList(),
+    val modelCatalogStatus: ModelCatalogStatus = ModelCatalogStatus.Unavailable,
+    val modelCatalogMessage: String? = null,
+    val threadModel: String? = null,
+    val threadReasoningEffort: String? = null,
     val activeTurn: String? = null,
     val decisions: List<Decision> = emptyList(),
     val busy: Boolean = false,
@@ -93,6 +98,8 @@ interface SettingsActions {
 
 interface ConversationActions {
     fun updateNewTaskOptions(options: NewTaskOptions)
+
+    fun refreshModels()
 
     fun older()
 

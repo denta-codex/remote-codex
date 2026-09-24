@@ -6,4 +6,4 @@ export ANDROID_HOME="${ANDROID_HOME:-/home/agent/Android/Sdk}"
 export PATH="$JAVA_HOME/bin:$PATH"
 export REMOTE_CODEX_TEST_CODEX="${REMOTE_CODEX_TEST_CODEX:-$(command -v codex)}"
 (cd forwarder && go test -race ./... && go vet ./...)
-android/gradlew -p android --no-daemon :core:test :app:assembleDebug :app:lintDebug :app:assembleDebugAndroidTest
+android/gradlew -p android --no-daemon :core:test :app:testDebugUnitTest :app:assembleDebug :app:lintDebug :app:assembleDebugAndroidTest

@@ -25,9 +25,13 @@ class AppTest {
     private lateinit var model: ClientModel
     private val store = ViewModelStore()
     private val sent = AtomicInteger()
+    private val modelLists = AtomicInteger()
     @Volatile private var dropSend = false
+    @Volatile private var fastModelAvailable = true
     @Volatile private var peer: WebSocket? = null
     @Volatile private var acceptedText = ""
+    @Volatile private var lastThreadStartParams: JsonObject? = null
+    @Volatile private var lastTurnStartParams: JsonObject? = null
     @Volatile private var historyOverride: JsonObject? = null
     @Volatile private var fixtureTitle = "Fixture task"
     private val app
@@ -61,6 +65,10 @@ class AppTest {
                                     val result =
                                         when (method) {
                                             "initialize" -> obj("codexHome" to s("/fixture"))
+                                            "model/list" -> {
+                                                modelLists.incrementAndGet()
+                                                modelCatalog()
+                                            }
                                             "thread/list" ->
                                                 obj(
                                                     "data" to
@@ -105,20 +113,26 @@ class AppTest {
                                                         obj(
                                                             "id" to s("task-test"),
                                                             "name" to s(fixtureTitle),
+                                                            "model" to s("gpt-fixture"),
+                                                            "reasoningEffort" to s("low"),
                                                         )
                                                 )
-                                            "thread/start" ->
+                                            "thread/start" -> {
+                                                lastThreadStartParams = params
                                                 obj(
                                                     "thread" to
                                                         obj(
                                                             "id" to s("task-test"),
                                                             "projectId" to JsonNull,
+                                                            "model" to params["model"],
                                                         )
                                                 )
+                                            }
                                             "command/exec" -> obj("exitCode" to JsonPrimitive(0))
                                             "thread/turns/list" -> history()
                                             "turn/start",
                                             "turn/steer" -> {
+                                                if (method == "turn/start") lastTurnStartParams = params
                                                 sent.incrementAndGet()
                                                 acceptedText =
                                                     params.list("input").first().str("text")
@@ -196,9 +210,62 @@ class AppTest {
             compose.activity.setContent { RemoteTheme { App(model) } }
             model.saveCredential("fixture-credential-0000000000000000000000000000000000000")
         }
-        compose.waitUntil(15000) { model.state.value.ready && model.state.value.tasks.isNotEmpty() }
+        compose.waitUntil(15000) {
+            model.state.value.ready &&
+                model.state.value.tasks.isNotEmpty() &&
+                model.state.value.modelCatalogStatus == ModelCatalogStatus.Ready
+        }
         demoPause()
     }
+
+    private fun modelCatalog() =
+        obj(
+            "data" to
+                JsonArray(
+                    listOf(
+                        obj(
+                            "model" to s("gpt-fixture"),
+                            "displayName" to s("Fixture Default"),
+                            "description" to s("Default fixture model"),
+                            "defaultReasoningEffort" to s("low"),
+                            "supportedReasoningEfforts" to
+                                JsonArray(
+                                    listOf(
+                                        obj(
+                                            "reasoningEffort" to s("low"),
+                                            "description" to s("Quick fixture reasoning"),
+                                        ),
+                                        obj(
+                                            "reasoningEffort" to s("high"),
+                                            "description" to s("Thorough fixture reasoning"),
+                                        ),
+                                    )
+                                ),
+                            "isDefault" to JsonPrimitive(true),
+                        )
+                    ) +
+                        if (fastModelAvailable)
+                            listOf(
+                                obj(
+                                    "model" to s("gpt-fixture-fast"),
+                                    "displayName" to s("Fixture Fast"),
+                                    "description" to s("Fast fixture model"),
+                                    "defaultReasoningEffort" to s("medium"),
+                                    "supportedReasoningEfforts" to
+                                        JsonArray(
+                                            listOf(
+                                                obj(
+                                                    "reasoningEffort" to s("medium"),
+                                                    "description" to s("Balanced fixture reasoning"),
+                                                )
+                                            )
+                                        ),
+                                    "isDefault" to JsonPrimitive(false),
+                                )
+                            )
+                        else emptyList()
+                )
+        )
 
     private fun history(): JsonObject {
         historyOverride?.let { return it }
@@ -362,6 +429,9 @@ class AppTest {
             compose.onAllNodesWithText("Hello from Grace").fetchSemanticsNodes().isNotEmpty()
         }
         compose.onNodeWithText("Hello from Grace").assertIsDisplayed()
+        assertFalse(lastThreadStartParams!!.containsKey("model"))
+        assertFalse(lastTurnStartParams!!.containsKey("model"))
+        assertFalse(lastTurnStartParams!!.containsKey("effort"))
         demoPause(2500)
         compose.runOnUiThread {
             model.home()
@@ -379,8 +449,43 @@ class AppTest {
     }
 
     @Test
+    fun modelControlsUseCatalogAndRefreshUnsupportedSelection() {
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil { model.state.value.page == "chat" }
+
+        compose.onNodeWithTag("model-selector").performClick()
+        compose.onNodeWithText("Fixture Fast").performClick()
+        assertEquals("gpt-fixture-fast", model.state.value.newTaskOptions.model)
+
+        compose.onNodeWithTag("reasoning-selector").performClick()
+        compose.onNodeWithText("medium").assertExists()
+        compose.onNodeWithText("low").assertDoesNotExist()
+        compose.onNodeWithText("medium").performClick()
+        assertEquals("medium", model.state.value.newTaskOptions.reasoningEffort)
+
+        compose.onNodeWithTag("composer").performTextInput("Use the selected model")
+        compose.onNodeWithTag("send").performClick()
+        compose.waitUntil(15000) { model.state.value.entries.any { it.text == "Hello from Grace" } }
+        assertEquals("gpt-fixture-fast", lastThreadStartParams!!.str("model"))
+        assertEquals("gpt-fixture-fast", lastTurnStartParams!!.str("model"))
+        assertEquals("medium", lastTurnStartParams!!.str("effort"))
+
+        val previousLists = modelLists.get()
+        fastModelAvailable = false
+        compose.onNodeWithContentDescription("Refresh models").performClick()
+        compose.waitUntil(5000) {
+            modelLists.get() > previousLists &&
+                model.state.value.modelCatalogStatus == ModelCatalogStatus.Ready
+        }
+        assertNull(model.state.value.newTaskOptions.model)
+        assertNull(model.state.value.newTaskOptions.reasoningEffort)
+        compose.onNodeWithText("Unsupported overrides were cleared", substring = true).assertExists()
+    }
+
+    @Test
     fun uncertainSubmissionIsNotReplayed() {
         dropSend = true
+        val catalogLoadsBeforeReconnect = modelLists.get()
         compose.runOnUiThread { model.openTask("task-test") }
         compose.waitUntil(10000) { model.state.value.page == "chat" && !model.state.value.busy }
         demoPause()
@@ -390,8 +495,13 @@ class AppTest {
         compose.waitUntil(15000) { !model.state.value.busy && model.state.value.journal != null }
         demoPause(2500)
         compose.runOnUiThread { model.connect() }
-        compose.waitUntil(15000) { model.state.value.ready && !model.state.value.busy }
+        compose.waitUntil(15000) {
+            model.state.value.ready &&
+                !model.state.value.busy &&
+                model.state.value.modelCatalogStatus == ModelCatalogStatus.Ready
+        }
         assertEquals(1, sent.get())
+        assertTrue(modelLists.get() > catalogLoadsBeforeReconnect)
         assertNotNull(model.state.value.journal)
         compose.onNodeWithTag("send").assertIsNotEnabled()
         demoPause(2000)

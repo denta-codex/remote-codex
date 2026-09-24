@@ -1,5 +1,29 @@
 # Validation
 
+## September 24, 2026 — server-backed Android model controls
+
+- The Android composer now loads the stock `model/list` catalog and presents a
+  server-default choice plus the models and reasoning efforts advertised by that
+  response. It uses the current thread model from `thread/resume` to constrain
+  effort choices for existing tasks.
+- Null model and effort choices remain absent from RPC payloads. Explicit models
+  are sent on `thread/start` and `turn/start`; explicit effort is sent as
+  `turn/start.effort`. Active-turn `turn/steer` remains unchanged because the
+  checked-in stock schema exposes neither override there.
+- Catalog loading, manual refresh, reconnect refresh, and removal of stale model
+  or effort choices are covered by the fixture server. No fallback model names,
+  effort lists, or compatibility catalog are stored locally.
+- `scripts/check` passed, including Go race/vet, Kotlin tests, Android debug
+  build, lint, and instrumentation assembly. The disposable Android 16 emulator
+  ran seven fixture-backed UI/integration tests with zero failures; the live
+  credential-gated smoke test was skipped as expected. Coverage includes catalog
+  rendering, model-specific effort filtering, exact request overrides, omission
+  of defaults, refresh invalidation, reconnect reload, and uncertain-send
+  no-replay behavior.
+- No live deployment, signed release, physical-phone installation, or live model
+  mutation was performed. Runtime verification used the stock-schema-shaped
+  fixture transport only.
+
 ## September 23, 2026 — 0.1.3 live Android connection fix
 
 - Razr 0.1.2 remained disconnected after the shutdown fix. Credential-free HTTPS

@@ -32,6 +32,7 @@ constructor(
     private var foreground = false
     private var selection = 0
     private var listSelection = 0
+    private var modelCatalogSelection = 0
     private var hydrating = false
     private val buffered = mutableListOf<JsonObject>()
     private val requests = linkedMapOf<String, Decision>()
@@ -85,6 +86,8 @@ constructor(
                             ready = false,
                             error = null,
                             configured = true,
+                            modelCatalogStatus = ModelCatalogStatus.Loading,
+                            modelCatalogMessage = null,
                         )
                     }
                     requests.clear()
@@ -98,6 +101,7 @@ constructor(
                         _state.update {
                             it.copy(connection = "Connected to ${host.displayName}", ready = true)
                         }
+                        viewModelScope.launch { refreshModelCatalog() }
                         refreshList()
                         val id = _state.value.thread
                         if (id != null && _state.value.page == "chat") loadTask(id)
@@ -119,6 +123,7 @@ constructor(
                             it.copy(
                                 ready = false,
                                 connection = "Disconnected",
+                                modelCatalogStatus = ModelCatalogStatus.Unavailable,
                                 error = when {
                                     e is ConnectionFailure && e.httpStatus == 401 ->
                                         "${host.displayName} rejected the connection credential. Scan the setup QR again in Settings."
@@ -253,6 +258,8 @@ constructor(
                     historyCursor = null,
                     draft = draft,
                     newTaskOptions = NewTaskOptions(),
+                    threadModel = null,
+                    threadReasoningEffort = null,
                     journal = journal,
                     error = null,
                     attention = false,
@@ -297,6 +304,9 @@ constructor(
                 entries = emptyList(),
                 activeTurn = null,
                 historyCursor = null,
+                newTaskOptions = NewTaskOptions(),
+                threadModel = null,
+                threadReasoningEffort = null,
                 error = null,
                 busy = true,
                 attention = false,
@@ -342,12 +352,27 @@ constructor(
                     it.map("params").str("threadId") == id
             }
             _state.update {
+                val threadModel = thread.str("model").takeIf(String::isNotBlank)
+                val options =
+                    reconcileModelOptions(
+                        it.newTaskOptions,
+                        it.models,
+                        threadModel,
+                    )
                 it.copy(
                     title =
                         thread.str("name").ifBlank {
                             thread.str("preview").take(80).ifBlank { "Conversation" }
                         },
                     historyCursor = history.cursor(),
+                    newTaskOptions = options.options,
+                    threadModel = threadModel,
+                    threadReasoningEffort =
+                        thread.str("reasoningEffort").takeIf(String::isNotBlank),
+                    modelCatalogMessage =
+                        if (options.removedUnsupportedChoice)
+                            "The server no longer supports one of the selected choices. Unsupported overrides were cleared."
+                        else it.modelCatalogMessage,
                     attention = thread.map("status")["activeFlags"].toString().contains("waiting"),
                 )
             }
@@ -364,7 +389,83 @@ constructor(
     }
 
     override fun updateNewTaskOptions(options: NewTaskOptions) {
-        _state.update { it.copy(newTaskOptions = options) }
+        _state.update {
+            if (it.modelCatalogStatus != ModelCatalogStatus.Ready) {
+                it.copy(
+                    modelCatalogMessage =
+                        if (it.modelCatalogStatus == ModelCatalogStatus.Loading)
+                            "The model catalog is still loading."
+                        else "Models are unavailable. Refresh the server catalog and try again."
+                )
+            } else {
+                val reconciled = reconcileModelOptions(options, it.models, it.threadModel)
+                it.copy(
+                    newTaskOptions = reconciled.options,
+                    modelCatalogMessage =
+                        if (reconciled.removedUnsupportedChoice)
+                            "That model or reasoning effort is not supported. Unsupported overrides were cleared."
+                        else null,
+                )
+            }
+        }
+    }
+
+    override fun refreshModels() {
+        if (!_state.value.ready || _state.value.modelCatalogStatus == ModelCatalogStatus.Loading)
+            return
+        viewModelScope.launch { refreshModelCatalog() }
+    }
+
+    private suspend fun refreshModelCatalog() {
+        if (!_state.value.ready) return
+        val n = ++modelCatalogSelection
+        _state.update {
+            it.copy(modelCatalogStatus = ModelCatalogStatus.Loading, modelCatalogMessage = null)
+        }
+        try {
+            val rows = mutableListOf<ServerModelOption>()
+            var cursor: String? = null
+            val seenCursors = mutableSetOf<String>()
+            do {
+                val result =
+                    rpc.call(
+                        "model/list",
+                        obj(
+                            "limit" to JsonPrimitive(100),
+                            "cursor" to cursor?.let(::s),
+                        ),
+                    )
+                rows += parseModelCatalog(result)
+                val next = result.cursor()
+                cursor = next?.takeIf(seenCursors::add)
+            } while (cursor != null)
+            if (n != modelCatalogSelection) return
+            val catalog = rows.distinctBy(ServerModelOption::id)
+            _state.update {
+                val reconciled =
+                    reconcileModelOptions(it.newTaskOptions, catalog, it.threadModel)
+                it.copy(
+                    models = catalog,
+                    modelCatalogStatus = ModelCatalogStatus.Ready,
+                    newTaskOptions = reconciled.options,
+                    modelCatalogMessage =
+                        if (reconciled.removedUnsupportedChoice)
+                            "The server no longer supports one of the selected choices. Unsupported overrides were cleared."
+                        else null,
+                )
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            if (n != modelCatalogSelection) return
+            if (!_state.value.ready) return
+            _state.update {
+                it.copy(
+                    modelCatalogStatus = ModelCatalogStatus.Error,
+                    modelCatalogMessage =
+                        "Could not load models from ${host.displayName}. Refresh the catalog to try again.",
+                )
+            }
+        }
     }
 
     override fun older() {
@@ -404,7 +505,18 @@ constructor(
 
     override fun send() {
         val before = _state.value
-        if (!before.ready || before.busy || before.draft.isBlank() || before.journal != null) return
+        val hasTurnStartOverrides =
+            before.activeTurn == null &&
+                (before.newTaskOptions.model != null ||
+                    before.newTaskOptions.reasoningEffort != null)
+        if (
+            !before.ready ||
+                before.busy ||
+                before.draft.isBlank() ||
+                before.journal != null ||
+                (hasTurnStartOverrides &&
+                    before.modelCatalogStatus != ModelCatalogStatus.Ready)
+        ) return
         _state.update { it.copy(busy = true, error = null) }
         viewModelScope.launch {
             val originalKey = before.thread ?: "new"
@@ -463,13 +575,7 @@ constructor(
                     val result =
                         rpc.call(
                             "thread/start",
-                            obj(
-                                "cwd" to s(journal.str("cwd")),
-                                "historyMode" to s("paginated"),
-                                "ephemeral" to JsonPrimitive(false),
-                                "threadSource" to s("agent_created_thread"),
-                                "projectId" to JsonNull,
-                            ),
+                            newThreadParams(journal.str("cwd"), before.newTaskOptions),
                         )
                     id = result.map("thread").str("id")
                     check(id.isNotEmpty())
@@ -484,19 +590,33 @@ constructor(
                     local.put("draft/$key", before.draft)
                     local.remove("journal/new")
                     local.remove("draft/new")
-                    _state.update { it.copy(thread = id, title = before.draft.take(80)) }
+                    _state.update {
+                        it.copy(
+                            thread = id,
+                            title = before.draft.take(80),
+                            threadModel =
+                                result.map("thread").str("model").takeIf(String::isNotBlank)
+                                    ?: before.newTaskOptions.model,
+                            threadReasoningEffort =
+                                result
+                                    .map("thread")
+                                    .str("reasoningEffort")
+                                    .takeIf(String::isNotBlank),
+                        )
+                    }
                 }
                 record("sending")
                 val input = JsonArray(listOf(obj("type" to s("text"), "text" to s(before.draft))))
-                rpc.call(
-                    if (before.activeTurn == null) "turn/start" else "turn/steer",
-                    obj(
-                        "threadId" to s(id),
-                        "input" to input,
-                        "clientUserMessageId" to s(operation),
-                        "expectedTurnId" to before.activeTurn?.let(::s),
-                    ),
-                )
+                if (before.activeTurn == null)
+                    rpc.call(
+                        "turn/start",
+                        turnStartParams(id, input, operation, before.newTaskOptions),
+                    )
+                else
+                    rpc.call(
+                        "turn/steer",
+                        turnSteerParams(id, input, operation, before.activeTurn),
+                    )
                 record("accepted")
                 local.remove("journal/$key")
                 local.remove("draft/$key")
@@ -586,7 +706,12 @@ constructor(
         if (event.str("method") == "connection/lost") {
             requests.clear()
             _state.update {
-                it.copy(ready = false, connection = "Disconnected", decisions = emptyList())
+                it.copy(
+                    ready = false,
+                    connection = "Disconnected",
+                    decisions = emptyList(),
+                    modelCatalogStatus = ModelCatalogStatus.Unavailable,
+                )
             }
             if (foreground && connectionJob?.isActive != true) {
                 connect()
@@ -622,6 +747,23 @@ constructor(
         }
         if (p.str("threadId") != _state.value.thread) return
         timeline.event(method, p)
+        if (method == "thread/settings/updated") {
+            val settings = p.map("threadSettings")
+            _state.update {
+                val threadModel = settings.str("model").takeIf(String::isNotBlank)
+                val reconciled =
+                    reconcileModelOptions(it.newTaskOptions, it.models, threadModel)
+                it.copy(
+                    threadModel = threadModel,
+                    threadReasoningEffort = settings.str("effort").takeIf(String::isNotBlank),
+                    newTaskOptions = reconciled.options,
+                    modelCatalogMessage =
+                        if (reconciled.removedUnsupportedChoice)
+                            "The server no longer supports the selected reasoning effort. The unsupported override was cleared."
+                        else it.modelCatalogMessage,
+                )
+            }
+        }
         if (method == "thread/status/changed")
             _state.update {
                 it.copy(attention = p.map("status")["activeFlags"].toString().contains("waiting"))
