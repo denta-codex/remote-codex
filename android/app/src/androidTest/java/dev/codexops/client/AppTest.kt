@@ -16,6 +16,7 @@ import dev.codexops.core.*
 import java.io.File
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
@@ -52,6 +53,9 @@ class AppTest {
     @Volatile private var createdTaskCwd = ""
     @Volatile private var createdTaskProject = ""
     @Volatile private var threadStartParams: JsonObject? = null
+    @Volatile private var askPlanQuestion = false
+    private val turnRequests = CopyOnWriteArrayList<JsonObject>()
+    private val userInputResponses = CopyOnWriteArrayList<JsonObject>()
     private val app
         get() = ApplicationProvider.getApplicationContext<Application>()
     private val demo by lazy {
@@ -83,10 +87,33 @@ class AppTest {
                                         (params["command"] as? JsonArray)
                                             ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
                                             ?: emptyList()
-                                    if (method.isEmpty() || method == "initialized") return
+                                    if (method.isEmpty()) {
+                                        if (m["id"] == JsonPrimitive(88))
+                                            userInputResponses.add(m.map("result"))
+                                        return
+                                    }
+                                    if (method == "initialized") return
                                     val result =
                                         when (method) {
                                             "initialize" -> obj("codexHome" to s("/fixture"))
+                                            "collaborationMode/list" ->
+                                                obj(
+                                                    "data" to
+                                                        JsonArray(
+                                                            listOf(
+                                                                obj(
+                                                                    "name" to s("Default"),
+                                                                    "mode" to s("default"),
+                                                                    "reasoning_effort" to s("medium"),
+                                                                ),
+                                                                obj(
+                                                                    "name" to s("Plan"),
+                                                                    "mode" to s("plan"),
+                                                                    "reasoning_effort" to s("high"),
+                                                                ),
+                                                            )
+                                                        )
+                                                )
                                             "project/list" ->
                                                 if (params.str("cursor").isEmpty())
                                                     obj(
@@ -273,7 +300,10 @@ class AppTest {
                                             "thread/turns/list" -> history()
                                             "turn/start",
                                             "turn/steer" -> {
-                                                if (method == "turn/start") lastTurnStartParams = params
+                                                if (method == "turn/start") {
+                                                    lastTurnStartParams = params
+                                                    turnRequests.add(params)
+                                                }
                                                 sent.incrementAndGet()
                                                 acceptedInput =
                                                     params["input"] as? JsonArray
@@ -330,26 +360,94 @@ class AppTest {
                                                     ),
                                                 )
                                             }
-                                        emit(
-                                            ws,
-                                            "item/agentMessage/delta",
-                                            obj(
-                                                "turnId" to s("turn-test"),
-                                                "itemId" to s("a"),
-                                                "delta" to s("Hello from Grace"),
-                                            ),
-                                        )
-                                        emit(
-                                            ws,
-                                            "turn/completed",
-                                            obj(
-                                                "turn" to
-                                                    obj(
-                                                        "id" to s("turn-test"),
-                                                        "status" to s("completed"),
+                                        val planMode =
+                                            params.map("collaborationMode").str("mode") == "plan"
+                                        val waitingForAnswer = planMode && askPlanQuestion
+                                        if (waitingForAnswer) {
+                                            ws.send(
+                                                obj(
+                                                        "id" to JsonPrimitive(88),
+                                                        "method" to s("item/tool/requestUserInput"),
+                                                        "params" to
+                                                            obj(
+                                                                "threadId" to s("task-test"),
+                                                                "turnId" to s("turn-test"),
+                                                                "itemId" to s("question"),
+                                                                "isBlocking" to JsonPrimitive(true),
+                                                                "questions" to
+                                                                    JsonArray(
+                                                                        listOf(
+                                                                            obj(
+                                                                                "header" to s("Scope"),
+                                                                                "id" to s("scope"),
+                                                                                "question" to s("Where should the plan focus?"),
+                                                                                "options" to
+                                                                                    JsonArray(
+                                                                                        listOf(
+                                                                                            obj(
+                                                                                                "label" to s("Current workspace"),
+                                                                                                "description" to s("Keep the proposal within this checkout."),
+                                                                                            ),
+                                                                                            obj(
+                                                                                                "label" to s("Broader change"),
+                                                                                                "description" to s("Include related projects."),
+                                                                                            ),
+                                                                                        )
+                                                                                    ),
+                                                                            )
+                                                                        )
+                                                                    ),
+                                                            ),
                                                     )
-                                            ),
-                                        )
+                                                    .toString()
+                                            )
+                                        } else if (planMode) {
+                                            emit(
+                                                ws,
+                                                "item/plan/delta",
+                                                obj(
+                                                    "turnId" to s("turn-test"),
+                                                    "itemId" to s("p"),
+                                                    "delta" to s("Draft plan"),
+                                                ),
+                                            )
+                                            emit(
+                                                ws,
+                                                "item/completed",
+                                                obj(
+                                                    "turnId" to s("turn-test"),
+                                                    "item" to
+                                                        obj(
+                                                            "id" to s("p"),
+                                                            "type" to s("plan"),
+                                                            "text" to
+                                                                s("1. Inspect the code\n2. Make the change"),
+                                                        ),
+                                                ),
+                                            )
+                                        } else {
+                                            emit(
+                                                ws,
+                                                "item/agentMessage/delta",
+                                                obj(
+                                                    "turnId" to s("turn-test"),
+                                                    "itemId" to s("a"),
+                                                    "delta" to s("Hello from Grace"),
+                                                ),
+                                            )
+                                        }
+                                        if (!waitingForAnswer)
+                                            emit(
+                                                ws,
+                                                "turn/completed",
+                                                obj(
+                                                    "turn" to
+                                                        obj(
+                                                            "id" to s("turn-test"),
+                                                            "status" to s("completed"),
+                                                        )
+                                                ),
+                                            )
                                     }
                                 }
                             }
@@ -1113,5 +1211,85 @@ class AppTest {
         }
         assertEquals("An uncertain task mutation must not be replayed", 1, threadStarts.get())
         assertEquals("task-test", model.state.value.thread)
+    }
+
+    @Test
+    fun advertisedPlanModeRendersFullscreenPlanAndImplementsWithDefaultMode() {
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil {
+            model.state.value.page == "chat" && model.state.value.collaborationModes.size == 2
+        }
+        compose.onNodeWithTag("mode-selector").assertTextContains("Server default").performClick()
+        compose.onNodeWithTag("mode-plan").performClick()
+        compose.onNodeWithTag("mode-selector").assertTextContains("Plan")
+        compose.onNodeWithTag("composer").performTextInput("Propose a safe change")
+        compose.onNodeWithTag("send").performClick()
+
+        compose.waitUntil(10000) {
+            model.state.value.entries.any { it.kind == "plan" && it.completed }
+        }
+        compose.onNodeWithTag("plan-card").assertIsDisplayed()
+        assertEquals(
+            "1. Inspect the code\n2. Make the change",
+            model.state.value.entries.single { it.kind == "plan" }.text,
+        )
+        compose.onNodeWithTag("implement-plan").assertIsDisplayed()
+        demoPause(2200)
+        compose.onNodeWithTag("open-plan-fullscreen").performClick()
+        compose.onNodeWithTag("plan-fullscreen").assertIsDisplayed()
+        compose.onNodeWithTag("implement-plan-fullscreen").assertIsDisplayed()
+        demoPause(3500)
+
+        val planRequest = turnRequests.single()
+        assertFalse(threadStartParams!!.containsKey("collaborationMode"))
+        assertEquals("plan", planRequest.map("collaborationMode").str("mode"))
+        assertEquals(
+            "gpt-fixture",
+            planRequest.map("collaborationMode").map("settings").str("model"),
+        )
+        assertEquals(
+            "high",
+            planRequest.map("collaborationMode").map("settings").str("reasoning_effort"),
+        )
+
+        compose.onNodeWithTag("implement-plan-fullscreen").performClick()
+        compose.onNodeWithTag("plan-fullscreen").assertDoesNotExist()
+        compose.waitUntil(10000) { turnRequests.size == 2 }
+        demoPause(1800)
+        val implementRequest = turnRequests.last()
+        assertEquals(
+            "Implement the proposed plan.",
+            implementRequest.list("input").single().str("text"),
+        )
+        assertEquals("default", implementRequest.map("collaborationMode").str("mode"))
+        assertEquals(
+            "medium",
+            implementRequest.map("collaborationMode").map("settings").str("reasoning_effort"),
+        )
+    }
+
+    @Test
+    fun planModeQuestionCanBeAnswered() {
+        askPlanQuestion = true
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil {
+            model.state.value.page == "chat" && model.state.value.collaborationModes.size == 2
+        }
+        compose.onNodeWithTag("mode-selector").performClick()
+        compose.onNodeWithTag("mode-plan").performClick()
+        compose.onNodeWithTag("composer").performTextInput("Plan after clarifying the scope")
+        compose.onNodeWithTag("send").performClick()
+
+        compose.waitUntil(10000) { model.state.value.decisions.size == 1 }
+        compose.onNodeWithText("Where should the plan focus?").assertIsDisplayed()
+        compose.onNodeWithText("Current workspace").performClick()
+        compose.onNodeWithText("Submit answers").performClick()
+
+        compose.waitUntil(10000) { userInputResponses.size == 1 }
+        val answerValues =
+            userInputResponses.single().map("answers").map("scope")["answers"] as JsonArray
+        assertEquals("Current workspace", answerValues.single().jsonPrimitive.content)
+        assertTrue(model.state.value.decisions.isEmpty())
+        assertEquals("plan", turnRequests.single().map("collaborationMode").str("mode"))
     }
 }

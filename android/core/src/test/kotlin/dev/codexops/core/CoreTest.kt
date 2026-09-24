@@ -229,6 +229,35 @@ class CoreTest {
     }
 
     @Test
+    fun completedPlanReplacesItsNonAuthoritativeStream() {
+        val t = Timeline()
+        t.event(
+            "item/plan/delta",
+            obj("turnId" to s("t"), "itemId" to s("p"), "delta" to s("Draft plan")),
+        )
+        assertFalse(t.values().single().completed)
+        t.event(
+            "item/completed",
+            obj(
+                "turnId" to s("t"),
+                "item" to
+                    obj(
+                        "id" to s("p"),
+                        "type" to s("plan"),
+                        "text" to s("1. Inspect\n2. Implement"),
+                    ),
+            ),
+        )
+        assertEquals("1. Inspect\n2. Implement", t.values().single().text)
+        assertTrue(t.values().single().completed)
+        t.event(
+            "item/plan/delta",
+            obj("turnId" to s("t"), "itemId" to s("p"), "delta" to s(" stale")),
+        )
+        assertEquals("1. Inspect\n2. Implement", t.values().single().text)
+    }
+
+    @Test
     fun permissionsAreTurnScopedAndDeclineGrantsNothing() {
         val d =
             Decision(

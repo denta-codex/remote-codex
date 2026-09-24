@@ -95,6 +95,9 @@ constructor(
                         it.copy(
                             connection = "Connecting…",
                             ready = false,
+                            collaborationModes = emptyList(),
+                            newTaskOptions =
+                                it.newTaskOptions.copy(collaborationMode = null),
                             error = null,
                             configured = true,
                             modelCatalogStatus = ModelCatalogStatus.Loading,
@@ -110,8 +113,22 @@ constructor(
                             "Unexpected Codex account"
                         }
                         codexHome = init.str("codexHome")
+                        val modes =
+                            try {
+                                CollaborationModePreset.parse(
+                                    rpc.call("collaborationMode/list", obj())
+                                )
+                            } catch (_: RpcRejected) {
+                                // This experimental method is the capability check. A server that
+                                // rejects it gets no mode UI or client-simulated fallback.
+                                emptyList()
+                            }
                         _state.update {
-                            it.copy(connection = "Connected to ${host.displayName}", ready = true)
+                            it.copy(
+                                connection = "Connected to ${host.displayName}",
+                                ready = true,
+                                collaborationModes = modes,
+                            )
                         }
                         refreshProjects()
                         viewModelScope.launch { refreshModelCatalog() }
@@ -135,6 +152,7 @@ constructor(
                         _state.update {
                             it.copy(
                                 ready = false,
+                                collaborationModes = emptyList(),
                                 connection = "Disconnected",
                                 modelCatalogStatus = ModelCatalogStatus.Unavailable,
                                 error = when {
@@ -847,6 +865,28 @@ constructor(
 
     override fun send() {
         val before = _state.value
+        submit(before.draft, before.newTaskOptions.collaborationMode, clearDraft = true)
+    }
+
+    override fun implementPlan(planKey: String) {
+        val before = _state.value
+        val plan = before.entries.lastOrNull { it.kind != "reasoning" }
+        if (
+            plan?.key != planKey ||
+                plan.kind != "plan" ||
+                !plan.completed ||
+                before.activeTurn != null ||
+                before.collaborationModes.none {
+                    it.mode == "default" &&
+                        it.turnSetting(before.collaborationModel()) != null
+                }
+        )
+            return
+        submit("Implement the proposed plan.", "default", clearDraft = false)
+    }
+
+    private fun submit(text: String, selectedMode: String?, clearDraft: Boolean) {
+        val before = _state.value
         val hasTurnStartOverrides =
             before.activeTurn == null &&
                 (before.newTaskOptions.model != null ||
@@ -854,13 +894,19 @@ constructor(
         if (
             !before.ready ||
                 before.busy ||
-                (before.draft.isBlank() && before.attachments.isEmpty()) ||
+                (text.isBlank() && before.attachments.isEmpty()) ||
                 before.journal != null ||
                 before.thread == null && !before.newTaskOptions.hasExecutionDestination() ||
                 hasTurnStartOverrides &&
                     before.modelCatalogStatus != ModelCatalogStatus.Ready
         )
             return
+        val mode =
+            selectedMode?.let { selection ->
+                before.collaborationModes.singleOrNull { it.mode == selection } ?: return
+            }
+        val modeSetting =
+            mode?.turnSetting(before.collaborationModel()) ?: if (mode == null) null else return
         val operation = UUID.randomUUID().toString()
         val plan =
             if (before.thread == null)
@@ -877,7 +923,8 @@ constructor(
             val journal =
                 obj(
                     "operation" to s(operation),
-                    "text" to s(before.draft),
+                    "text" to s(text),
+                    "clearDraft" to JsonPrimitive(clearDraft),
                     "stage" to s(if (plan == null) "taskReady" else "validatingWorkspace"),
                     "cwd" to plan?.workingDirectory?.let(::s),
                     "sourceCwd" to plan?.sourceDirectory?.let(::s),
@@ -889,6 +936,8 @@ constructor(
                     "threadId" to before.thread?.let(::s),
                     "expectedTurnId" to before.activeTurn?.let(::s),
                     "attachments" to JsonArray(before.attachments.map { it.json() }),
+                    "collaborationMode" to mode?.mode?.let(::s),
+                    "collaborationModeSetting" to modeSetting,
                 )
             local.put("journal/$originalKey", journal.toString())
             _state.update { it.copy(journal = journal) }
@@ -1077,6 +1126,7 @@ constructor(
                                 reasoningEffort =
                                     journal.str("reasoningEffort").takeIf(String::isNotBlank),
                             ),
+                            journal["collaborationModeSetting"] as? JsonObject,
                         ),
                     )
                 else
@@ -1086,15 +1136,25 @@ constructor(
                     )
                 record("accepted")
                 local.remove("journal/$key")
-                local.remove("draft/$key")
-                local.remove("attachments/$key")
-                attachments.forEach(attachmentStore::delete)
+                val clearDraft =
+                    (journal["clearDraft"] as? JsonPrimitive)?.booleanOrNull != false
+                if (clearDraft) {
+                    local.remove("draft/$key")
+                    local.remove("attachments/$key")
+                    attachments.forEach(attachmentStore::delete)
+                }
                 _state.update {
                     it.copy(
-                        draft = "",
-                        attachments = emptyList(),
+                        draft = if (clearDraft) "" else it.draft,
+                        attachments = if (clearDraft) emptyList() else it.attachments,
                         journal = null,
                         error = null,
+                        newTaskOptions =
+                            if (!clearDraft && journal.str("collaborationMode").isNotEmpty())
+                                it.newTaskOptions.copy(
+                                    collaborationMode = journal.str("collaborationMode")
+                                )
+                            else it.newTaskOptions,
                     )
                 }
             }
@@ -1565,6 +1625,9 @@ constructor(
             reasoningEffort =
                 journal.str("reasoningEffort").takeIf(String::isNotBlank)
                     ?: saved.reasoningEffort,
+            collaborationMode =
+                journal.str("collaborationMode").takeIf(String::isNotBlank)
+                    ?: saved.collaborationMode,
         )
     }
 

@@ -82,6 +82,9 @@ data class Entry(val turn: String, val raw: JsonObject) {
                 else -> emptyList()
             }
 
+    val completed
+        get() = (raw["_completed"] as? JsonPrimitive)?.booleanOrNull == true
+
     val text: String
         get() =
             when (kind) {
@@ -133,7 +136,12 @@ class Timeline {
             if (turn.str("status") == "inProgress") activeTurn = turn.str("id")
             else if (activeTurn == turn.str("id")) activeTurn = null
             turn.list("items").forEach { item ->
-                val e = Entry(turn.str("id"), item)
+                // History items are authoritative completed snapshots.
+                val e =
+                    Entry(
+                        turn.str("id"),
+                        JsonObject(item + ("_completed" to JsonPrimitive(true))),
+                    )
                 page[e.key] = e
             }
         }
@@ -158,6 +166,7 @@ class Timeline {
         live.values().forEach { e ->
             val old = entries[e.key]
             if (old == null || e.key in completed) entries[e.key] = e
+            else if (old.kind == "plan" && old.completed) Unit
             else {
                 val merged = old.raw.toMutableMap()
                 e.raw.forEach { (k, v) ->
@@ -196,7 +205,12 @@ class Timeline {
             "turn/completed" -> if (activeTurn == p.map("turn").str("id")) activeTurn = null
             "item/started",
             "item/completed" -> {
-                val e = Entry(turn, p.map("item"))
+                val item =
+                    JsonObject(
+                        p.map("item") +
+                            ("_completed" to JsonPrimitive(method == "item/completed"))
+                    )
+                val e = Entry(turn, item)
                 entries[e.key] = e
             }
             "item/agentMessage/delta",
@@ -208,6 +222,8 @@ class Timeline {
                     if (field == "aggregatedOutput") "commandExecution"
                     else if (method.contains("/plan/")) "plan" else "agentMessage"
                 val old = entries[key]?.raw ?: obj("id" to s(p.str("itemId")), "type" to s(kind))
+                if (kind == "plan" && (old["_completed"] as? JsonPrimitive)?.booleanOrNull == true)
+                    return
                 entries[key] =
                     Entry(
                         turn,

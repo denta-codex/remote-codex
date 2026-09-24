@@ -4,6 +4,10 @@ import android.net.Uri
 import dev.codexops.core.Decision
 import dev.codexops.core.Entry
 import dev.codexops.core.MediaRef
+import dev.codexops.core.list
+import dev.codexops.core.obj
+import dev.codexops.core.s
+import dev.codexops.core.str
 import kotlinx.serialization.json.JsonObject
 
 data class HostIdentity(
@@ -25,6 +29,48 @@ enum class ExecutionTarget {
     Projectless,
     CurrentWorkspace,
     NewWorktree,
+}
+
+/** A usable preset advertised by the stock collaborationMode/list contract. */
+data class CollaborationModePreset(
+    val mode: String,
+    val name: String,
+    val model: String? = null,
+    val reasoningEffort: String? = null,
+) {
+    fun turnSetting(fallbackModel: String?): JsonObject? {
+        val effectiveModel = model ?: fallbackModel ?: return null
+        return obj(
+            "mode" to s(mode),
+            "settings" to
+                obj(
+                    "model" to s(effectiveModel),
+                    "reasoning_effort" to reasoningEffort?.let(::s),
+                ),
+        )
+    }
+
+    companion object {
+        fun parse(response: JsonObject): List<CollaborationModePreset> =
+            response
+                .list("data")
+                .mapNotNull { row ->
+                    val mode = row.str("mode")
+                    val model = row.str("model")
+                    if (mode !in setOf("default", "plan")) null
+                    else
+                        CollaborationModePreset(
+                            mode = mode,
+                            name =
+                                row.str("name").ifBlank {
+                                    mode.replaceFirstChar { it.uppercase() }
+                                },
+                            model = model.ifBlank { null },
+                            reasoningEffort = row.str("reasoning_effort").ifBlank { null },
+                        )
+                }
+                .distinctBy { it.mode }
+    }
 }
 
 data class CodexProject(
@@ -80,6 +126,7 @@ data class ScreenState(
     val draft: String = "",
     val attachments: List<DraftAttachment> = emptyList(),
     val newTaskOptions: NewTaskOptions = NewTaskOptions(),
+    val collaborationModes: List<CollaborationModePreset> = emptyList(),
     val models: List<ServerModelOption> = emptyList(),
     val modelCatalogStatus: ModelCatalogStatus = ModelCatalogStatus.Unavailable,
     val modelCatalogMessage: String? = null,
@@ -93,6 +140,9 @@ data class ScreenState(
     val attention: Boolean = false,
     val update: UpdateState = UpdateState(),
 )
+
+fun ScreenState.collaborationModel(): String? =
+    newTaskOptions.model ?: threadModel ?: models.firstOrNull(ServerModelOption::isDefault)?.id
 
 interface AppNavigation {
     fun connect()
@@ -148,6 +198,8 @@ interface ConversationActions {
     suspend fun loadMedia(media: MediaRef): ByteArray
 
     fun send()
+
+    fun implementPlan(planKey: String)
 
     fun recoverPreparation()
 

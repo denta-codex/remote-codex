@@ -103,6 +103,7 @@ internal fun turnStartParams(
     input: JsonArray,
     operation: String,
     options: NewTaskOptions,
+    collaborationMode: JsonObject? = null,
 ) =
     obj(
         "threadId" to s(threadId),
@@ -110,6 +111,7 @@ internal fun turnStartParams(
         "clientUserMessageId" to s(operation),
         "model" to options.model?.let(::s),
         "effort" to options.reasoningEffort?.let(::s),
+        "collaborationMode" to collaborationMode,
     )
 
 internal fun turnSteerParams(

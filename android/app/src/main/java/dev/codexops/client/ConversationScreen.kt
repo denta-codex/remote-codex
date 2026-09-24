@@ -6,8 +6,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -19,6 +21,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.mikepenz.markdown.m3.Markdown
 import dev.codexops.core.*
 import kotlinx.serialization.json.JsonArray
@@ -30,6 +34,15 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
     val scroll = rememberLazyListState()
     var followLatest by remember { mutableStateOf(true) }
     val messages = st.entries.filter { it.kind != "reasoning" }
+    val actionablePlan =
+        messages.lastOrNull()?.takeIf {
+            it.kind == "plan" &&
+                it.completed &&
+                st.collaborationModes.any { preset ->
+                    preset.mode == "default" &&
+                        preset.turnSetting(st.collaborationModel()) != null
+                }
+        }
     // Reverse layout anchors new history at the latest message, even when that
     // message is taller than the viewport. Stable keys preserve reading position.
     LaunchedEffect(scroll) {
@@ -125,7 +138,19 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
         items(st.decisions.reversed(), key = { it.key }) { decision ->
             DecisionCard(decision, st, actions)
         }
-        items(messages.asReversed(), key = { it.key }) { entry -> Message(entry, actions) }
+        items(messages.asReversed(), key = { it.key }) { entry ->
+            Message(
+                entry = entry,
+                actions = actions,
+                canImplement =
+                    entry.key == actionablePlan?.key &&
+                        st.ready &&
+                        !st.busy &&
+                        st.activeTurn == null &&
+                        st.journal == null,
+                onImplement = { actions.implementPlan(entry.key) },
+            )
+        }
         if (st.historyCursor != null)
             item(key = "history") {
                 TextButton(onClick = actions::older, modifier = Modifier.fillMaxWidth()) {
@@ -190,8 +215,14 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
 }
 
 @Composable
-private fun Message(entry: Entry, actions: ConversationActions) {
+private fun Message(
+    entry: Entry,
+    actions: ConversationActions,
+    canImplement: Boolean,
+    onImplement: () -> Unit,
+) {
     var expanded by rememberSaveable(entry.key) { mutableStateOf(false) }
+    var planFullscreen by rememberSaveable(entry.key) { mutableStateOf(false) }
     if (entry.kind == "userMessage")
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             Surface(
@@ -211,12 +242,56 @@ private fun Message(entry: Entry, actions: ConversationActions) {
                 }
             }
         }
-    else if (entry.kind == "agentMessage" || entry.kind == "plan")
+    else if (entry.kind == "agentMessage")
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             MediaGallery(entry.media, actions)
             if (entry.text.isNotBlank())
                 SelectionContainer { Markdown(entry.text.take(100000)) }
         }
+    else if (entry.kind == "plan") {
+        Card(
+            modifier = Modifier.fillMaxWidth().testTag("plan-card"),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        ) {
+            Column(
+                Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                MediaGallery(entry.media, actions)
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Plan", Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                    TextButton(
+                        onClick = { planFullscreen = true },
+                        modifier = Modifier.testTag("open-plan-fullscreen"),
+                    ) {
+                        Text("Full screen")
+                    }
+                }
+                SelectionContainer { Markdown(entry.text.take(100000)) }
+                if (canImplement)
+                    Button(
+                        onClick = onImplement,
+                        modifier = Modifier.testTag("implement-plan"),
+                    ) {
+                        Text("Implement")
+                }
+            }
+        }
+        if (planFullscreen)
+            FullscreenPlan(
+                text = entry.text,
+                canImplement = canImplement,
+                onDismiss = { planFullscreen = false },
+                onImplement = {
+                    planFullscreen = false
+                    onImplement()
+                },
+            )
+    }
     else if (entry.kind == "imageView" || entry.kind == "imageGeneration")
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             MediaGallery(entry.media, actions)
@@ -267,6 +342,62 @@ private fun Message(entry: Entry, actions: ConversationActions) {
                     }
             }
         }
+}
+
+@Composable
+private fun FullscreenPlan(
+    text: String,
+    canImplement: Boolean,
+    onDismiss: () -> Unit,
+    onImplement: () -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize().testTag("plan-fullscreen"),
+            color = MaterialTheme.colorScheme.background,
+        ) {
+            Column(Modifier.fillMaxSize().systemBarsPadding()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Plan",
+                        Modifier.weight(1f).padding(start = 8.dp),
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    TextButton(onClick = onDismiss, modifier = Modifier.testTag("close-plan-fullscreen")) {
+                        Text("Close")
+                    }
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Box(
+                    Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
+                        .padding(horizontal = 24.dp, vertical = 20.dp),
+                    contentAlignment = Alignment.TopCenter,
+                ) {
+                    Column(Modifier.fillMaxWidth().widthIn(max = 760.dp)) {
+                        SelectionContainer { Markdown(text.take(100000)) }
+                    }
+                }
+                if (canImplement) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Button(
+                        onClick = onImplement,
+                        modifier =
+                            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp)
+                                .testTag("implement-plan-fullscreen"),
+                    ) {
+                        Text("Implement")
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
