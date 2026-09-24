@@ -54,6 +54,7 @@ enum class UpdateStage {
     Installing,
     Error,
 }
+
 data class UpdateState(
     val stage: UpdateStage = UpdateStage.Idle,
     val manifest: UpdateManifest? = null,
