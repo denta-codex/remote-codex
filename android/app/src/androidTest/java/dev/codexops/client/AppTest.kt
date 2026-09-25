@@ -934,7 +934,7 @@ class AppTest {
             model.state.value.thread == "task-test" && !model.state.value.busy
         }
         remoteFiles["/fixture/remote-codex/result.txt"] =
-            Base64.getEncoder().encodeToString("hello from the remote file".toByteArray())
+            Base64.getEncoder().encodeToString("hello from remote one".toByteArray())
 
         compose.runOnUiThread {
             model.inspectFile(FileRef("result", "result.txt", "result.txt"))
@@ -944,11 +944,21 @@ class AppTest {
         }
 
         assertEquals(FilePreviewKind.TEXT, model.state.value.filePreview?.kind)
-        assertEquals("hello from the remote file", model.state.value.filePreview?.text)
+        assertEquals("hello from remote one", model.state.value.filePreview?.text)
         compose.onNodeWithTag("file-preview").assertIsDisplayed()
-        compose.onNodeWithText("hello from the remote file").assertIsDisplayed()
+        compose.onNodeWithText("hello from remote one").assertIsDisplayed()
         compose.onNodeWithText("Close").performClick()
         compose.onNodeWithTag("file-preview").assertDoesNotExist()
+
+        remoteFiles["/fixture/remote-codex/result.txt"] =
+            Base64.getEncoder().encodeToString("hello from remote two".toByteArray())
+        compose.runOnUiThread {
+            model.inspectFile(FileRef("result", "result.txt", "result.txt"))
+        }
+        compose.waitUntil(10000) {
+            model.state.value.filePreview?.let { !it.loading } == true
+        }
+        compose.onNodeWithText("hello from remote two").assertIsDisplayed()
     }
 
     @Test

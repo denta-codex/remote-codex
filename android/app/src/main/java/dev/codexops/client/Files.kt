@@ -80,17 +80,28 @@ class RemoteFileRepository(private val context: Context) {
                 reference.displayName.substringAfterLast('.', "")
                     .replace(Regex("[^A-Za-z0-9]+"), "")
                     .take(12)
-            val target = File(root, digest(reference.path) + extension.takeIf { it.isNotBlank() }?.let { ".$it" }.orEmpty())
-            val bytes =
-                if (target.exists()) target.readBytes()
-                else {
-                    val loaded = hostReader(reference.path)
-                    AttachmentPolicy.validateSize(dev.codexops.core.AttachmentKind.FILE, loaded.size.toLong())
-                    val part = File(root, ".${target.name}.part")
-                    part.writeBytes(loaded)
-                    check(part.renameTo(target)) { "The remote file could not be cached." }
-                    loaded
+            val bytes = hostReader(reference.path)
+            AttachmentPolicy.validateSize(
+                dev.codexops.core.AttachmentKind.FILE,
+                bytes.size.toLong(),
+            )
+            val target =
+                File(
+                    root,
+                    digest(reference.path, bytes) +
+                        extension.takeIf { it.isNotBlank() }?.let { ".$it" }.orEmpty(),
+                )
+            if (!target.exists()) {
+                val part = File.createTempFile(".remote-file-", ".part", root)
+                try {
+                    part.writeBytes(bytes)
+                    check(part.renameTo(target) || target.exists()) {
+                        "The remote file could not be cached."
+                    }
+                } finally {
+                    part.delete()
                 }
+            }
             target.setLastModified(System.currentTimeMillis())
             trim(target)
 
@@ -171,10 +182,13 @@ class RemoteFileRepository(private val context: Context) {
         }
     }
 
-    private fun digest(value: String): String =
-        MessageDigest.getInstance("SHA-256")
-            .digest(value.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
+    private fun digest(path: String, bytes: ByteArray): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        digest.update(path.toByteArray(Charsets.UTF_8))
+        digest.update(0)
+        digest.update(bytes)
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
 
     private fun JsonObject.string(key: String) =
         (this[key] as? JsonPrimitive)?.content.orEmpty()
