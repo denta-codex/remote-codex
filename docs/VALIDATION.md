@@ -1,5 +1,23 @@
 # Validation
 
+## September 25, 2026 — compact cover-screen adaptation
+
+- Added window-based compact-height and nearly-square classification, then adapted
+  the task browser, settings, empty and active conversations, composer, attachment
+  controls, plan and question flows, and file/image overlays for the Razr Ultra
+  2025 cover display's approximately 411 × 485 dp usable window.
+- Added a documented `scripts/emulator-test --cover` mode. Its five focused tests
+  passed on the managed Android 16 emulator at 1080 × 1272 pixels and 420 dpi,
+  covering every destination plus attachments, file preview, plans, and decisions.
+- The normal-phone full run completed 26 tests: 23 passed, two expected tests
+  skipped, and the long-history test exposed a synchronous lazy-list remeasure race
+  while Markdown was laying out. After replacing that forced scroll with a deferred
+  list-anchor request, the affected normal-phone test passed independently.
+- `scripts/check` passed against the final code, including Rust and Kotlin tests,
+  Android unit tests, debug and instrumentation APK assembly, and lint.
+- No release build, publication, live deployment, Taildrop delivery, or physical-
+  phone installation was performed.
+
 ## September 24, 2026 — Android file support release
 
 - Advanced Android to 0.2.1 / code 11 for generic file attachments and file

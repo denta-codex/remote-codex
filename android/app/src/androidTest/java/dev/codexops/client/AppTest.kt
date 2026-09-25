@@ -4,6 +4,7 @@ import android.app.Application
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.SystemClock
+import android.os.ParcelFileDescriptor
 import androidx.activity.compose.setContent
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -62,6 +63,17 @@ class AppTest {
     private val demo by lazy {
         InstrumentationRegistry.getArguments().getString("demo") == "true"
     }
+    private val coverScreen by lazy {
+        InstrumentationRegistry.getArguments().getString("coverScreen") == "true"
+    }
+
+    private fun shell(command: String) {
+        ParcelFileDescriptor.AutoCloseInputStream(
+                InstrumentationRegistry.getInstrumentation().uiAutomation
+                    .executeShellCommand(command)
+            )
+            .use { it.readBytes() }
+    }
 
     private fun demoPause(milliseconds: Long = 1500) {
         if (demo) SystemClock.sleep(milliseconds)
@@ -69,6 +81,13 @@ class AppTest {
 
     @Before
     fun setup() {
+        if (coverScreen) {
+            shell("wm size 1080x1272")
+            shell("wm density 420")
+            SystemClock.sleep(500)
+            compose.activityRule.scenario.recreate()
+            compose.waitForIdle()
+        }
         // The rule starts MainActivity with its production model before this fixture is installed.
         // Dispose that model so a credential left by another test cannot keep reconnecting behind
         // the mock-backed UI and starve timing-sensitive instrumentation work.
@@ -781,6 +800,55 @@ class AppTest {
         }
         runBlocking { LocalStore(app).saveToken("") }
         server.shutdown()
+        if (coverScreen) {
+            shell("wm size reset")
+            shell("wm density reset")
+        }
+    }
+
+    @Test
+    fun coverScreenDestinationsRemainReachable() {
+        Assume.assumeTrue("Run this test with scripts/emulator-test --cover", coverScreen)
+        val configuration = compose.activity.resources.configuration
+        assertTrue(configuration.screenWidthDp in 400..420)
+        assertTrue(configuration.screenHeightDp in 470..500)
+
+        compose.onNodeWithContentDescription("New chat").assertIsDisplayed()
+        compose.onNodeWithText("Fixture task").assertIsDisplayed()
+        demoPause(2000)
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.onNodeWithText("Scan setup QR").assertIsDisplayed()
+        compose.onNodeWithText("Choose default assistant").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Check for updates").performScrollTo().assertIsDisplayed()
+        demoPause(2500)
+
+        compose.onNodeWithContentDescription("Tasks").performClick()
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
+        compose.onNodeWithText("What shall we work on?").assertIsDisplayed()
+        compose.onNodeWithTag("composer").assertIsDisplayed()
+        compose.onNodeWithTag("model-selector").assertIsDisplayed()
+        compose.onNodeWithTag("reasoning-selector").assertIsDisplayed()
+        demoPause(2500)
+        compose.onNodeWithTag("add-menu").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Photos").assertIsDisplayed()
+        compose.onNodeWithText("Files").assertIsDisplayed()
+        compose.onNodeWithText("Camera").assertIsDisplayed()
+        demoPause(2500)
+
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) {
+            model.state.value.thread == "task-test" && !model.state.value.busy
+        }
+        val density = compose.activity.resources.displayMetrics.density
+        val timelineHeight =
+            compose.onNodeWithTag("timeline").fetchSemanticsNode().boundsInRoot.height / density
+        val composerHeight =
+            compose.onNodeWithTag("composer-actions").fetchSemanticsNode().boundsInRoot.height / density
+        assertTrue("Conversation timeline is only $timelineHeight dp high", timelineHeight >= 100f)
+        assertTrue("Composer actions are $composerHeight dp high", composerHeight <= 56f)
+        compose.onNodeWithTag("send").assertIsDisplayed()
+        demoPause(3000)
     }
 
     @Test
@@ -1392,15 +1460,19 @@ class AppTest {
         compose.onNodeWithTag("send").performClick()
 
         compose.waitUntil(10000) { model.state.value.decisions.size == 1 }
-        compose.onNodeWithTag("composer-status")
-            .assertTextContains("Follow-up guides the active turn")
-        val actionHeight =
-            compose.onNodeWithTag("composer-actions").fetchSemanticsNode().boundsInRoot.height
-        val maxActionHeight = 64 * compose.activity.resources.displayMetrics.density
-        assertTrue(
-            "Active-turn composer actions expanded to $actionHeight px",
-            actionHeight <= maxActionHeight,
-        )
+        if (coverScreen) {
+            compose.onNodeWithTag("composer").assertDoesNotExist()
+        } else {
+            compose.onNodeWithTag("composer-status")
+                .assertTextContains("Follow-up guides the active turn")
+            val actionHeight =
+                compose.onNodeWithTag("composer-actions").fetchSemanticsNode().boundsInRoot.height
+            val maxActionHeight = 64 * compose.activity.resources.displayMetrics.density
+            assertTrue(
+                "Active-turn composer actions expanded to $actionHeight px",
+                actionHeight <= maxActionHeight,
+            )
+        }
         compose.onNodeWithText("Where should the plan focus?").assertIsDisplayed()
         compose.onNodeWithText("Current workspace").performClick()
         compose.onNodeWithText("Submit answers").performClick()

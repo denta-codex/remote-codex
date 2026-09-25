@@ -41,6 +41,8 @@ internal fun ConversationComposer(
         }
     var projectMenu by remember { mutableStateOf(false) }
     var modeMenu by remember { mutableStateOf(false) }
+    var addMenu by remember { mutableStateOf(false) }
+    val cover = LocalAppWindowClass.current.coverScreen
     val selectedProject =
         state.newTaskOptions.projectId?.let { id -> state.projects.firstOrNull { it.id == id } }
     val projectAvailable =
@@ -63,12 +65,15 @@ internal fun ConversationComposer(
             else -> "${state.host.displayName} defaults"
         }
     Surface(
-        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+        modifier = Modifier.padding(
+            horizontal = if (cover) 8.dp else 12.dp,
+            vertical = if (cover) 4.dp else 8.dp,
+        ),
         color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = RoundedCornerShape(24.dp),
+        shape = RoundedCornerShape(if (cover) 20.dp else 24.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
-        Column(Modifier.padding(8.dp)) {
+        Column(Modifier.padding(if (cover) 6.dp else 8.dp)) {
             if (state.attachments.isNotEmpty())
                 LazyRow(
                     Modifier.fillMaxWidth().padding(bottom = 8.dp),
@@ -147,8 +152,11 @@ internal fun ConversationComposer(
             if (state.thread == null && state.newTaskOptions.projectId != null) {
                 val options = state.newTaskOptions
                 Column(
-                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    Modifier.fillMaxWidth().padding(
+                        horizontal = if (cover) 8.dp else 12.dp,
+                        vertical = if (cover) 2.dp else 6.dp,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(if (cover) 2.dp else 6.dp),
                 ) {
                     Text(
                         "Workspace",
@@ -179,17 +187,18 @@ internal fun ConversationComposer(
                             enabled = !state.busy && state.journal == null,
                         )
                     }
-                    Text(
-                        when (options.executionTarget) {
-                            ExecutionTarget.NewWorktree ->
-                                "Starts from origin/HEAD in an isolated detached worktree."
-                            else ->
-                                options.workingDirectory?.let { "Uses ${File(it).name.ifBlank { it }} as-is." }
-                                    ?: "Choose a project workspace."
-                        },
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    if (!cover)
+                        Text(
+                            when (options.executionTarget) {
+                                ExecutionTarget.NewWorktree ->
+                                    "Starts from origin/HEAD in an isolated detached worktree."
+                                else ->
+                                    options.workingDirectory?.let { "Uses ${File(it).name.ifBlank { it }} as-is." }
+                                        ?: "Choose a project workspace."
+                            },
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                 }
             }
             TextField(
@@ -198,7 +207,7 @@ internal fun ConversationComposer(
                 Modifier.fillMaxWidth().testTag("composer"),
                 placeholder = { Text("Message ${state.host.displayName}…") },
                 minLines = 1,
-                maxLines = 6,
+                maxLines = if (cover) 3 else 6,
                 enabled = !state.busy,
                 colors =
                     TextFieldDefaults.colors(
@@ -210,47 +219,89 @@ internal fun ConversationComposer(
                         disabledIndicatorColor = Color.Transparent,
                     ),
             )
-            ModelControls(state, actions)
-            Text(
-                composerStatus,
-                Modifier.fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 2.dp)
-                    .testTag("composer-status"),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            ModelControls(state, actions, cover)
+            val showStatus =
+                !cover ||
+                    state.activeTurn != null ||
+                    !projectAvailable ||
+                    state.newTaskOptions.model != null ||
+                    state.newTaskOptions.reasoningEffort != null
+            if (showStatus)
+                Text(
+                    composerStatus,
+                    Modifier.fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 2.dp)
+                        .testTag("composer-status"),
+                    maxLines = if (cover) 1 else 2,
+                    overflow = TextOverflow.Ellipsis,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             Row(
-                Modifier.fillMaxWidth().padding(start = 12.dp).testTag("composer-actions"),
+                Modifier.fillMaxWidth().padding(start = if (cover) 4.dp else 12.dp)
+                    .testTag("composer-actions"),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                TextButton(
-                    onClick = {
-                        picker.launch(
-                            PickVisualMediaRequest(
-                                ActivityResultContracts.PickVisualMedia.ImageOnly
+                if (cover)
+                    Box {
+                        TextButton(
+                            onClick = { addMenu = true },
+                            enabled = !state.busy && state.journal == null,
+                            modifier = Modifier.testTag("add-menu"),
+                        ) { Text("Add") }
+                        DropdownMenu(addMenu, { addMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Photos") },
+                                onClick = {
+                                    addMenu = false
+                                    picker.launch(
+                                        PickVisualMediaRequest(
+                                            ActivityResultContracts.PickVisualMedia.ImageOnly
+                                        )
+                                    )
+                                },
+                                modifier = Modifier.testTag("add-photos"),
                             )
-                        )
-                    },
-                    enabled = !state.busy && state.journal == null,
-                    modifier = Modifier.testTag("add-photos"),
-                ) {
-                    Text("Photos")
-                }
-                TextButton(
-                    onClick = { filePicker.launch(arrayOf("*/*")) },
-                    enabled = !state.busy && state.journal == null,
-                    modifier = Modifier.testTag("add-files"),
-                ) {
-                    Text("Files")
-                }
-                TextButton(
-                    onClick = { actions.prepareCamera()?.let(camera::launch) },
-                    enabled = !state.busy && state.journal == null,
-                    modifier = Modifier.testTag("add-camera"),
-                ) {
-                    Text("Camera")
+                            DropdownMenuItem(
+                                text = { Text("Files") },
+                                onClick = {
+                                    addMenu = false
+                                    filePicker.launch(arrayOf("*/*"))
+                                },
+                                modifier = Modifier.testTag("add-files"),
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Camera") },
+                                onClick = {
+                                    addMenu = false
+                                    actions.prepareCamera()?.let(camera::launch)
+                                },
+                                modifier = Modifier.testTag("add-camera"),
+                            )
+                        }
+                    }
+                else {
+                    TextButton(
+                        onClick = {
+                            picker.launch(
+                                PickVisualMediaRequest(
+                                    ActivityResultContracts.PickVisualMedia.ImageOnly
+                                )
+                            )
+                        },
+                        enabled = !state.busy && state.journal == null,
+                        modifier = Modifier.testTag("add-photos"),
+                    ) { Text("Photos") }
+                    TextButton(
+                        onClick = { filePicker.launch(arrayOf("*/*")) },
+                        enabled = !state.busy && state.journal == null,
+                        modifier = Modifier.testTag("add-files"),
+                    ) { Text("Files") }
+                    TextButton(
+                        onClick = { actions.prepareCamera()?.let(camera::launch) },
+                        enabled = !state.busy && state.journal == null,
+                        modifier = Modifier.testTag("add-camera"),
+                    ) { Text("Camera") }
                 }
                 Spacer(Modifier.weight(1f))
                 if (modes.isNotEmpty())
@@ -306,7 +357,7 @@ internal fun ConversationComposer(
                         keyboard?.hide()
                         actions.send()
                     },
-                    modifier = Modifier.testTag("send").size(48.dp),
+                    modifier = Modifier.testTag("send").size(if (cover) 44.dp else 48.dp),
                     enabled =
                         state.ready &&
                             !state.busy &&
@@ -331,7 +382,11 @@ internal fun ConversationComposer(
 }
 
 @Composable
-private fun ModelControls(state: ScreenState, actions: ConversationActions) {
+private fun ModelControls(
+    state: ScreenState,
+    actions: ConversationActions,
+    cover: Boolean,
+) {
     var modelExpanded by remember { mutableStateOf(false) }
     var effortExpanded by remember { mutableStateOf(false) }
     val controlsEnabled =
@@ -367,7 +422,7 @@ private fun ModelControls(state: ScreenState, actions: ConversationActions) {
                 onClick = { modelExpanded = true },
                 modifier = Modifier.fillMaxWidth().testTag("model-selector"),
                 enabled = controlsEnabled,
-                contentPadding = PaddingValues(horizontal = 12.dp),
+                contentPadding = PaddingValues(horizontal = if (cover) 8.dp else 12.dp),
             ) {
                 Text(modelLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
@@ -418,7 +473,7 @@ private fun ModelControls(state: ScreenState, actions: ConversationActions) {
                     onClick = { effortExpanded = true },
                     modifier = Modifier.fillMaxWidth().testTag("reasoning-selector"),
                     enabled = controlsEnabled,
-                    contentPadding = PaddingValues(horizontal = 12.dp),
+                    contentPadding = PaddingValues(horizontal = if (cover) 8.dp else 12.dp),
                 ) {
                     Text(
                         state.newTaskOptions.reasoningEffort ?: "Default reasoning",
@@ -466,14 +521,14 @@ private fun ModelControls(state: ScreenState, actions: ConversationActions) {
             }
         }
         if (state.modelCatalogStatus == ModelCatalogStatus.Loading) {
-            Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(if (cover) 40.dp else 48.dp), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
             }
         } else {
             IconButton(
                 onClick = actions::refreshModels,
                 enabled = state.ready && !state.busy,
-                modifier = Modifier.size(48.dp),
+                modifier = Modifier.size(if (cover) 40.dp else 48.dp),
             ) {
                 Glyph(R.drawable.ic_refresh, "Refresh models")
             }

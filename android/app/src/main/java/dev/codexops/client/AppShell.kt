@@ -57,69 +57,86 @@ internal fun Glyph(
 internal fun App(model: ClientModel) {
     val st by model.state.collectAsStateWithLifecycle()
     BackHandler(st.page != "home") { model.home() }
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
+    AdaptiveWindow {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = {
+                        Column {
+                            Text(
+                                when (st.page) {
+                                    "chat" -> st.title
+                                    "settings" -> "Settings"
+                                    else -> "Remote Codex"
+                                },
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Box(
+                                    Modifier.size(6.dp).background(
+                                        if (st.ready) Color(0xFF669477)
+                                        else MaterialTheme.colorScheme.outline,
+                                        CircleShape,
+                                    )
+                                )
+                                Text(
+                                    st.connection,
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    },
+                    navigationIcon = {
+                        if (st.page != "home")
+                            IconButton(onClick = model::home) {
+                                Glyph(R.drawable.ic_back, "Tasks")
+                            }
+                    },
+                    actions = {
+                        if (st.page != "settings")
+                            IconButton(onClick = model::settings) {
+                                Glyph(R.drawable.ic_settings, "Settings")
+                            }
+                    },
+                )
+            },
+            containerColor = MaterialTheme.colorScheme.background,
+        ) { padding ->
+            Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
+                st.error?.let {
+                    Surface(color = MaterialTheme.colorScheme.errorContainer) {
                         Text(
-                            when (st.page) {
-                                "chat" -> st.title
-                                "settings" -> "Settings"
-                                else -> "Remote Codex"
-                            },
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                            it,
+                            Modifier.fillMaxWidth().padding(12.dp),
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            fontSize = 13.sp,
                         )
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Box(Modifier.size(6.dp).background(
-                                if (st.ready) Color(0xFF669477) else MaterialTheme.colorScheme.outline,
-                                CircleShape,
-                            ))
-                            Text(st.connection, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                if (!st.ready && st.configured && st.page != "settings")
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Drafts stay on this phone.", Modifier.weight(1f), fontSize = 12.sp)
+                        TextButton(onClick = model::connect) {
+                            Glyph(R.drawable.ic_refresh)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Reconnect")
                         }
                     }
-                },
-                navigationIcon = {
-                    if (st.page != "home") IconButton(onClick = model::home) { Glyph(R.drawable.ic_back, "Tasks") }
-                },
-                actions = {
-                    if (st.page != "settings")
-                        IconButton(onClick = model::settings) { Glyph(R.drawable.ic_settings, "Settings") }
-                },
-            )
-        },
-        containerColor = MaterialTheme.colorScheme.background,
-    ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
-            st.error?.let {
-                Surface(color = MaterialTheme.colorScheme.errorContainer) {
-                    Text(
-                        it,
-                        Modifier.fillMaxWidth().padding(12.dp),
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                        fontSize = 13.sp,
-                    )
+                when (st.page) {
+                    "settings" -> SettingsScreen(st, model)
+                    "chat" -> key(st.thread) { ConversationScreen(st, model) }
+                    else -> HomeScreen(st, model)
                 }
-            }
-            if (!st.ready && st.configured && st.page != "settings")
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("Drafts stay on this phone.", Modifier.weight(1f), fontSize = 12.sp)
-                    TextButton(onClick = model::connect) {
-                        Glyph(R.drawable.ic_refresh)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Reconnect")
-                    }
-                }
-            when (st.page) {
-                "settings" -> SettingsScreen(st, model)
-                "chat" -> key(st.thread) { ConversationScreen(st, model) }
-                else -> HomeScreen(st, model)
             }
         }
     }

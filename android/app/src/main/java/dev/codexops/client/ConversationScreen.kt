@@ -31,6 +31,7 @@ import kotlinx.serialization.json.JsonPrimitive
 
 @Composable
 internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: ConversationActions) {
+    val cover = LocalAppWindowClass.current.coverScreen
     var confirmUnlock by remember { mutableStateOf(false) }
     val scroll = rememberLazyListState()
     var followLatest by remember { mutableStateOf(true) }
@@ -63,15 +64,26 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
             }
     }
     LaunchedEffect(messages.lastOrNull(), st.decisions, st.journal, st.busy, st.activeTurn) {
-        if (followLatest && !scroll.isScrollInProgress) scroll.scrollToItem(0)
+        // Composer/decision presentation can change this column's height in the same frame.
+        // Wait for that layout before moving the reverse-list anchor.
+        withFrameNanos { }
+        // Schedule the anchor for the list's next measure instead of forcing a
+        // synchronous remeasure while asynchronous Markdown may be relaying out.
+        if (followLatest && !scroll.isScrollInProgress) scroll.requestScrollToItem(0)
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
     LazyColumn(
         Modifier.weight(1f).fillMaxWidth().testTag("timeline"),
         state = scroll,
         reverseLayout = true,
-        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp, Alignment.Bottom),
+        contentPadding = PaddingValues(
+            horizontal = if (cover) 12.dp else 20.dp,
+            vertical = if (cover) 8.dp else 20.dp,
+        ),
+        verticalArrangement = Arrangement.spacedBy(
+            if (cover) 12.dp else 20.dp,
+            Alignment.Bottom,
+        ),
     ) {
         if (st.busy || st.activeTurn != null)
             item(key = "activity") {
@@ -167,35 +179,47 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
         if (st.entries.isEmpty() && st.thread == null)
             item(key = "empty") {
                 Column(
-                    Modifier.fillMaxWidth().fillParentMaxHeight().padding(vertical = 40.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterVertically),
+                    Modifier.fillMaxWidth().fillParentMaxHeight()
+                        .padding(vertical = if (cover) 8.dp else 40.dp),
+                    verticalArrangement = Arrangement.spacedBy(
+                        if (cover) 8.dp else 14.dp,
+                        Alignment.CenterVertically,
+                    ),
                 ) {
                     Surface(
                         shape = RoundedCornerShape(16.dp),
                         color = MaterialTheme.colorScheme.surfaceVariant,
                     ) {
-                        Box(Modifier.size(52.dp), contentAlignment = Alignment.Center) {
-                            Glyph(R.drawable.ic_compose, modifier = Modifier.size(26.dp))
+                        Box(
+                            Modifier.size(if (cover) 40.dp else 52.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Glyph(
+                                R.drawable.ic_compose,
+                                modifier = Modifier.size(if (cover) 20.dp else 26.dp),
+                            )
                         }
                     }
                     Text(
                         "What shall we work on?",
-                        fontSize = 28.sp,
-                        lineHeight = 34.sp,
+                        fontSize = if (cover) 22.sp else 28.sp,
+                        lineHeight = if (cover) 26.sp else 34.sp,
                         fontWeight = FontWeight.SemiBold,
                     )
-                    Text(
-                        "Ask a question, investigate an issue,\nor pick up an idea.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    if (!cover)
+                        Text(
+                            "Ask a question, investigate an issue,\nor pick up an idea.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                 }
             }
     }
-    ConversationComposer(
-        state = st,
-        actions = actions,
-        onSend = { followLatest = true },
-    )
+    if (!cover || st.decisions.isEmpty())
+        ConversationComposer(
+            state = st,
+            actions = actions,
+            onSend = { followLatest = true },
+        )
     if (confirmUnlock)
         AlertDialog(
             onDismissRequest = { confirmUnlock = false },
@@ -367,6 +391,7 @@ private fun FullscreenPlan(
     onDismiss: () -> Unit,
     onImplement: () -> Unit,
 ) {
+    val cover = LocalAppWindowClass.current.coverScreen
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -393,7 +418,10 @@ private fun FullscreenPlan(
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Box(
                     Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
-                        .padding(horizontal = 24.dp, vertical = 20.dp),
+                        .padding(
+                            horizontal = if (cover) 12.dp else 24.dp,
+                            vertical = if (cover) 10.dp else 20.dp,
+                        ),
                     contentAlignment = Alignment.TopCenter,
                 ) {
                     Column(Modifier.fillMaxWidth().widthIn(max = 760.dp)) {
@@ -405,7 +433,10 @@ private fun FullscreenPlan(
                     Button(
                         onClick = onImplement,
                         modifier =
-                            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp)
+                            Modifier.fillMaxWidth().padding(
+                                    horizontal = if (cover) 12.dp else 20.dp,
+                                    vertical = if (cover) 8.dp else 12.dp,
+                                )
                                 .testTag("implement-plan-fullscreen"),
                     ) {
                         Text("Implement")
@@ -418,6 +449,7 @@ private fun FullscreenPlan(
 
 @Composable
 private fun DecisionCard(d: Decision, st: ScreenState, actions: ConversationActions) {
+    val cover = LocalAppWindowClass.current.coverScreen
     Card(
         colors =
             CardDefaults.cardColors(
@@ -425,7 +457,10 @@ private fun DecisionCard(d: Decision, st: ScreenState, actions: ConversationActi
                 contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
             )
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(
+            Modifier.padding(if (cover) 12.dp else 16.dp),
+            verticalArrangement = Arrangement.spacedBy(if (cover) 8.dp else 10.dp),
+        ) {
             Text(
                 "Your input is needed",
                 fontWeight = FontWeight.Bold,

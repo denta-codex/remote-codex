@@ -178,7 +178,8 @@ internal class StockWorkspaceAdapter(private val rpc: RemoteSession) {
     }
 
     suspend fun directoryExists(path: String): Boolean =
-        commandResult(listOf("test", "-d", "--", path)).str("exitCode") == "0"
+        // Unlike most coreutils commands, `test` doesn't accept `--` before its operand.
+        commandResult(listOf("test", "-d", path)).str("exitCode") == "0"
 
     suspend fun worktreeExists(source: String, destination: String): Boolean {
         val result =

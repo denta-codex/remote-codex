@@ -5,6 +5,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.*
@@ -131,6 +132,13 @@ class WorkspaceExecutionTest {
         assertTrue(adapter.worktreeExists("/srv/repo", destination))
 
         assertEquals("a".repeat(40), commit)
+        val directoryCheck = calls.map { it.second }.first {
+            it["command"].toString().contains("\"test\",\"-d\"")
+        }
+        assertEquals(
+            JsonArray(listOf(s("test"), s("-d"), s("/srv/repo"))),
+            directoryCheck["command"],
+        )
         assertFalse(calls.any { it.first == "project/list" })
         assertEquals("project-1", calls.first().second.str("projectId"))
         val add =
