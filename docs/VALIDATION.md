@@ -1,5 +1,20 @@
 # Validation
 
+## September 24, 2026 — composer layout release
+
+- Advanced Android to 0.2.0 / code 10 for the composer layout fixes.
+- Kept the active-turn composer footer compact and prevented long workspace paths
+  from expanding the footer or displacing its controls.
+- `scripts/check` passed, including Rust tests, Kotlin and Android unit tests,
+  debug assembly, instrumentation APK assembly, and lint. `scripts/release`
+  repeated those checks successfully, then passed signed release assembly and
+  lint, package/signer verification, manifest generation, and checksum generation.
+- The signed APK SHA-256 is
+  `a235b0af6b424810727ec0286d951786ff118dafbeac3661b0ebd46603905a5a`.
+- The Ansible publication dry run passed, then 0.2.0 was published to the private
+  stable channel. The authenticated endpoint returned versionCode 10. No
+  Taildrop delivery or physical-phone installation was performed.
+
 ## September 24, 2026 — integrated image and plan release
 
 - Merged image attachments and stock-advertised plan mode onto the current `main`
