@@ -2,14 +2,66 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-source scripts/emulator-common
 
-[[ $# == 0 ]] || { echo 'Usage: scripts/emulator-test' >&2; exit 2; }
-rc_require_runtime
-rc_require_active
-rc_export_build_environment
+usage() {
+    cat >&2 <<'EOF'
+Usage:
+  scripts/emulator-test --tests Class#method [Class#method ...]
+  scripts/emulator-test --full
 
-serial="$(rc_state_value serial)"
-export ANDROID_SERIAL="$serial"
-echo "Running instrumentation on $serial."
-android/gradlew -p android --no-daemon :app:connectedDebugAndroidTest
+Examples:
+  scripts/emulator-test --tests AppTest#textChatStreamsAndCanReopen
+  scripts/emulator-test --tests \
+    AppTest#imageOnlyUploadsAndRendersThroughStockRpc \
+    AppTest#advertisedPlanModeRendersFullscreenPlanAndImplementsWithDefaultMode
+EOF
+    exit 2
+}
+
+mode="${1:-}"
+[[ "$mode" == --tests || "$mode" == --full ]] || usage
+shift
+
+selectors=()
+case "$mode" in
+    --tests)
+        (( $# > 0 )) || usage
+        for selector in "$@"; do
+            [[ "$selector" =~ ^[A-Za-z][A-Za-z0-9_.]*#[A-Za-z][A-Za-z0-9_]*$ ]] || usage
+            if [[ "$selector" != *.* ]]; then
+                selector="dev.codexops.client.$selector"
+            fi
+            selectors+=("$selector")
+        done
+        timeout_duration=3m
+        ;;
+    --full)
+        (( $# == 0 )) || usage
+        timeout_duration=8m
+        ;;
+esac
+
+export JAVA_HOME="${JAVA_HOME:-$(mise where java@temurin-17.0.20+8)}"
+export ANDROID_HOME="${ANDROID_HOME:-/home/agent/Android/Sdk}"
+export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH"
+
+gradle_args=(-p android --no-daemon :app:remoteCodexApi36DebugAndroidTest)
+if (( ${#selectors[@]} > 0 )); then
+    filter="$(IFS=,; echo "${selectors[*]}")"
+    gradle_args+=("-Pandroid.testInstrumentationRunnerArguments.class=$filter")
+    echo "Running ${#selectors[@]} selected test(s) on the managed Android 16 device."
+else
+    echo 'Running the full instrumentation suite on the managed Android 16 device.'
+fi
+
+set +e
+timeout --foreground --signal=TERM --kill-after=30s \
+    "$timeout_duration" android/gradlew "${gradle_args[@]}"
+status=$?
+set -e
+if (( status != 0 )); then
+    if (( status == 124 )); then
+        echo "Instrumentation exceeded its $timeout_duration limit." >&2
+    fi
+    exit "$status"
+fi

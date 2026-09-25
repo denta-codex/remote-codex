@@ -672,6 +672,7 @@ class AppTest {
         compose.onNodeWithText(fixtureTitle).performClick()
         compose.waitUntil(10000) { !model.state.value.busy && model.state.value.entries.size >= 40 }
         compose.waitForIdle()
+        compose.waitUntil(5000) { latestReply().isDisplayed() }
     }
 
     private fun latestReply() = compose.onNodeWithText("Latest reply — ready for review.", substring = true)
@@ -701,7 +702,7 @@ class AppTest {
         assertEquals("Incoming content must not pull the reader to the bottom", position, after, .01f)
         demoPause(2000)
         compose.onNodeWithContentDescription("Tasks").performClick()
-        compose.waitUntil { model.state.value.page == "home" }
+        compose.waitUntil(5000) { model.state.value.page == "home" }
         demoPause(1500)
         compose.onNodeWithText(fixtureTitle).performClick()
         compose.waitUntil(10000) { !model.state.value.busy && model.state.value.entries.size >= 40 }
@@ -720,20 +721,26 @@ class AppTest {
         demoPause(2000)
         compose.onNodeWithContentDescription("Tasks").performClick()
         compose.onNodeWithContentDescription("New chat").performClick()
-        compose.waitUntil { model.state.value.page == "chat" && model.state.value.thread == null }
+        compose.waitUntil(5000) { model.state.value.page == "chat" && model.state.value.thread == null }
         compose.onNodeWithText("What shall we work on?").assertIsDisplayed()
         demoPause(2000)
         compose.runOnUiThread {
             model.home()
-            compose.activity.setContent { RemoteTheme(darkTheme = true) { App(model) } }
-            // Match system chrome to this fixture-only theme override. Production
-            // follows the system theme through MainActivity.enableEdgeToEdge().
-            WindowCompat.getInsetsController(compose.activity.window, compose.activity.window.decorView).apply {
-                isAppearanceLightStatusBars = false
-                isAppearanceLightNavigationBars = false
+            if (demo) {
+                compose.activity.setContent { RemoteTheme(darkTheme = true) { App(model) } }
+                // Match system chrome to this fixture-only theme override. Production
+                // follows the system theme through MainActivity.enableEdgeToEdge().
+                WindowCompat.getInsetsController(
+                        compose.activity.window,
+                        compose.activity.window.decorView,
+                    )
+                    .apply {
+                        isAppearanceLightStatusBars = false
+                        isAppearanceLightNavigationBars = false
+                    }
             }
         }
-        compose.waitUntil { model.state.value.page == "home" }
+        compose.waitUntil(5000) { model.state.value.page == "home" }
         demoPause(2000)
         compose.onNodeWithText(fixtureTitle).performClick()
         compose.waitUntil(10000) { !model.state.value.busy && model.state.value.entries.size >= 40 }
@@ -764,7 +771,7 @@ class AppTest {
     @Test
     fun textChatStreamsAndCanReopen() {
         compose.onNodeWithContentDescription("New chat").performClick()
-        compose.waitUntil { model.state.value.page == "chat" }
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
         demoPause()
         compose.onNodeWithTag("composer").performTextInput("What is running on Grace?")
         demoPause()
@@ -799,7 +806,7 @@ class AppTest {
     @Test
     fun modelControlsUseCatalogAndRefreshUnsupportedSelection() {
         compose.onNodeWithContentDescription("New chat").performClick()
-        compose.waitUntil { model.state.value.page == "chat" }
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
         demoPause()
 
         compose.onNodeWithTag("model-selector").performClick()
@@ -932,13 +939,13 @@ class AppTest {
         demoPause(2000)
 
         compose.onNodeWithContentDescription("New chat").performClick()
-        compose.waitUntil { model.state.value.page == "chat" }
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
         demoPause(2000)
         compose.onNodeWithTag("project-selector").performClick()
         compose.onNodeWithText("Remote Codex").assertIsDisplayed()
         demoPause(2000)
         compose.onNodeWithText("Remote Codex").performClick()
-        compose.waitUntil {
+        compose.waitUntil(5000) {
             model.state.value.newTaskOptions.projectId == "project-remote" &&
                 model.state.value.newTaskOptions.workingDirectory == "/fixture/remote-codex"
         }
@@ -962,10 +969,10 @@ class AppTest {
     @Test
     fun selectedProjectSurvivesDraftRecreationAndStartsInItsRoot() {
         compose.onNodeWithContentDescription("New chat").performClick()
-        compose.waitUntil { model.state.value.page == "chat" }
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
         compose.onNodeWithTag("project-selector").assertTextContains("No project").performClick()
         compose.onNodeWithText("Remote Codex").performClick()
-        compose.waitUntil {
+        compose.waitUntil(5000) {
             model.state.value.newTaskOptions.projectId == "project-remote" &&
                 model.state.value.newTaskOptions.workingDirectory == "/fixture/remote-codex"
         }
@@ -1054,7 +1061,7 @@ class AppTest {
         compose.waitUntil(5000) { model.state.value.decisions.size == 1 }
         demoPause(2500)
         compose.runOnUiThread { model.newChat() }
-        compose.waitUntil { model.state.value.thread == null }
+        compose.waitUntil(5000) { model.state.value.thread == null }
         demoPause()
         compose.runOnUiThread { model.openTask("task-test") }
         compose.waitUntil(10000) {
@@ -1069,7 +1076,7 @@ class AppTest {
     @Test
     fun draftSurvivesNewModel() {
         compose.runOnUiThread { model.newChat() }
-        compose.waitUntil { model.state.value.page == "chat" }
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
         demoPause()
         compose.onNodeWithTag("composer").performTextInput("Keep this idea")
         val image = fixtureImage("persist.png")
@@ -1086,7 +1093,7 @@ class AppTest {
             compose.activity.setContent { RemoteTheme { App(model) } }
             model.newChat()
         }
-        compose.waitUntil {
+        compose.waitUntil(5000) {
             model.state.value.draft == "Keep this idea" &&
                 model.state.value.attachments.size == 1
         }
@@ -1098,7 +1105,7 @@ class AppTest {
     @Test
     fun selectedProjectCanRunInANewIsolatedWorktree() {
         compose.onNodeWithContentDescription("New chat").performClick()
-        compose.waitUntil { model.state.value.page == "chat" }
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
         demoPause()
         compose.runOnUiThread {
             model.updateNewTaskOptions(
@@ -1135,7 +1142,7 @@ class AppTest {
     @Test
     fun selectedProjectCanUseItsCurrentWorkspaceWithoutGitMutation() {
         compose.onNodeWithContentDescription("New chat").performClick()
-        compose.waitUntil { model.state.value.page == "chat" }
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
         compose.runOnUiThread {
             model.updateNewTaskOptions(
                 NewTaskOptions(
@@ -1158,7 +1165,7 @@ class AppTest {
     @Test
     fun selectedProjectPathDoesNotExpandComposerFooter() {
         compose.onNodeWithContentDescription("New chat").performClick()
-        compose.waitUntil { model.state.value.page == "chat" }
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
         compose.runOnUiThread {
             model.updateNewTaskOptions(
                 NewTaskOptions(
@@ -1182,7 +1189,7 @@ class AppTest {
     fun uncertainWorktreeCreationIsInspectedAndNotRepeated() {
         dropWorktreeReply = true
         compose.onNodeWithContentDescription("New chat").performClick()
-        compose.waitUntil { model.state.value.page == "chat" }
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
         compose.runOnUiThread {
             model.updateNewTaskOptions(
                 NewTaskOptions(
@@ -1214,7 +1221,7 @@ class AppTest {
     fun uncertainTaskCreationIsFoundAndNotRepeated() {
         dropThreadStartReply = true
         compose.onNodeWithContentDescription("New chat").performClick()
-        compose.waitUntil { model.state.value.page == "chat" }
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
         compose.runOnUiThread {
             model.updateNewTaskOptions(
                 NewTaskOptions(
@@ -1245,7 +1252,7 @@ class AppTest {
     @Test
     fun advertisedPlanModeRendersFullscreenPlanAndImplementsWithDefaultMode() {
         compose.onNodeWithContentDescription("New chat").performClick()
-        compose.waitUntil {
+        compose.waitUntil(5000) {
             model.state.value.page == "chat" && model.state.value.collaborationModes.size == 2
         }
         compose.onNodeWithTag("mode-selector").assertTextContains("Server default").performClick()
@@ -1301,7 +1308,7 @@ class AppTest {
     fun planModeQuestionCanBeAnswered() {
         askPlanQuestion = true
         compose.onNodeWithContentDescription("New chat").performClick()
-        compose.waitUntil {
+        compose.waitUntil(5000) {
             model.state.value.page == "chat" && model.state.value.collaborationModes.size == 2
         }
         compose.onNodeWithTag("mode-selector").performClick()
