@@ -1,5 +1,22 @@
 # Validation
 
+## September 25, 2026 — Android 0.2.2 release preparation
+
+- Integrated compact cover-screen layouts, thread-deeplink copying, and reliable
+  project-workspace validation with safe draft and attachment retention.
+- Advanced Android to 0.2.2 / code 12. `scripts/check` passed, including Rust,
+  Kotlin, and Android unit tests, debug and instrumentation APK assembly, and lint.
+- The five-test cover-screen suite passed. In the full normal-phone suite, every
+  existing test passed or skipped as designed; the new rejected-validation test
+  exposed a fixture response-dispatch problem. A focused JVM RPC rejection test
+  passed, the fixture was corrected, and the explicitly approved targeted emulator
+  rerun passed.
+- `scripts/release` repeated the checks and passed signed release assembly, release
+  lint, package and signer verification, manifest generation, and checksum
+  generation. The signed APK SHA-256 is
+  `0f9ce71874d5c9eae3897ba74a0eb14feca12461b64c1dc662c856d1ff11dd36`.
+- No publication, Taildrop delivery, or physical-phone installation was performed.
+
 ## September 25, 2026 — project-task workspace validation fix
 
 - Root cause: Remote Codex checked a selected project root with
@@ -22,9 +39,8 @@
   instrumentation APK assembly, and lint.
 - One targeted managed-emulator run covered four scenarios. Current workspace,
   new worktree, and projectless creation passed. The new rejected-validation
-  test hit its initial 5-second UI-state deadline; its assertion was changed to
-  the suite's standard 15-second bound and exact terminal-error verification.
-  Per the no-automatic-retry policy, that revised test has not been rerun.
+  test exposed a fixture response-dispatch problem in the integrated full suite;
+  after that fixture was corrected, its explicitly approved targeted rerun passed.
 - No release, deployment, phone delivery, or physical-device acceptance was
   performed. Current- and new-worktree creation against Grace on the Razr remain
   required before declaring the user-visible bug fixed.

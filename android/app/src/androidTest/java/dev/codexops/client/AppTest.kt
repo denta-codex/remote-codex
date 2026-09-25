@@ -37,6 +37,7 @@ class AppTest {
     private val prepared = AtomicInteger()
     private val modelLists = AtomicInteger()
     private val workspaceMetadataReads = AtomicInteger()
+    private val workspaceMetadataRejections = AtomicInteger()
     private val invalidDirectoryProbes = AtomicInteger()
     @Volatile private var dropSend = false
     @Volatile private var dropWrite = false
@@ -336,22 +337,17 @@ class AppTest {
                                                     rejectWorkspaceMetadata &&
                                                         path == "/fixture/remote-codex"
                                                 ) {
-                                                    ws.send(
-                                                        obj(
-                                                                "id" to m["id"],
-                                                                "error" to
-                                                                    obj(
-                                                                        "code" to
-                                                                            JsonPrimitive(-32000),
-                                                                        "message" to
-                                                                            s("Fixture metadata rejection"),
-                                                                    ),
+                                                    workspaceMetadataRejections.incrementAndGet()
+                                                    obj(
+                                                        "_fixtureError" to
+                                                            obj(
+                                                                "code" to
+                                                                    JsonPrimitive(-32000),
+                                                                "message" to
+                                                                    s("Fixture metadata rejection"),
                                                             )
-                                                            .toString()
                                                     )
-                                                    return
-                                                }
-                                                if (
+                                                } else if (
                                                     path == "/fixture/remote-codex" ||
                                                         path == "/fixture/notes" ||
                                                         path == "/fixture/repo" ||
@@ -401,7 +397,13 @@ class AppTest {
                                             }
                                             else -> obj()
                                         }
-                                    ws.send(obj("id" to m["id"], "result" to result).toString())
+                                    val fixtureError = result["_fixtureError"]
+                                    ws.send(
+                                        (if (fixtureError != null)
+                                                obj("id" to m["id"], "error" to fixtureError)
+                                            else obj("id" to m["id"], "result" to result))
+                                            .toString()
+                                    )
                                     if (method == "turn/start") {
                                         emit(
                                             ws,
@@ -1396,9 +1398,10 @@ class AppTest {
         val image = fixtureImage("validation-retry.png")
         compose.runOnUiThread { model.addAttachments(listOf(Uri.fromFile(image))) }
         compose.waitUntil(5000) { model.state.value.attachments.size == 1 }
-        compose.onNodeWithTag("send").performClick()
+        compose.onNodeWithTag("send").assertIsEnabled().performClick()
 
-        compose.waitUntil(15000) {
+        compose.waitUntil(5000) { workspaceMetadataRejections.get() == 1 }
+        compose.waitUntil(10000) {
             !model.state.value.busy &&
                 model.state.value.journal == null &&
                 model.state.value.error != null

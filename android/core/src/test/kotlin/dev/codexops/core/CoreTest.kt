@@ -214,6 +214,61 @@ class CoreTest {
     }
 
     @Test
+    fun rpcRejectionsSurfaceWithoutWaitingForTheRequestTimeout() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse().withWebSocketUpgrade(
+                object : WebSocketListener() {
+                    override fun onMessage(ws: WebSocket, text: String) {
+                        val message = wire.parseToJsonElement(text).jsonObject
+                        val method = message.str("method")
+                        if (method.isEmpty() || method == "initialized") return
+                        if (method == "initialize") {
+                            ws.send(
+                                obj(
+                                        "id" to message["id"],
+                                        "result" to obj("codexHome" to s("/test")),
+                                    )
+                                    .toString()
+                            )
+                        } else {
+                            ws.send(
+                                obj(
+                                        "id" to message["id"],
+                                        "error" to
+                                            obj(
+                                                "code" to JsonPrimitive(-32000),
+                                                "message" to s("Fixture rejection"),
+                                            ),
+                                    )
+                                    .toString()
+                            )
+                        }
+                    }
+                }
+            )
+        )
+        server.start()
+        val rpc = Rpc(true)
+        try {
+            rpc.connect(
+                server.url("/").toString().replace("http://localhost:", "ws://127.0.0.1:"),
+                "test",
+            )
+            val rejection =
+                assertThrows(RpcRejected::class.java) {
+                    runBlocking { rpc.call("fs/getMetadata", obj("path" to s("/test")), 2000) }
+                }
+            assertEquals(-32000, rejection.code)
+            assertEquals("Fixture rejection", rejection.message)
+        } finally {
+            rpc.dispose()
+            server.shutdown()
+        }
+        Unit
+    }
+
+    @Test
     fun rejectedHandshakePreservesStatusWithoutResponseBody() = runBlocking {
         val server = MockWebServer()
         server.enqueue(MockResponse().setResponseCode(401).setBody("private response body"))
