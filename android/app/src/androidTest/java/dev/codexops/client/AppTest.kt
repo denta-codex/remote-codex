@@ -8,6 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModelStore
 import androidx.test.core.app.ApplicationProvider
@@ -1152,6 +1153,29 @@ class AppTest {
         assertEquals(0, worktreeAdds.get())
         assertEquals("project-remote", threadStartParams!!.str("projectId"))
         assertEquals("/fixture/remote-codex", threadStartParams!!.str("cwd"))
+    }
+
+    @Test
+    fun selectedProjectPathDoesNotExpandComposerFooter() {
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil { model.state.value.page == "chat" }
+        compose.runOnUiThread {
+            model.updateNewTaskOptions(
+                NewTaskOptions(
+                    projectId = "project-remote",
+                    workingDirectory =
+                        "/home/agent/workspaces/remote-codex/with-an-intentionally-long-path",
+                    executionTarget = ExecutionTarget.CurrentWorkspace,
+                )
+            )
+        }
+
+        val statusBounds = compose.onNodeWithTag("composer-status").getUnclippedBoundsInRoot()
+        assertTrue(
+            "Composer status should stay within its two-line limit",
+            statusBounds.bottom - statusBounds.top <= 40.dp,
+        )
+        compose.onNodeWithTag("send").assertIsDisplayed()
     }
 
     @Test
