@@ -213,6 +213,7 @@ class AppTest {
                                                                 ),
                                                             "model" to s("gpt-fixture"),
                                                             "reasoningEffort" to s("low"),
+                                                            "cwd" to s("/fixture/remote-codex"),
                                                         )
                                                 )
                                             "thread/start" -> {
@@ -302,6 +303,20 @@ class AppTest {
                                                     "dataBase64" to
                                                         s(remoteFiles[params.str("path")].orEmpty())
                                                 )
+                                            "fs/getMetadata" -> {
+                                                val encoded = remoteFiles[params.str("path")]
+                                                obj(
+                                                    "type" to s("file"),
+                                                    "size" to
+                                                        JsonPrimitive(
+                                                            encoded?.let {
+                                                                java.util.Base64.getDecoder()
+                                                                    .decode(it)
+                                                                    .size
+                                                            } ?: 0
+                                                        ),
+                                                )
+                                            }
                                             "thread/turns/list" -> history()
                                             "turn/start",
                                             "turn/steer" -> {
@@ -877,13 +892,63 @@ class AppTest {
         compose.waitUntil(15000) {
             sent.get() == 1 && model.state.value.entries.any { it.kind == "imageView" }
         }
-        assertEquals(listOf("localImage"), acceptedInput.map { it.jsonObject.str("type") })
+        assertEquals(
+            listOf("text", "localImage"),
+            acceptedInput.map { it.jsonObject.str("type") },
+        )
+        assertTrue(acceptedText.startsWith("# Files mentioned by the user:"))
+        assertTrue(acceptedText.contains("## My request for Codex:"))
         assertEquals(1, remoteFiles.size)
         compose.waitUntil(10000) {
             compose.onAllNodesWithTag("message-image").fetchSemanticsNodes().isNotEmpty()
         }
         compose.onAllNodesWithTag("message-image")[0].performClick()
         compose.onNodeWithTag("close-image").assertIsDisplayed().performClick()
+    }
+
+    @Test
+    fun genericFileUploadsAsPathContextAndRendersAHistoryChip() {
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) {
+            model.state.value.thread == "task-test" && !model.state.value.busy
+        }
+        val file = File(app.cacheDir, "fixture-notes.txt").apply { writeText("fixture notes") }
+        compose.runOnUiThread { model.addFiles(listOf(Uri.fromFile(file))) }
+        compose.waitUntil(5000) { model.state.value.attachments.size == 1 }
+        compose.onNodeWithTag("draft-file").assertIsDisplayed()
+        compose.onNodeWithTag("composer").performTextInput("Review this")
+        compose.onNodeWithTag("send").performClick()
+        compose.waitUntil(15000) {
+            sent.get() == 1 && model.state.value.entries.any { it.kind == "userMessage" }
+        }
+        assertEquals(listOf("text"), acceptedInput.map { it.jsonObject.str("type") })
+        assertTrue(acceptedText.contains("## fixture-notes.txt:"))
+        assertTrue(acceptedText.endsWith("Review this"))
+        compose.onNodeWithTag("file-reference").assertIsDisplayed()
+    }
+
+    @Test
+    fun remoteTextFileUsesMetadataAndOpensAReadablePreview() {
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) {
+            model.state.value.thread == "task-test" && !model.state.value.busy
+        }
+        remoteFiles["/fixture/remote-codex/result.txt"] =
+            Base64.getEncoder().encodeToString("hello from the remote file".toByteArray())
+
+        compose.runOnUiThread {
+            model.inspectFile(FileRef("result", "result.txt", "result.txt"))
+        }
+        compose.waitUntil(10000) {
+            model.state.value.filePreview?.let { !it.loading } == true
+        }
+
+        assertEquals(FilePreviewKind.TEXT, model.state.value.filePreview?.kind)
+        assertEquals("hello from the remote file", model.state.value.filePreview?.text)
+        compose.onNodeWithTag("file-preview").assertIsDisplayed()
+        compose.onNodeWithText("hello from the remote file").assertIsDisplayed()
+        compose.onNodeWithText("Close").performClick()
+        compose.onNodeWithTag("file-preview").assertDoesNotExist()
     }
 
     @Test

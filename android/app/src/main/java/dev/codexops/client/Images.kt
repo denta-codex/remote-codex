@@ -22,6 +22,7 @@ data class DraftAttachment(
     val displayName: String,
     val mimeType: String,
     val byteSize: Long,
+    val kind: AttachmentKind = AttachmentKind.IMAGE,
 ) {
     fun json() =
         obj(
@@ -30,6 +31,7 @@ data class DraftAttachment(
             "displayName" to s(displayName),
             "mimeType" to s(mimeType),
             "byteSize" to JsonPrimitive(byteSize),
+            "kind" to s(kind.name),
         )
 
     companion object {
@@ -41,6 +43,8 @@ data class DraftAttachment(
                 value.str("displayName"),
                 value.str("mimeType"),
                 size,
+                runCatching { AttachmentKind.valueOf(value.str("kind")) }
+                    .getOrDefault(AttachmentKind.IMAGE),
             ).takeIf { it.id.isNotBlank() && it.localPath.isNotBlank() }
         }
     }
@@ -64,20 +68,20 @@ class AttachmentStore(private val context: Context) {
             return null
         }
         return try {
-            import(Uri.fromFile(file), combinedBytes, "Camera photo.jpg")
+            importImage(Uri.fromFile(file), combinedBytes, "Camera photo.jpg")
         } finally {
             file.delete()
         }
     }
 
-    suspend fun import(
+    suspend fun importImage(
         uri: Uri,
         combinedBytes: Long,
         fallbackName: String = "Photo",
     ): DraftAttachment =
         withContext(Dispatchers.IO) {
             require(combinedBytes < MAX_ATTACHMENT_BYTES) {
-                "Images in one message must total 50 MiB or less."
+                "Attachments in one message must total 50 MiB or less."
             }
             val id = UUID.randomUUID().toString()
             val part = File(root, ".$id.part")
@@ -99,7 +103,7 @@ class AttachmentStore(private val context: Context) {
                                 "Images must be 20 MiB or smaller."
                             }
                             require(combinedBytes + total <= MAX_ATTACHMENT_BYTES) {
-                                "Images in one message must total 50 MiB or less."
+                                "Attachments in one message must total 50 MiB or less."
                             }
                             target.write(buffer, 0, read)
                         }
@@ -119,6 +123,61 @@ class AttachmentStore(private val context: Context) {
                     displayName(uri).ifBlank { fallbackName },
                     format.mimeType,
                     destination.length(),
+                    AttachmentKind.IMAGE,
+                )
+            } catch (e: Exception) {
+                part.delete()
+                throw e
+            }
+        }
+
+    suspend fun importDocument(uri: Uri, combinedBytes: Long): DraftAttachment {
+        val mimeType =
+            context.contentResolver.getType(uri)?.lowercase().orEmpty()
+        return if (mimeType in setOf("image/jpeg", "image/png", "image/webp", "image/gif"))
+            importImage(uri, combinedBytes)
+        else importFile(uri, combinedBytes, mimeType)
+    }
+
+    private suspend fun importFile(
+        uri: Uri,
+        combinedBytes: Long,
+        reportedMimeType: String,
+    ): DraftAttachment =
+        withContext(Dispatchers.IO) {
+            require(combinedBytes <= MAX_ATTACHMENT_BYTES) {
+                "Attachments in one message must total 50 MiB or less."
+            }
+            val id = UUID.randomUUID().toString()
+            val part = File(root, ".$id.part")
+            try {
+                val input = context.contentResolver.openInputStream(uri)
+                requireNotNull(input) { "The selected file could not be opened." }
+                var total = 0L
+                input.use { source ->
+                    part.outputStream().buffered().use { target ->
+                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                        while (true) {
+                            val read = source.read(buffer)
+                            if (read < 0) break
+                            total += read
+                            AttachmentPolicy.validateSize(AttachmentKind.FILE, total)
+                            require(combinedBytes + total <= MAX_ATTACHMENT_BYTES) {
+                                "Attachments in one message must total 50 MiB or less."
+                            }
+                            target.write(buffer, 0, read)
+                        }
+                    }
+                }
+                val destination = File(root, "$id.file")
+                check(part.renameTo(destination)) { "The selected file could not be saved." }
+                DraftAttachment(
+                    id = id,
+                    localPath = destination.canonicalPath,
+                    displayName = displayName(uri).ifBlank { "File" },
+                    mimeType = reportedMimeType.ifBlank { "application/octet-stream" },
+                    byteSize = destination.length(),
+                    kind = AttachmentKind.FILE,
                 )
             } catch (e: Exception) {
                 part.delete()
@@ -138,10 +197,18 @@ class AttachmentStore(private val context: Context) {
                     file.exists() &&
                         file.canonicalFile.parentFile == canonicalRoot &&
                         file.length() == it.byteSize &&
-                        ImagePolicy.inspect(file).mimeType == it.mimeType
+                        when (it.kind) {
+                            AttachmentKind.IMAGE -> ImagePolicy.inspect(file).mimeType == it.mimeType
+                            AttachmentKind.FILE -> {
+                                AttachmentPolicy.validateSize(it.kind, file.length())
+                                true
+                            }
+                        }
                 }
                 .getOrDefault(false)
-        }.also { ImagePolicy.validateCombined(it.map(DraftAttachment::byteSize)) }
+        }.also {
+            AttachmentPolicy.validateCombined(it.map { value -> value.kind to value.byteSize })
+        }
     }
 
     fun serialize(values: List<DraftAttachment>) =
@@ -156,7 +223,7 @@ class AttachmentStore(private val context: Context) {
 
     private fun displayName(uri: Uri): String {
         if (uri.scheme == ContentResolver.SCHEME_FILE)
-            return uri.lastPathSegment.orEmpty().ifBlank { "Photo" }
+            return uri.lastPathSegment.orEmpty().ifBlank { "File" }
         return runCatching {
                 context.contentResolver.query(
                     uri,

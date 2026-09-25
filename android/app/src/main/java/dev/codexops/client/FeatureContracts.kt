@@ -120,6 +120,7 @@ data class ScreenState(
     val query: String = "",
     val archived: Boolean = false,
     val thread: String? = null,
+    val threadCwd: String? = null,
     val title: String = "New chat",
     val entries: List<Entry> = emptyList(),
     val historyCursor: String? = null,
@@ -139,6 +140,7 @@ data class ScreenState(
     val journal: JsonObject? = null,
     val attention: Boolean = false,
     val update: UpdateState = UpdateState(),
+    val filePreview: FilePreviewState? = null,
 )
 
 fun ScreenState.collaborationModel(): String? =
@@ -189,6 +191,8 @@ interface ConversationActions {
 
     fun addAttachments(uris: List<Uri>)
 
+    fun addFiles(uris: List<Uri>)
+
     fun prepareCamera(): Uri?
 
     fun finishCamera(success: Boolean)
@@ -196,6 +200,12 @@ interface ConversationActions {
     fun removeAttachment(id: String)
 
     suspend fun loadMedia(media: MediaRef): ByteArray
+
+    fun inspectFile(file: dev.codexops.core.FileRef)
+
+    fun dismissFile()
+
+    fun saveFile(destination: Uri)
 
     fun send()
 

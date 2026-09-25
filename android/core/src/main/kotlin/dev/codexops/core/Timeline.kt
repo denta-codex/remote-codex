@@ -16,6 +16,34 @@ data class MediaRef(
     val status: String = "",
 )
 
+data class FileRef(
+    val key: String,
+    val displayName: String,
+    val path: String,
+)
+
+data class ParsedAttachmentContext(val request: String, val files: List<Pair<String, String>>)
+
+fun parseAttachmentContext(value: String): ParsedAttachmentContext? {
+    val header = "# Files mentioned by the user:"
+    if (!value.startsWith("$header\n\n")) return null
+    val marker = "\n\n## My request for Codex:"
+    val markerIndex = value.indexOf(marker, header.length)
+    if (markerIndex < 0) return null
+    val references = value.substring(header.length + 2, markerIndex)
+    val files =
+        references.split("\n\n").mapNotNull { section ->
+            if (!section.startsWith("## ")) return null
+            val separator = section.lastIndexOf(": ")
+            if (separator <= 3 || separator + 2 >= section.length) return null
+            section.substring(3, separator) to section.substring(separator + 2)
+        }
+    if (files.isEmpty()) return null
+    val requestStart = markerIndex + marker.length
+    val request = value.substring(requestStart).removePrefix("\n\n")
+    return ParsedAttachmentContext(request, files)
+}
+
 data class Entry(val turn: String, val raw: JsonObject) {
     val id
         get() = raw.str("id")
@@ -82,6 +110,35 @@ data class Entry(val turn: String, val raw: JsonObject) {
                 else -> emptyList()
             }
 
+    val files: List<FileRef>
+        get() =
+            when (kind) {
+                "userMessage" -> {
+                    val localImages =
+                        raw.list("content")
+                            .filter { it.str("type") == "localImage" }
+                            .map { it.str("path") }
+                            .toSet()
+                    raw.list("content")
+                        .firstOrNull { it.str("type") == "text" }
+                        ?.str("text")
+                        ?.let(::parseAttachmentContext)
+                        ?.files
+                        .orEmpty()
+                        .filterNot { it.second in localImages }
+                        .mapIndexed { index, (name, path) ->
+                            FileRef("$key/file/$index", name, path)
+                        }
+                }
+                "fileChange" ->
+                    raw.list("changes").mapIndexedNotNull { index, change ->
+                        change.str("path").takeIf(String::isNotBlank)?.let { path ->
+                            FileRef("$key/change/$index", path.substringAfterLast('/'), path)
+                        }
+                    }
+                else -> emptyList()
+            }
+
     val completed
         get() = (raw["_completed"] as? JsonPrimitive)?.booleanOrNull == true
 
@@ -92,7 +149,9 @@ data class Entry(val turn: String, val raw: JsonObject) {
                     raw.list("content")
                         .mapNotNull {
                             when (it.str("type")) {
-                                "text" -> it.str("text")
+                                "text" ->
+                                    parseAttachmentContext(it.str("text"))?.request
+                                        ?: it.str("text")
                                 "image", "localImage" -> null
                                 else -> "[${it.str("type")}]"
                             }

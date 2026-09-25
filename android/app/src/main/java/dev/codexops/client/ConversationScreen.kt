@@ -1,5 +1,7 @@
 package dev.codexops.client
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -23,7 +25,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.mikepenz.markdown.m3.Markdown
 import dev.codexops.core.*
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
@@ -33,6 +34,10 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
     var confirmUnlock by remember { mutableStateOf(false) }
     val scroll = rememberLazyListState()
     var followLatest by remember { mutableStateOf(true) }
+    val saveDocument =
+        rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri ->
+            uri?.let(actions::saveFile)
+        }
     val messages = st.entries.filter { it.kind != "reasoning" }
     val actionablePlan =
         messages.lastOrNull()?.takeIf {
@@ -212,6 +217,13 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
                 TextButton({ confirmUnlock = false }) { Text("Keep checking") }
             },
         )
+    st.filePreview?.let { preview ->
+        FilePreviewDialog(
+            preview = preview,
+            onDismiss = actions::dismissFile,
+            onSave = { saveDocument.launch(preview.reference.displayName) },
+        )
+    }
 }
 
 @Composable
@@ -235,6 +247,7 @@ private fun Message(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     MediaGallery(entry.media, actions)
+                    FileReferenceList(entry.files, actions)
                     if (entry.text.isNotBlank())
                         SelectionContainer {
                             Text(entry.text, lineHeight = 23.sp)
@@ -246,7 +259,7 @@ private fun Message(
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             MediaGallery(entry.media, actions)
             if (entry.text.isNotBlank())
-                SelectionContainer { Markdown(entry.text.take(100000)) }
+                SelectionContainer { FileAwareMarkdown(entry.text.take(100000), actions) }
         }
     else if (entry.kind == "plan") {
         Card(
@@ -271,7 +284,7 @@ private fun Message(
                         Text("Full screen")
                     }
                 }
-                SelectionContainer { Markdown(entry.text.take(100000)) }
+                SelectionContainer { FileAwareMarkdown(entry.text.take(100000), actions) }
                 if (canImplement)
                     Button(
                         onClick = onImplement,
@@ -284,6 +297,7 @@ private fun Message(
         if (planFullscreen)
             FullscreenPlan(
                 text = entry.text,
+                actions = actions,
                 canImplement = canImplement,
                 onDismiss = { planFullscreen = false },
                 onImplement = {
@@ -305,6 +319,7 @@ private fun Message(
         ) {
             Column {
                 MediaGallery(entry.media, actions)
+                FileReferenceList(entry.files, actions)
                 Row(
                     Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(14.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -347,6 +362,7 @@ private fun Message(
 @Composable
 private fun FullscreenPlan(
     text: String,
+    actions: ConversationActions,
     canImplement: Boolean,
     onDismiss: () -> Unit,
     onImplement: () -> Unit,
@@ -381,7 +397,7 @@ private fun FullscreenPlan(
                     contentAlignment = Alignment.TopCenter,
                 ) {
                     Column(Modifier.fillMaxWidth().widthIn(max = 760.dp)) {
-                        SelectionContainer { Markdown(text.take(100000)) }
+                        SelectionContainer { FileAwareMarkdown(text.take(100000), actions) }
                     }
                 }
                 if (canImplement) {

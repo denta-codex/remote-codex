@@ -31,6 +31,7 @@ constructor(
     private val timeline = Timeline()
     private val attachmentStore = AttachmentStore(app)
     private val mediaRepository = MediaRepository(app)
+    private val remoteFileRepository = RemoteFileRepository(app)
     private val _state = MutableStateFlow(ScreenState(host = host))
     val state = _state.asStateFlow()
     private var connectionJob: Job? = null
@@ -487,6 +488,7 @@ constructor(
                 it.copy(
                     page = "chat",
                     thread = null,
+                    threadCwd = null,
                     title = "New chat",
                     entries = emptyList(),
                     activeTurn = null,
@@ -500,6 +502,7 @@ constructor(
                     journal = journal,
                     error = null,
                     attention = false,
+                    filePreview = null,
                 )
             }
             if (_state.value.ready) guarded { recoverNew() }
@@ -537,6 +540,7 @@ constructor(
             it.copy(
                 page = "chat",
                 thread = id,
+                threadCwd = null,
                 title = "Conversation",
                 entries = emptyList(),
                 activeTurn = null,
@@ -548,6 +552,7 @@ constructor(
                 error = null,
                 busy = true,
                 attention = false,
+                filePreview = null,
             )
         }
         var draft = local.get("draft/$id")
@@ -611,6 +616,7 @@ constructor(
                     threadModel = threadModel,
                     threadReasoningEffort =
                         thread.str("reasoningEffort").takeIf(String::isNotBlank),
+                    threadCwd = thread.str("cwd").takeIf(String::isNotBlank),
                     modelCatalogMessage =
                         if (options.removedUnsupportedChoice)
                             "The server no longer supports one of the selected choices. Unsupported overrides were cleared."
@@ -783,7 +789,7 @@ constructor(
             var values = before.attachments
             for (uri in uris) {
                 try {
-                    val added = attachmentStore.import(uri, values.sumOf { it.byteSize })
+                    val added = attachmentStore.importImage(uri, values.sumOf { it.byteSize })
                     if (n != selection || (_state.value.thread ?: "new") != key) {
                         attachmentStore.delete(added)
                         return@launch
@@ -794,6 +800,33 @@ constructor(
                 } catch (e: Exception) {
                     _state.update {
                         it.copy(error = e.message ?: "The selected image could not be added.")
+                    }
+                    break
+                }
+            }
+        }
+    }
+
+    override fun addFiles(uris: List<Uri>) {
+        val before = _state.value
+        if (before.busy || before.journal != null || uris.isEmpty()) return
+        val n = selection
+        val key = before.thread ?: "new"
+        viewModelScope.launch {
+            var values = before.attachments
+            for (uri in uris) {
+                try {
+                    val added = attachmentStore.importDocument(uri, values.sumOf { it.byteSize })
+                    if (n != selection || (_state.value.thread ?: "new") != key) {
+                        attachmentStore.delete(added)
+                        return@launch
+                    }
+                    values += added
+                    persistAttachments(key, values)
+                    _state.update { it.copy(attachments = values, error = null) }
+                } catch (e: Exception) {
+                    _state.update {
+                        it.copy(error = e.message ?: "The selected file could not be added.")
                     }
                     break
                 }
@@ -850,6 +883,58 @@ constructor(
 
     override suspend fun loadMedia(media: MediaRef): ByteArray =
         mediaRepository.load(media) { rpc.readFile(it) }
+
+    override fun inspectFile(file: FileRef) {
+        val before = _state.value
+        val resolved =
+            runCatching { remoteFileRepository.resolve(file, before.threadCwd) }
+                .getOrElse { failure ->
+                    _state.update {
+                        it.copy(
+                            filePreview =
+                                FilePreviewState(
+                                    reference = file,
+                                    loading = false,
+                                    error = failure.message ?: "The file path could not be resolved.",
+                                )
+                        )
+                    }
+                    return
+                }
+        _state.update { it.copy(filePreview = FilePreviewState(resolved)) }
+        val n = selection
+        viewModelScope.launch {
+            val preview =
+                runCatching {
+                        remoteFileRepository.load(resolved, rpc::getMetadata, rpc::readFile)
+                    }
+                    .getOrElse { failure ->
+                        FilePreviewState(
+                            reference = resolved,
+                            loading = false,
+                            error = failure.message ?: "The file is unavailable.",
+                        )
+                    }
+            if (n == selection && _state.value.filePreview?.reference?.key == file.key)
+                _state.update { it.copy(filePreview = preview) }
+        }
+    }
+
+    override fun dismissFile() {
+        _state.update { it.copy(filePreview = null) }
+    }
+
+    override fun saveFile(destination: Uri) {
+        val preview = _state.value.filePreview?.takeIf { !it.loading && it.error == null } ?: return
+        viewModelScope.launch {
+            runCatching { remoteFileRepository.save(preview, destination) }
+                .onFailure { failure ->
+                    _state.update {
+                        it.copy(error = failure.message ?: "The file could not be saved.")
+                    }
+                }
+        }
+    }
 
     private suspend fun restoreAttachments(key: String): List<DraftAttachment> =
         runCatching { attachmentStore.restore(local.get("attachments/$key")) }
@@ -1050,7 +1135,8 @@ constructor(
                 _state.update {
                     it.copy(
                         thread = id,
-                        title = journal.str("text").take(80).ifBlank { "Image message" },
+                        threadCwd = journal.str("cwd").takeIf(String::isNotBlank),
+                        title = journal.str("text").take(80).ifBlank { "Attachment message" },
                         journal = journal,
                         threadModel =
                             thread.str("model").takeIf(String::isNotBlank)
@@ -1063,7 +1149,9 @@ constructor(
             }
             val attachments = journalAttachments(journal)
             if (id != null && stage == "taskReady" && attachments.isNotEmpty()) {
-                ImagePolicy.validateCombined(attachments.map { it.byteSize })
+                AttachmentPolicy.validateCombined(
+                    attachments.map { attachment -> attachment.kind to attachment.byteSize }
+                )
                 val safeThread = id.replace(Regex("[^A-Za-z0-9._-]"), "-")
                 val remoteDirectory =
                     "$codexHome/attachments/remote-android/$safeThread/${journal.str("operation")}"
@@ -1077,30 +1165,45 @@ constructor(
                     stage in setOf("attachmentDirectoryReady", "attachmentUploaded")
             ) {
                 val remoteDirectory = journal.str("remoteDirectory")
-                val remotePaths = journal.list("remotePaths").map { it.str("path") }.toMutableList()
+                val remotePaths =
+                    journal.list("remotePaths").mapIndexed { index, row ->
+                        val attachment = attachments[index]
+                        TurnAttachment(
+                            kind =
+                                runCatching { AttachmentKind.valueOf(row.str("kind")) }
+                                    .getOrDefault(attachment.kind),
+                            displayName = row.str("displayName").ifBlank { attachment.displayName },
+                            path = row.str("path"),
+                        )
+                    }.toMutableList()
                 var uploadedCount = journal.str("uploadedCount").toIntOrNull() ?: 0
                 for (index in uploadedCount until attachments.size) {
                     val attachment = attachments[index]
                     val file = File(attachment.localPath)
-                    val format = ImagePolicy.inspect(file)
+                    val format =
+                        if (attachment.kind == AttachmentKind.IMAGE) ImagePolicy.inspect(file)
+                        else null
+                    AttachmentPolicy.validateSize(attachment.kind, file.length())
                     check(file.length() == attachment.byteSize) {
-                        "A draft image changed before it could be sent."
+                        "A draft attachment changed before it could be sent."
                     }
                     val remotePath =
-                        "$remoteDirectory/${safeAttachmentName(index + 1, attachment.displayName, format)}"
-                    val pendingPaths = remotePaths + remotePath
+                        "$remoteDirectory/${safeAttachmentName(index + 1, attachment.displayName, attachment.kind, format)}"
+                    val uploaded =
+                        TurnAttachment(attachment.kind, attachment.displayName, remotePath)
+                    val pendingPaths = remotePaths + uploaded
                     record(
                         "uploadingAttachment",
                         "uploadIndex" to JsonPrimitive(index),
-                        "remotePaths" to JsonArray(pendingPaths.map { obj("path" to s(it)) }),
+                        "remotePaths" to JsonArray(pendingPaths.map(::turnAttachmentJson)),
                     )
                     rpc.writeFile(remotePath, withContext(Dispatchers.IO) { file.readBytes() })
-                    remotePaths += remotePath
+                    remotePaths += uploaded
                     uploadedCount = index + 1
                     record(
                         "attachmentUploaded",
                         "uploadedCount" to JsonPrimitive(uploadedCount),
-                        "remotePaths" to JsonArray(remotePaths.map { obj("path" to s(it)) }),
+                        "remotePaths" to JsonArray(remotePaths.map(::turnAttachmentJson)),
                     )
                 }
                 record("attachmentsReady")
@@ -1112,7 +1215,17 @@ constructor(
             }
             if (id != null && stage == "attachmentsReady") {
                 record("sending")
-                val remotePaths = journal.list("remotePaths").map { it.str("path") }
+                val remotePaths =
+                    journal.list("remotePaths").mapIndexed { index, row ->
+                        val attachment = attachments[index]
+                        TurnAttachment(
+                            kind =
+                                runCatching { AttachmentKind.valueOf(row.str("kind")) }
+                                    .getOrDefault(attachment.kind),
+                            displayName = row.str("displayName").ifBlank { attachment.displayName },
+                            path = row.str("path"),
+                        )
+                    }
                 val input = turnInput(journal.str("text"), remotePaths)
                 if (expectedTurn == null)
                     rpc.call(
@@ -1210,9 +1323,16 @@ constructor(
     private fun journalAttachments(journal: JsonObject): List<DraftAttachment> {
         val raw = journal["attachments"] as? JsonArray ?: return emptyList()
         val restored = attachmentStore.restore(raw.toString())
-        require(restored.size == raw.size) { "A draft image is no longer available." }
+        require(restored.size == raw.size) { "A draft attachment is no longer available." }
         return restored
     }
+
+    private fun turnAttachmentJson(value: TurnAttachment) =
+        obj(
+            "kind" to s(value.kind.name),
+            "displayName" to s(value.displayName),
+            "path" to s(value.path),
+        )
 
     private suspend fun recoverNew(userInitiated: Boolean = false) {
         var journal = _state.value.journal ?: return
@@ -1326,7 +1446,7 @@ constructor(
                 "uploadingAttachment" ->
                     record(
                         stage,
-                        "An image write may have reached the host. It was not retried automatically.",
+                                "An attachment write may have reached the host. It was not retried automatically.",
                         true,
                     )
                 "sending", "accepted" -> {
@@ -1382,7 +1502,7 @@ constructor(
         _state.update {
             it.copy(
                 thread = id,
-                title = adopted.str("text").take(80).ifBlank { "Image message" },
+                title = adopted.str("text").take(80).ifBlank { "Attachment message" },
                 journal = adopted,
             )
         }

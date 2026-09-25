@@ -12,6 +12,9 @@ Record Android version, APK version/code, signer fingerprint, Codex version and 
 - [ ] Enter Plan mode, answer a blocking question, view the completed plan full screen, and implement it.
 - [ ] Send one image-only turn and one text-plus-multiple-images turn from Photos.
 - [ ] Capture and send a camera image without granting broad media permissions.
+- [ ] Send one file-only turn and one mixed image/file turn from the system document picker.
+- [ ] Reopen the task and confirm generic attachment chips reconstruct from server history.
+- [ ] Open, share, and save text, image, and unsupported result files; reject directories and files over 20 MiB.
 - [ ] Reopen the task and expand user, generated, and Codex-opened images.
 - [ ] Reject an unsupported/animated image, a file over 20 MiB, and a selection over 50 MiB.
 - [ ] Confirm identical task and messages on desktop, including projectless identity.

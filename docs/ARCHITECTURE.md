@@ -17,8 +17,8 @@ The host bearer token is a systemd encrypted user credential loaded at service
 start. Android scans its versioned setup QR and stores the token with an Android
 Keystore key. Authentication applies only to the forwarder upgrade; stock RPC
 remains unchanged.
-Android has no SSH transport. SSH is for deployment/recovery. Image transfer uses
-stock `fs/createDirectory`, `fs/writeFile`, and `fs/readFile` RPC over the same WSS
+Android has no SSH transport. SSH is for deployment/recovery. Attachment transfer uses
+stock `fs/createDirectory`, `fs/writeFile`, `fs/readFile`, and `fs/getMetadata` RPC over the same WSS
 connection; there is no additional HTTP upload or preview endpoint.
 
 The project-owned private updater is deliberately outside the stock RPC surface.
@@ -75,20 +75,28 @@ blocks further submission until the user inspects it. A reviewed record is retai
 locally; the composer can be explicitly unlocked. A successful acknowledgement
 removes the draft. Offline sending is not queued.
 
-Selected and camera images are imported immediately into app-private draft storage,
-and their descriptors are persisted with the text draft. Originals are preserved.
-Before the turn mutation, images are written sequentially beneath
-`$CODEX_HOME/attachments/remote-android/<thread>/<operation>` and referenced with
-stock `localImage` items. An uncertain image write or turn submission remains
-journaled and is never retried automatically. Limits match the ChatGPT Android
-remote client: 20 MiB per image and 50 MiB combined. Supported inputs are JPEG,
-PNG, WebP, and non-animated GIF.
+Selected images, camera images, and documents are imported immediately into app-private draft
+storage, and their descriptors are persisted with the text draft. Originals are preserved.
+Before the turn mutation, attachments are written sequentially beneath
+`$CODEX_HOME/attachments/remote-android/<thread>/<operation>`. Every uploaded path is included
+in the Android Codex `# Files mentioned by the user` context; images are additionally referenced
+with stock `localImage` items. An uncertain attachment write or turn submission remains journaled
+and is never retried automatically. Limits match the ChatGPT Android remote client: 20 MiB per
+attachment and 50 MiB combined. Images support JPEG, PNG, WebP, and non-animated GIF; other
+regular file types are transferred as generic files.
 
 Timeline entries retain stock `image`, `localImage`, `imageView`, and
 `imageGeneration` media. Host paths are fetched lazily with `fs/readFile`; data URLs
 and generation results are decoded locally. Raw host images use a bounded app cache
 and sampled rendering. External HTTP image URLs require an explicit tap and are
 never fetched automatically.
+
+User attachment history is reconstructed from the server-owned file context. Generic file
+references and file-change paths are validated with stock `fs/getMetadata`, then fetched only
+after an explicit tap. Android previews bounded UTF-8 text and images, exposes other types through
+`FileProvider`, and offers Open, Share, and `CreateDocument` save actions. Remote files remain
+limited to 20 MiB; the private preview cache is bounded and expires unretained files after seven
+days. Interactive HTML rendering remains a separate feature.
 
 Plan mode is exposed only when the stock `collaborationMode/list` capability
 advertises it. The selected stock collaboration setting is sent with `turn/start`;
@@ -115,7 +123,7 @@ do not include uncommitted checkout changes. Worktrees are deliberately retained
 cleanup, branch/ref selection, setup environments, and general Git management are
 outside this feature.
 
-Limits: no push notifications, non-image files, terminal emulator, or interactive
+Limits: no push notifications, directory attachments, terminal emulator, or interactive
 command previews. Activity text is bounded for phone rendering; full output
 remains on Grace. End-to-end physical-device behavior is a release acceptance step,
 not inferred from successful builds.

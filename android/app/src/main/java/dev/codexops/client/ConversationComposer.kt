@@ -31,6 +31,10 @@ internal fun ConversationComposer(
         rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) {
             actions.addAttachments(it)
         }
+    val filePicker =
+        rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) {
+            actions.addFiles(it)
+        }
     val camera =
         rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) {
             actions.finishCamera(it)
@@ -233,6 +237,13 @@ internal fun ConversationComposer(
                     modifier = Modifier.testTag("add-photos"),
                 ) {
                     Text("Photos")
+                }
+                TextButton(
+                    onClick = { filePicker.launch(arrayOf("*/*")) },
+                    enabled = !state.busy && state.journal == null,
+                    modifier = Modifier.testTag("add-files"),
+                ) {
+                    Text("Files")
                 }
                 TextButton(
                     onClick = { actions.prepareCamera()?.let(camera::launch) },

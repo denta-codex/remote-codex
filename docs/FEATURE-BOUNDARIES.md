@@ -17,7 +17,7 @@ separate worktrees.
 
 `NewTaskOptions` represents project, workspace target, model/reasoning, permissions, and mode.
 Its defaults preserve projectless execution and server defaults. Persisted `DraftAttachment`
-values live directly in `ScreenState` because images can be composed for both new and existing
+values live directly in `ScreenState` because images and files can be composed for both new and existing
 tasks. Adding a selector should update the appropriate state; RPC wiring belongs to the feature
 that introduces it and must retain the operation journal guarantees.
 

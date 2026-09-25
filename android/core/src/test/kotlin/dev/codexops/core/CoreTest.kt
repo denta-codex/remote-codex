@@ -87,15 +87,73 @@ class CoreTest {
         }
         assertEquals(
             "2-my-photo.png",
-            safeAttachmentName(2, "my photo.HEIC", ImageFormat("image/png", "png")),
+            safeAttachmentName(
+                2,
+                "my photo.HEIC",
+                AttachmentKind.IMAGE,
+                ImageFormat("image/png", "png"),
+            ),
         )
-        val imageOnly = turnInput("", listOf("/host/a.png"))
-        assertEquals("localImage", imageOnly.single().jsonObject.str("type"))
-        val mixed = turnInput("hello", listOf("/host/a.png", "/host/b.jpg"))
+        val image = TurnAttachment(AttachmentKind.IMAGE, "a.png", "/host/a.png")
+        val file = TurnAttachment(AttachmentKind.FILE, "notes.txt", "/host/notes.txt")
+        val imageOnly = turnInput("", listOf(image))
+        assertEquals(listOf("text", "localImage"), imageOnly.map { it.jsonObject.str("type") })
+        val mixed = turnInput("hello", listOf(image, file))
         assertEquals(
-            listOf("text", "localImage", "localImage"),
+            listOf("text", "localImage"),
             mixed.map { it.jsonObject.str("type") },
         )
+        val context = mixed.first().jsonObject.str("text")
+        assertEquals("hello", parseAttachmentContext(context)?.request)
+        assertEquals(
+            listOf("a.png" to "/host/a.png", "notes.txt" to "/host/notes.txt"),
+            parseAttachmentContext(context)?.files,
+        )
+        AttachmentPolicy.validateCombined(
+            listOf(AttachmentKind.IMAGE to MAX_IMAGE_BYTES, AttachmentKind.FILE to 0L)
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            AttachmentPolicy.validateCombined(
+                listOf(
+                    AttachmentKind.FILE to MAX_IMAGE_BYTES,
+                    AttachmentKind.FILE to MAX_IMAGE_BYTES,
+                    AttachmentKind.FILE to MAX_IMAGE_BYTES,
+                )
+            )
+        }
+    }
+
+    @Test
+    fun attachmentContextIsHiddenAndGenericFilesRemainStructured() {
+        val context =
+            attachmentContext(
+                "review these",
+                listOf(
+                    TurnAttachment(AttachmentKind.IMAGE, "shot.png", "/host/shot.png"),
+                    TurnAttachment(AttachmentKind.FILE, "notes.txt", "/host/notes.txt"),
+                ),
+            )
+        val entry =
+            Entry(
+                "turn",
+                obj(
+                    "id" to s("user"),
+                    "type" to s("userMessage"),
+                    "content" to
+                        JsonArray(
+                            listOf(
+                                obj("type" to s("text"), "text" to s(context)),
+                                obj(
+                                    "type" to s("localImage"),
+                                    "path" to s("/host/shot.png"),
+                                ),
+                            )
+                        ),
+                ),
+            )
+        assertEquals("review these", entry.text)
+        assertEquals(listOf("notes.txt"), entry.files.map(FileRef::displayName))
+        assertEquals("/host/notes.txt", entry.files.single().path)
     }
 
     @Test

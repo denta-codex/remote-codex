@@ -8,6 +8,17 @@ import kotlinx.serialization.json.JsonElement
 const val MAX_IMAGE_BYTES = 20L * 1024 * 1024
 const val MAX_ATTACHMENT_BYTES = 50L * 1024 * 1024
 
+enum class AttachmentKind {
+    IMAGE,
+    FILE,
+}
+
+data class TurnAttachment(
+    val kind: AttachmentKind,
+    val displayName: String,
+    val path: String,
+)
+
 data class ImageFormat(val mimeType: String, val extension: String)
 
 object ImagePolicy {
@@ -102,20 +113,66 @@ object ImagePolicy {
     private fun Byte.u() = toInt() and 0xFF
 }
 
-fun safeAttachmentName(index: Int, displayName: String, format: ImageFormat): String {
-    val rawStem = displayName.substringBeforeLast('.', displayName)
+object AttachmentPolicy {
+    fun validateSize(kind: AttachmentKind, size: Long) {
+        if (kind == AttachmentKind.IMAGE) ImagePolicy.validateSize(size)
+        else require(size in 0..MAX_IMAGE_BYTES) { "Files must be 20 MiB or smaller." }
+    }
+
+    fun validateCombined(attachments: Iterable<Pair<AttachmentKind, Long>>) {
+        var total = 0L
+        attachments.forEach { (kind, size) ->
+            validateSize(kind, size)
+            total = Math.addExact(total, size)
+        }
+        require(total <= MAX_ATTACHMENT_BYTES) {
+            "Attachments in one message must total 50 MiB or less."
+        }
+    }
+}
+
+fun safeAttachmentName(
+    index: Int,
+    displayName: String,
+    kind: AttachmentKind,
+    imageFormat: ImageFormat? = null,
+): String {
+    val cleanName = displayName.replace('\r', ' ').replace('\n', ' ')
+    val originalExtension =
+        cleanName.substringAfterLast('.', "").replace(Regex("[^A-Za-z0-9]+"), "").take(12)
+    val extension =
+        if (kind == AttachmentKind.IMAGE) requireNotNull(imageFormat).extension
+        else originalExtension
+    val rawStem = if (extension.isBlank()) cleanName else cleanName.substringBeforeLast('.')
     val stem =
         rawStem
             .replace(Regex("[^A-Za-z0-9._-]+"), "-")
             .trim('-', '.', '_')
             .take(64)
-            .ifBlank { "image" }
-    return "$index-$stem.${format.extension}"
+            .ifBlank { if (kind == AttachmentKind.IMAGE) "image" else "file" }
+    return "$index-$stem${extension.takeIf(String::isNotBlank)?.let { ".$it" }.orEmpty()}"
 }
 
-fun turnInput(text: String, localImages: List<String>): JsonArray {
+fun attachmentContext(text: String, attachments: List<TurnAttachment>): String {
+    if (attachments.isEmpty()) return text
+    val sections = mutableListOf("# Files mentioned by the user:")
+    sections +=
+        attachments.map {
+            "## ${it.displayName.replace('\r', ' ').replace('\n', ' ')}: ${it.path}"
+        }
+    sections += "## My request for Codex:"
+    text.trim().takeIf(String::isNotEmpty)?.let(sections::add)
+    return sections.joinToString("\n\n")
+}
+
+fun turnInput(text: String, attachments: List<TurnAttachment>): JsonArray {
     val values = mutableListOf<JsonElement>()
-    if (text.isNotBlank()) values += obj("type" to s("text"), "text" to s(text))
-    values += localImages.map { obj("type" to s("localImage"), "path" to s(it)) }
+    val contextualText = attachmentContext(text, attachments)
+    if (contextualText.isNotBlank())
+        values += obj("type" to s("text"), "text" to s(contextualText))
+    values +=
+        attachments.filter { it.kind == AttachmentKind.IMAGE }.map {
+            obj("type" to s("localImage"), "path" to s(it.path))
+        }
     return JsonArray(values)
 }

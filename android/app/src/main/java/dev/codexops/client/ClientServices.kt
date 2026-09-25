@@ -32,6 +32,9 @@ interface RemoteSession {
     suspend fun readFile(path: String): ByteArray =
         Base64.getDecoder().decode(call("fs/readFile", obj("path" to s(path))).str("dataBase64"))
 
+    suspend fun getMetadata(path: String): JsonObject =
+        call("fs/getMetadata", obj("path" to s(path)))
+
     fun respond(id: JsonElement, result: JsonObject, epoch: Long)
 
     fun close()
@@ -57,6 +60,9 @@ class StockRemoteSession(allowLoopbackTest: Boolean = false) : RemoteSession {
     override suspend fun writeFile(path: String, bytes: ByteArray) = rpc.writeFile(path, bytes)
 
     override suspend fun readFile(path: String) = rpc.readFile(path)
+
+    override suspend fun getMetadata(path: String) =
+        rpc.call("fs/getMetadata", obj("path" to s(path)))
 
     override fun respond(id: JsonElement, result: JsonObject, epoch: Long) =
         rpc.respond(id, result, epoch)

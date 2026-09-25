@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import dev.codexops.core.MediaLocation
 import dev.codexops.core.MediaRef
+import dev.codexops.core.AttachmentKind
 import java.io.File
 import java.nio.ByteBuffer
 import kotlinx.coroutines.Dispatchers
@@ -32,7 +33,7 @@ private object BitmapMemoryCache : LruCache<String, Bitmap>(8 * 1024 * 1024) {
     override fun sizeOf(key: String, value: Bitmap) = value.allocationByteCount
 }
 
-private suspend fun decodedBitmap(key: String, bytes: ByteArray, maximum: Int): Bitmap =
+internal suspend fun decodedBitmap(key: String, bytes: ByteArray, maximum: Int): Bitmap =
     withContext(Dispatchers.Default) {
         val cacheKey = "$key/$maximum"
         BitmapMemoryCache.get(cacheKey)?.let { return@withContext it }
@@ -55,6 +56,32 @@ private suspend fun decodedBitmap(key: String, bytes: ByteArray, maximum: Int): 
 
 @Composable
 internal fun DraftAttachmentPreview(attachment: DraftAttachment, remove: () -> Unit) {
+    if (attachment.kind == AttachmentKind.FILE) {
+        Surface(
+            Modifier.width(180.dp).testTag("draft-file"),
+            shape = MaterialTheme.shapes.small,
+            tonalElevation = 2.dp,
+        ) {
+            Column(Modifier.padding(10.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Glyph(R.drawable.ic_file, modifier = Modifier.size(20.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(attachment.displayName, maxLines = 2, fontSize = 12.sp)
+                        Text(
+                            formatBytes(attachment.byteSize),
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                TextButton(remove, Modifier.fillMaxWidth()) { Text("Remove", fontSize = 11.sp) }
+            }
+        }
+        return
+    }
     val bitmap by
         produceState<Bitmap?>(null, attachment.id) {
             value =
@@ -90,6 +117,13 @@ internal fun DraftAttachmentPreview(attachment: DraftAttachment, remove: () -> U
         }
     }
 }
+
+internal fun formatBytes(value: Long): String =
+    when {
+        value >= 1024 * 1024 -> "%.1f MiB".format(value.toDouble() / (1024 * 1024))
+        value >= 1024 -> "%.1f KiB".format(value.toDouble() / 1024)
+        else -> "$value B"
+    }
 
 @Composable
 internal fun MediaGallery(media: List<MediaRef>, actions: ConversationActions) {
