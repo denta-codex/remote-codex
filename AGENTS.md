@@ -13,10 +13,15 @@ APK and JADX output. Related research is in
 `/home/agent/workspaces/android-app-research/CHATGPT-ANDROID-INTERNALS.md` and
 `/home/agent/workspaces/codex-ops/android/PROJECTLESS-RESEARCH.md`.
 
-For Android worktree testing, use `scripts/emulator-start`,
-`scripts/emulator-test`, `scripts/emulator-record`, and `scripts/emulator-stop`.
-Do not select an arbitrary device from `adb devices`; each worktree owns the
-emulator serial recorded by these helpers. Record fixture-backed instrumentation
-tests by default; do not improvise recording flows that can expose live account
-content. Emulator data is disposable, so never place durable credentials or test
-state in it.
+For automated Android instrumentation, use `scripts/emulator-test --tests` with
+the smallest relevant set. Use `--full` only for concrete cross-cutting or
+test-infrastructure risk; release preparation alone is not a reason. Tests run
+through AndroidX Test Orchestrator on a Gradle-managed device and have bounded
+timeouts; never retry a failed or timed-out run automatically.
+
+Use `scripts/emulator-start`, `scripts/emulator-record`, and
+`scripts/emulator-stop` only for interactive inspection and fixture-backed
+recording. Do not select an arbitrary device from `adb devices`; each interactive
+worktree owns the emulator serial recorded by these helpers. Do not improvise
+recording flows that can expose live account content. Emulator data is disposable,
+so never place durable credentials or test state in it.

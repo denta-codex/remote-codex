@@ -43,6 +43,19 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    testOptions {
+        execution = "ANDROIDX_TEST_ORCHESTRATOR"
+        managedDevices {
+            localDevices {
+                create("remoteCodexApi36") {
+                    device = "Pixel 7"
+                    apiLevel = 36
+                    systemImageSource = "google"
+                    testedAbi = "x86_64"
+                }
+            }
+        }
+    }
 }
 
 dependencies {
@@ -64,6 +77,7 @@ dependencies {
     androidTestImplementation("com.squareup.okhttp3:okhttp:4.12.0")
     androidTestImplementation(platform("androidx.compose:compose-bom:2025.08.01"))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
-    androidTestImplementation("androidx.test:runner:1.6.2")
-    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestUtil("androidx.test:orchestrator:1.6.1")
 }

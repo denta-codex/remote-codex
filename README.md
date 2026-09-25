@@ -29,12 +29,21 @@ the existing managed JDK, Android SDK, Rust and Codex toolchains, writes the ign
 Android SDK location, and creates a shared clean Android 16 base AVD when needed.
 It does not install or replace toolchains.
 
-Each worktree can run an isolated, disposable emulator from that base AVD:
+Automated instrumentation uses AndroidX Test Orchestrator on a Gradle-managed
+Android 16 virtual device. Select the smallest relevant test set; the full suite
+is explicit and reserved for cross-cutting or test-infrastructure changes:
+
+```sh
+scripts/emulator-test --tests AppTest#textChatStreamsAndCanReopen
+scripts/emulator-test --full
+```
+
+Interactive inspection and fixture recording retain a worktree-owned disposable
+emulator from the shared base AVD:
 
 ```sh
 scripts/emulator-start             # build, install and open; expires after one hour
 scripts/emulator-start --ttl 2h    # override the lifetime
-scripts/emulator-test              # run instrumentation on this worktree's emulator
 scripts/emulator-record textChatStreamsAndCanReopen
 scripts/emulator-stop              # stop it early
 ```
@@ -42,7 +51,7 @@ scripts/emulator-stop              # stop it early
 The emulator is read-only with respect to the shared base AVD. App and device data
 last for the running emulator process and are discarded when it stops. Runtime
 state is kept outside the repository. `emulator-start` stays attached to its
-terminal until the emulator stops; use another terminal for tests. Re-running it
+terminal until the emulator stops; use another terminal for recording. Re-running it
 from another terminal reuses this worktree's live emulator and installs the current
 debug build. It opens a window when a desktop display is available and runs
 headlessly on a remote host. Fresh emulators must be paired again for interactive live testing;
@@ -112,12 +121,10 @@ existing server. Correct APK issues with a higher version and the same signing k
 
 See [architecture](docs/ARCHITECTURE.md) and [physical acceptance](docs/DEVICE-ACCEPTANCE.md).
 
-To rerun instrumentation on a disposable emulator:
+To rerun selected instrumentation on the managed device:
 
 ```sh
-ANDROID_SERIAL=EMULATOR_SERIAL JAVA_HOME="$(mise where java@temurin-17.0.20+8)" \
-ANDROID_HOME=/home/agent/Android/Sdk \
-android/gradlew -p android --no-daemon :app:connectedDebugAndroidTest
+scripts/emulator-test --tests AppTest#textChatStreamsAndCanReopen
 ```
 
 Read [validation results and remaining acceptance](docs/VALIDATION.md).

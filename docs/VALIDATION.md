@@ -35,10 +35,25 @@
   stable channel. The authenticated endpoint returned versionCode 10. No
   Taildrop delivery or physical-phone installation was performed.
 
+## September 24, 2026 — standard Android test orchestration
+
+- Replaced custom automated-emulator lifecycle orchestration with AndroidX Test
+  Orchestrator on a Gradle-managed Android 16 device. The worktree-owned emulator
+  remains only for interactive inspection, recording, and live acceptance.
+- Added explicit targeted and full instrumentation modes with bounded execution;
+  routine work selects the smallest relevant tests and cannot accidentally start
+  the full suite.
+- `scripts/check` passed. A three-test targeted run passed in 1 minute 31 seconds,
+  and the full managed-device run passed in 4 minutes 35 seconds: 21 tests, zero
+  failures, and one intentionally skipped credential-gated live test.
+- Process isolation exposed and fixed a fixture-only Compose teardown issue and
+  replaced implicit one-second UI waits with explicit bounded waits.
+- Machine profiles are shelved and are not part of the release roadmap.
+
 ## September 24, 2026 — integrated image and plan release
 
 - Merged image attachments and stock-advertised plan mode onto the current `main`
-  line. Machine profiles remain split out for a later review.
+  line. Machine profiles remained separate and were subsequently shelved.
 - Advanced Android to 0.1.8 / code 9 because the private stable channel already
   contains the immutable 0.1.7 / code 8 update.
 - `scripts/check` passed after integration, including Rust tests, Kotlin tests,
