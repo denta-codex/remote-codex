@@ -46,6 +46,18 @@ internal fun ConversationComposer(
             it.turnSetting(state.collaborationModel()) != null
         }
     val selectedMode = modes.firstOrNull { it.mode == state.newTaskOptions.collaborationMode }
+    val composerStatus =
+        when {
+            state.activeTurn != null -> "Follow-up guides the active turn"
+            state.thread == null && !projectAvailable ->
+                "Choose an available project or No project"
+            state.newTaskOptions.model != null ||
+                state.newTaskOptions.reasoningEffort != null ->
+                "Explicit overrides apply to the next turn"
+            state.thread == null && selectedProject != null ->
+                selectedProject.primaryRoot.orEmpty()
+            else -> "${state.host.displayName} defaults"
+        }
     Surface(
         modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
@@ -195,8 +207,18 @@ internal fun ConversationComposer(
                     ),
             )
             ModelControls(state, actions)
+            Text(
+                composerStatus,
+                Modifier.fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 2.dp)
+                    .testTag("composer-status"),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Row(
-                Modifier.fillMaxWidth().padding(start = 12.dp),
+                Modifier.fillMaxWidth().padding(start = 12.dp).testTag("composer-actions"),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 TextButton(
@@ -219,22 +241,7 @@ internal fun ConversationComposer(
                 ) {
                     Text("Camera")
                 }
-                Text(
-                    when {
-                        state.activeTurn != null -> "Follow-up guides the active turn"
-                        state.thread == null && !projectAvailable ->
-                            "Choose an available project or No project"
-                        state.newTaskOptions.model != null ||
-                            state.newTaskOptions.reasoningEffort != null ->
-                            "Explicit overrides apply to the next turn"
-                        state.thread == null && selectedProject != null ->
-                            selectedProject.primaryRoot.orEmpty()
-                        else -> "${state.host.displayName} defaults"
-                    },
-                    Modifier.weight(1f),
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Spacer(Modifier.weight(1f))
                 if (modes.isNotEmpty())
                     Box {
                         TextButton(

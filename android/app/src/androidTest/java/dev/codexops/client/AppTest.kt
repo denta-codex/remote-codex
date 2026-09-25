@@ -1286,6 +1286,15 @@ class AppTest {
         compose.onNodeWithTag("send").performClick()
 
         compose.waitUntil(10000) { model.state.value.decisions.size == 1 }
+        compose.onNodeWithTag("composer-status")
+            .assertTextContains("Follow-up guides the active turn")
+        val actionHeight =
+            compose.onNodeWithTag("composer-actions").fetchSemanticsNode().boundsInRoot.height
+        val maxActionHeight = 64 * compose.activity.resources.displayMetrics.density
+        assertTrue(
+            "Active-turn composer actions expanded to $actionHeight px",
+            actionHeight <= maxActionHeight,
+        )
         compose.onNodeWithText("Where should the plan focus?").assertIsDisplayed()
         compose.onNodeWithText("Current workspace").performClick()
         compose.onNodeWithText("Submit answers").performClick()
