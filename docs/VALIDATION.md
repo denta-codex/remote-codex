@@ -15,7 +15,9 @@
   lint, package and signer verification, manifest generation, and checksum
   generation. The signed APK SHA-256 is
   `0f9ce71874d5c9eae3897ba74a0eb14feca12461b64c1dc662c856d1ff11dd36`.
-- No publication, Taildrop delivery, or physical-phone installation was performed.
+- The Ansible publication dry run passed, then 0.2.2 was published to the private
+  stable channel. The authenticated endpoint returned versionCode 12. No Taildrop
+  delivery or physical-phone installation was performed.
 
 ## September 25, 2026 — project-task workspace validation fix
 
