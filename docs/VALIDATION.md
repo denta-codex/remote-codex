@@ -1,5 +1,25 @@
 # Validation
 
+## September 24, 2026 — Android file support
+
+- Generalized image drafts into image-or-file attachments while retaining the stock
+  `fs/createDirectory` and base64 `fs/writeFile` transfer path. Generic files are
+  represented in the exact Android file-context prompt; only images add a
+  `localImage` turn item.
+- Added stock `fs/getMetadata` plus `fs/readFile` result handling, bounded local
+  caching, UTF-8 text and image previews, generic open/share/save actions, and
+  clickable file references from user messages, file changes, and Markdown links.
+- Preserved the decompiled Android limits: 20 MiB per attachment and 50 MiB total.
+  Existing image drafts and uncertain-write journals remain readable.
+- `scripts/check` passed after merging the current `main`, including Rust tests,
+  Kotlin tests, Android unit tests, debug and instrumentation APK assembly, and
+  lint. No production Rust code changed.
+- All 24 fixture-backed Android instrumentation tests completed on the
+  worktree-owned Android 16 emulator; the credential-gated live test skipped as
+  designed. The disposable emulator was stopped afterward.
+- No release build, publication, Taildrop delivery, or physical-phone installation
+  was performed.
+
 ## September 24, 2026 — composer layout release
 
 - Advanced Android to 0.2.0 / code 10 for the composer layout fixes.
