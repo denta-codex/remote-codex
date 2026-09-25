@@ -14,9 +14,9 @@
 - `scripts/check` passed after merging the current `main`, including Rust tests,
   Kotlin tests, Android unit tests, debug and instrumentation APK assembly, and
   lint. No production Rust code changed.
-- All 24 fixture-backed Android instrumentation tests completed on the
-  worktree-owned Android 16 emulator; the credential-gated live test skipped as
-  designed. The disposable emulator was stopped afterward.
+- The Android instrumentation run finished 24 tests on the worktree-owned
+  Android 16 emulator: every fixture-backed test passed and the credential-gated
+  live test skipped as designed. The disposable emulator was stopped afterward.
 - No release build, publication, Taildrop delivery, or physical-phone installation
   was performed.
 
