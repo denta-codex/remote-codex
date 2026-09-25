@@ -35,6 +35,8 @@ class AppTest {
     private val sent = AtomicInteger()
     private val prepared = AtomicInteger()
     private val modelLists = AtomicInteger()
+    private val workspaceMetadataReads = AtomicInteger()
+    private val invalidDirectoryProbes = AtomicInteger()
     @Volatile private var dropSend = false
     @Volatile private var dropWrite = false
     @Volatile private var fastModelAvailable = true
@@ -51,6 +53,7 @@ class AppTest {
     private val threadStarts = AtomicInteger()
     @Volatile private var dropWorktreeReply = false
     @Volatile private var dropThreadStartReply = false
+    @Volatile private var rejectWorkspaceMetadata = false
     @Volatile private var createdWorktreePath = ""
     @Volatile private var createdTaskCwd = ""
     @Volatile private var createdTaskProject = ""
@@ -259,6 +262,10 @@ class AppTest {
                                             }
                                             "command/exec" -> {
                                                 when {
+                                                    command.firstOrNull() == "test" -> {
+                                                        invalidDirectoryProbes.incrementAndGet()
+                                                        obj("exitCode" to JsonPrimitive(2))
+                                                    }
                                                     "symbolic-ref" in command ->
                                                         obj(
                                                             "exitCode" to JsonPrimitive(0),
@@ -323,18 +330,51 @@ class AppTest {
                                                         s(remoteFiles[params.str("path")].orEmpty())
                                                 )
                                             "fs/getMetadata" -> {
-                                                val encoded = remoteFiles[params.str("path")]
-                                                obj(
-                                                    "type" to s("file"),
-                                                    "size" to
-                                                        JsonPrimitive(
-                                                            encoded?.let {
-                                                                java.util.Base64.getDecoder()
-                                                                    .decode(it)
-                                                                    .size
-                                                            } ?: 0
-                                                        ),
-                                                )
+                                                val path = params.str("path")
+                                                if (
+                                                    rejectWorkspaceMetadata &&
+                                                        path == "/fixture/remote-codex"
+                                                ) {
+                                                    ws.send(
+                                                        obj(
+                                                                "id" to m["id"],
+                                                                "error" to
+                                                                    obj(
+                                                                        "code" to
+                                                                            JsonPrimitive(-32000),
+                                                                        "message" to
+                                                                            s("Fixture metadata rejection"),
+                                                                    ),
+                                                            )
+                                                            .toString()
+                                                    )
+                                                    return
+                                                }
+                                                if (
+                                                    path == "/fixture/remote-codex" ||
+                                                        path == "/fixture/notes" ||
+                                                        path == "/fixture/repo" ||
+                                                        path.startsWith("/fixture/worktrees/")
+                                                ) {
+                                                    workspaceMetadataReads.incrementAndGet()
+                                                    obj(
+                                                        "metadata" to
+                                                            obj("type" to s("directory"))
+                                                    )
+                                                } else {
+                                                    val encoded = remoteFiles[path]
+                                                    obj(
+                                                        "type" to s("file"),
+                                                        "size" to
+                                                            JsonPrimitive(
+                                                                encoded?.let {
+                                                                    java.util.Base64.getDecoder()
+                                                                        .decode(it)
+                                                                        .size
+                                                                } ?: 0
+                                                            ),
+                                                    )
+                                                }
                                             }
                                             "thread/turns/list" -> history()
                                             "turn/start",
@@ -1279,6 +1319,8 @@ class AppTest {
         assertEquals(createdWorktreePath, threadStartParams!!.str("cwd"))
         assertTrue(createdWorktreePath.startsWith("/fixture/worktrees/remote-codex-"))
         assertTrue(createdWorktreePath.endsWith("/workspace"))
+        assertTrue(workspaceMetadataReads.get() > 0)
+        assertEquals(0, invalidDirectoryProbes.get())
         demoPause(3500)
     }
 
@@ -1303,6 +1345,53 @@ class AppTest {
         assertEquals(0, worktreeAdds.get())
         assertEquals("project-remote", threadStartParams!!.str("projectId"))
         assertEquals("/fixture/remote-codex", threadStartParams!!.str("cwd"))
+        assertTrue(workspaceMetadataReads.get() > 0)
+        assertEquals(0, invalidDirectoryProbes.get())
+    }
+
+    @Test
+    fun rejectedWorkspaceValidationPreservesDraftAndAllowsRetry() {
+        rejectWorkspaceMetadata = true
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
+        compose.runOnUiThread {
+            model.updateNewTaskOptions(
+                NewTaskOptions(
+                    projectId = "project-remote",
+                    workingDirectory = "/fixture/remote-codex",
+                    executionTarget = ExecutionTarget.CurrentWorkspace,
+                )
+            )
+        }
+        compose.onNodeWithTag("composer").performTextInput("Keep this project draft")
+        val image = fixtureImage("validation-retry.png")
+        compose.runOnUiThread { model.addAttachments(listOf(Uri.fromFile(image))) }
+        compose.waitUntil(5000) { model.state.value.attachments.size == 1 }
+        compose.onNodeWithTag("send").performClick()
+
+        compose.waitUntil(15000) {
+            !model.state.value.busy &&
+                model.state.value.journal == null &&
+                model.state.value.error != null
+        }
+        assertEquals(
+            "The host could not inspect the selected workspace. Refresh projects and try again.",
+            model.state.value.error,
+        )
+        assertEquals(0, threadStarts.get())
+        assertEquals(0, invalidDirectoryProbes.get())
+        assertEquals(
+            "Keep this project draft",
+            runBlocking { LocalStore(app).get("draft/new") },
+        )
+        compose.onNodeWithTag("composer").assertTextContains("Keep this project draft")
+        assertEquals(1, model.state.value.attachments.size)
+        compose.onNodeWithTag("draft-attachment").assertIsDisplayed()
+
+        rejectWorkspaceMetadata = false
+        compose.onNodeWithTag("send").performClick()
+        compose.waitUntil(15000) { sent.get() == 1 && model.state.value.journal == null }
+        assertEquals(1, threadStarts.get())
     }
 
     @Test

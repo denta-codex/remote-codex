@@ -1,5 +1,34 @@
 # Validation
 
+## September 25, 2026 — project-task workspace validation fix
+
+- Root cause: Remote Codex checked a selected project root with
+  `command/exec(["test", "-d", "--", path])`. The host's `test` implementation
+  rejects `--`, so an existing directory produced exit code 2 and the Android
+  client reported that the server-advertised workspace was inaccessible.
+- Replaced that shell probe with the existing stock `fs/getMetadata` RPC. A
+  selected root is accepted only when metadata identifies a directory, after
+  `project/read` has confirmed that the project still exists and continues to
+  advertise the exact root. Git and directory mutations remain on the journaled
+  `command/exec` path; trust configuration is not inspected.
+- Workspace-validation failures now remove the pre-mutation journal while
+  retaining the draft and attachments, allowing a safe retry. Failures after a
+  directory, worktree, task, attachment, or message mutation retain the existing
+  uncertain-operation behavior.
+- Focused JVM workspace tests passed, covering directory, file, missing path,
+  rejected metadata, changed project root, RPC order, absence of a `test`
+  command, and absence of trust reads or mutations. `scripts/check` passed,
+  including Rust format/clippy/tests, Kotlin tests, Android unit tests, debug and
+  instrumentation APK assembly, and lint.
+- One targeted managed-emulator run covered four scenarios. Current workspace,
+  new worktree, and projectless creation passed. The new rejected-validation
+  test hit its initial 5-second UI-state deadline; its assertion was changed to
+  the suite's standard 15-second bound and exact terminal-error verification.
+  Per the no-automatic-retry policy, that revised test has not been rerun.
+- No release, deployment, phone delivery, or physical-device acceptance was
+  performed. Current- and new-worktree creation against Grace on the Razr remain
+  required before declaring the user-visible bug fixed.
+
 ## September 25, 2026 — compact cover-screen adaptation
 
 - Added window-based compact-height and nearly-square classification, then adapted
