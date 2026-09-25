@@ -1,5 +1,18 @@
 # Validation
 
+## September 24, 2026 — Android file support release
+
+- Advanced Android to 0.2.1 / code 11 for generic file attachments and file
+  result previews, opening, sharing, and saving.
+- `scripts/check` passed, including Rust tests, Kotlin and Android unit tests,
+  debug assembly, instrumentation APK assembly, and lint. `scripts/release`
+  repeated those checks successfully, then passed signed release assembly and
+  lint, package/signer verification, manifest generation, and checksum generation.
+- The signed APK SHA-256 is
+  `4d133af1b874e366b0ba64b38b69dfdf5b56242988447d57ac2422958e108339`.
+- No deployment, update publication, Taildrop delivery, or physical-phone
+  installation was performed.
+
 ## September 24, 2026 — Android file support
 
 - Generalized image drafts into image-or-file attachments while retaining the stock

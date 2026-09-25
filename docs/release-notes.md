@@ -1,1 +1,1 @@
-Improve the conversation composer during active turns. Long workspace paths no longer expand the footer or displace its controls.
+Add generic file attachments and file results. Send documents alongside images, reopen attachment chips from task history, and preview, open, share, or save returned files.
