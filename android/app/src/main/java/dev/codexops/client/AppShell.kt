@@ -1,5 +1,10 @@
 package dev.codexops.client
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -12,6 +17,7 @@ import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -56,6 +62,7 @@ internal fun Glyph(
 @Composable
 internal fun App(model: ClientModel) {
     val st by model.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     BackHandler(st.page != "home") { model.home() }
     AdaptiveWindow {
         Scaffold(
@@ -100,6 +107,12 @@ internal fun App(model: ClientModel) {
                             }
                     },
                     actions = {
+                        if (st.page == "chat")
+                            st.thread?.let { threadId ->
+                                IconButton(onClick = { copyThreadDeeplink(context, threadId) }) {
+                                    Glyph(R.drawable.ic_copy, "Copy deeplink")
+                                }
+                            }
                         if (st.page != "settings")
                             IconButton(onClick = model::settings) {
                                 Glyph(R.drawable.ic_settings, "Settings")
@@ -140,4 +153,14 @@ internal fun App(model: ClientModel) {
             }
         }
     }
+}
+
+internal fun threadDeeplink(threadId: String): String =
+    Uri.Builder().scheme("codex").authority("threads").appendPath(threadId).build().toString()
+
+private fun copyThreadDeeplink(context: Context, threadId: String) {
+    context
+        .getSystemService(ClipboardManager::class.java)
+        .setPrimaryClip(ClipData.newPlainText("Codex thread deeplink", threadDeeplink(threadId)))
+    Toast.makeText(context, "Deeplink copied", Toast.LENGTH_SHORT).show()
 }

@@ -1,6 +1,7 @@
 package dev.codexops.client
 
 import android.app.Application
+import android.content.ClipboardManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.SystemClock
@@ -924,6 +925,34 @@ class AppTest {
         }
         compose.onNodeWithText("Hello from Grace").assertIsDisplayed()
         demoPause(3000)
+    }
+
+    @Test
+    fun existingThreadDeeplinkCanBeCopied() {
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) {
+            model.state.value.page == "chat" &&
+                model.state.value.thread == "task-test" &&
+                !model.state.value.busy
+        }
+
+        compose.onNodeWithContentDescription("Copy deeplink").performClick()
+
+        val clipboard = app.getSystemService(ClipboardManager::class.java)
+        compose.waitUntil(5000) {
+            clipboard.primaryClip?.getItemAt(0)?.coerceToText(app)?.toString() ==
+                "codex://threads/task-test"
+        }
+        assertEquals(
+            "codex://threads/task-test",
+            clipboard.primaryClip!!.getItemAt(0).coerceToText(app).toString(),
+        )
+
+        compose.runOnUiThread { model.newChat() }
+        compose.waitUntil(5000) {
+            model.state.value.page == "chat" && model.state.value.thread == null
+        }
+        compose.onNodeWithContentDescription("Copy deeplink").assertDoesNotExist()
     }
 
     @Test
