@@ -24,7 +24,7 @@
       - Build log: `{{ run_log }}.build.log`.
       - Installation remains user initiated. No forwarder deployment or phone installation was performed.
 
-      {{ (validation_record.content | b64decode) | regex_replace('^# Validation\\s*', '') }}
+      {{ (validation_record.content | b64decode) | regex_replace('^# Validation', '') | trim }}
 
 - name: Check branch attachment
   ansible.builtin.command:

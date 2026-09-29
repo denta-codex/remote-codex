@@ -216,6 +216,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(self.git("branch", "--show-current"), "codex/release-0.2.9")
         self.assertIn("Add fixture feature", self.prepared()["releaseNotes"])
         self.assertIn("Existing record.", (self.repo / "docs/VALIDATION.md").read_text())
+        self.assertEqual((self.repo / "docs/VALIDATION.md").read_text().count('# Validation\n'), 1)
 
     def test_explicit_version_and_notes(self):
         notes = self.base / "notes.txt"

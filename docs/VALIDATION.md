@@ -9,8 +9,6 @@
 - Build log: `/home/agent/.codex/worktrees/3896/remote-codex/artifacts/releases/run-20260929T152952Z-4CuzOP.log.build.log`.
 - Installation remains user initiated. No forwarder deployment or phone installation was performed.
 
-# Validation
-
 ## September 29, 2026 — Ansible build and release workflow
 
 - Added build-only and complete release actions to the existing Ansible entry
