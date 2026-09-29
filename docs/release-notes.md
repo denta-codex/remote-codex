@@ -1,1 +1,1 @@
-Queue follow-up messages while Codex is working, then use Steer now, Send now, or Remove without losing your current draft. Keep the queue in sync across devices and preserve access to sending controls on compact cover screens.
+- Automate builds and in-app releases with Ansible

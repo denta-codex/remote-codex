@@ -1,5 +1,16 @@
 # Validation
 
+## 2026-09-29 — Android 0.2.4 (14)
+
+- Source revision: `30e8947d1959b0e8e799d3a7a0b2b5a302360784`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `ac08d1b2c78adb68f54d23f8cb14ced9ed1a2eaaf6f24ed0f918712a926b0e9a`.
+- Outcome: Built and signed locally; not published.
+- Build log: `/home/agent/.codex/worktrees/3896/remote-codex/artifacts/releases/run-20260929T152952Z-4CuzOP.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
+# Validation
+
 ## September 29, 2026 — Ansible build and release workflow
 
 - Added build-only and complete release actions to the existing Ansible entry
