@@ -1,1 +1,1 @@
-Adapt the interface for compact foldable cover screens, add thread deeplink copying, and make workspace validation reliable while preserving drafts for safe retries.
+Queue follow-up messages while Codex is working, then use Steer now, Send now, or Remove without losing your current draft. Keep the queue in sync across devices and preserve access to sending controls on compact cover screens.

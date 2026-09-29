@@ -1,5 +1,23 @@
 # Validation
 
+## September 29, 2026 — Android 0.2.3 publication
+
+- Advanced Android to 0.2.3 / code 13 with queued follow-ups, explicit steering,
+  and compact-screen queue controls from commit `40eb468`.
+- `scripts/check` and `scripts/release` passed using the existing managed Codex
+  executable for isolated-stock tests. Rust formatting, Clippy, all seven Rust
+  tests, Kotlin and Android unit tests, debug and instrumentation assembly,
+  debug/release lint, release signing and package verification passed.
+- The Ansible publication dry run and private stable-channel publication passed.
+  The signed APK SHA-256 is
+  `0b9ad051ef45cd8f92d446eed81372bb5665f3d05ca9274fedcc5cef174415b8`.
+- Verified the private HTTPS endpoint rejects unauthenticated requests with 401.
+  The authenticated manifest matches the prepared 0.2.3 manifest byte for byte;
+  the complete APK download matches its declared size and SHA-256.
+- Installation remains user initiated through Settings → Check for updates →
+  Download and install. No forwarder deployment, Taildrop delivery, or phone
+  installation was performed.
+
 ## September 29, 2026 — queued sending and explicit steering
 
 - Normal send during an active turn (or behind existing queued entries) now uses
