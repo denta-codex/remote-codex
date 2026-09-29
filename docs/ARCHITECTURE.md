@@ -75,6 +75,33 @@ blocks further submission until the user inspects it. A reviewed record is retai
 locally; the composer can be explicitly unlocked. A successful acknowledgement
 removes the draft. Offline sending is not queued.
 
+During a running turn, normal send uses stock `thread/queue/add`. If queued
+submissions remain after an interruption, new messages also join that queue.
+An idle task with an empty queue still uses `turn/start`. The server owns queue
+ordering, persistence, and automatic consumption; Android does not drain a local
+outbox or start turns in response to completion notifications. The composer shows
+the server queue above the draft, with Remove and Steer now (Send now while idle).
+Queued submissions inherit task settings because the queue contract has no model,
+effort, or collaboration-mode override fields.
+On the compact cover screen, disabled model/mode controls are omitted while work
+is queued or active. With the keyboard open, a Queued shortcut replaces the queue
+panel; tapping it dismisses the keyboard and reveals the queued-message actions
+without changing the draft.
+
+Queue reads use paginated `thread/queue/list` on task hydration, reconnect, and
+`thread/queue/changed`. Selection, connection generation, and read revision guards
+prevent older responses from replacing the current task's queue. Failed queue reads
+disable queue mutations and offer Refresh; they never switch normal send to steer.
+
+Steer now follows the Android reference's delete-before-steer sequence: journal
+the saved input, delete the queue entry, then call `turn/steer` with the original
+`clientUserMessageId` and the captured `expectedTurnId`. A false delete result means
+the entry was already consumed or removed, so its cached input is never sent.
+Each mutation is journaled independently. A rejected steer retains the original
+input for explicit retry; an uncertain delete, start, or steer requires review and
+is never retried on reconnect. Promotion does not overwrite the composer's draft
+or attachments. Idle Send now uses `thread/queue/start` with the selected entry ID.
+
 Selected images, camera images, and documents are imported immediately into app-private draft
 storage, and their descriptors are persisted with the text draft. Originals are preserved.
 Before the turn mutation, attachments are written sequentially beneath

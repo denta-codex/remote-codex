@@ -6,6 +6,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -13,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
@@ -43,6 +45,7 @@ internal fun ConversationComposer(
     var modeMenu by remember { mutableStateOf(false) }
     var addMenu by remember { mutableStateOf(false) }
     val cover = LocalAppWindowClass.current.coverScreen
+    val compactTyping = cover && WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val selectedProject =
         state.newTaskOptions.projectId?.let { id -> state.projects.firstOrNull { it.id == id } }
     val projectAvailable =
@@ -54,7 +57,8 @@ internal fun ConversationComposer(
     val selectedMode = modes.firstOrNull { it.mode == state.newTaskOptions.collaborationMode }
     val composerStatus =
         when {
-            state.activeTurn != null -> "Follow-up guides the active turn"
+            state.activeTurn != null -> "Sends after this turn · uses task settings"
+            state.queuedMessages.isNotEmpty() -> "Queue paused · tap Send now to continue"
             state.thread == null && !projectAvailable ->
                 "Choose an available project or No project"
             state.newTaskOptions.model != null ||
@@ -74,6 +78,7 @@ internal fun ConversationComposer(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(Modifier.padding(if (cover) 6.dp else 8.dp)) {
+            if (!compactTyping) MessageQueue(state, actions, cover)
             if (state.attachments.isNotEmpty())
                 LazyRow(
                     Modifier.fillMaxWidth().padding(bottom = 8.dp),
@@ -219,13 +224,13 @@ internal fun ConversationComposer(
                         disabledIndicatorColor = Color.Transparent,
                     ),
             )
-            ModelControls(state, actions, cover)
+            if (!cover || !state.willQueueMessage()) ModelControls(state, actions, cover)
             val showStatus =
-                !cover ||
-                    state.activeTurn != null ||
+                !compactTyping && (!cover ||
+                    state.willQueueMessage() ||
                     !projectAvailable ||
                     state.newTaskOptions.model != null ||
-                    state.newTaskOptions.reasoningEffort != null
+                    state.newTaskOptions.reasoningEffort != null)
             if (showStatus)
                 Text(
                     composerStatus,
@@ -303,8 +308,13 @@ internal fun ConversationComposer(
                         modifier = Modifier.testTag("add-camera"),
                     ) { Text("Camera") }
                 }
+                if (compactTyping && (state.queuedMessages.isNotEmpty() || state.queueError != null))
+                    TextButton(
+                        onClick = { keyboard?.hide() },
+                        modifier = Modifier.testTag("show-queue"),
+                    ) { Text("Queued (${state.queuedMessages.size})", maxLines = 1) }
                 Spacer(Modifier.weight(1f))
-                if (modes.isNotEmpty())
+                if (modes.isNotEmpty() && !(cover && state.willQueueMessage()))
                     Box {
                         TextButton(
                             onClick = { modeMenu = true },
@@ -312,7 +322,7 @@ internal fun ConversationComposer(
                             enabled =
                                 state.ready &&
                                     !state.busy &&
-                                    state.activeTurn == null &&
+                                    !state.willQueueMessage() &&
                                     state.journal == null,
                         ) {
                             Text(selectedMode?.name ?: "Server default", fontSize = 12.sp)
@@ -363,21 +373,73 @@ internal fun ConversationComposer(
                             !state.busy &&
                             (state.draft.isNotBlank() || state.attachments.isNotEmpty()) &&
                             state.journal == null &&
+                            (state.thread == null || state.queueReady) &&
                             (state.thread != null ||
                                 projectAvailable &&
                                     state.newTaskOptions.hasExecutionDestination()) &&
-                            (state.activeTurn != null ||
+                            (state.willQueueMessage() ||
                                 (state.newTaskOptions.model == null &&
                                     state.newTaskOptions.reasoningEffort == null) ||
                                 state.modelCatalogStatus == ModelCatalogStatus.Ready),
                 ) {
                     Glyph(
-                        R.drawable.ic_send,
-                        if (state.activeTurn != null) "Follow up" else "Send",
+                        if (state.willQueueMessage()) R.drawable.ic_queue else R.drawable.ic_send,
+                        if (state.willQueueMessage()) "Queue message" else "Send",
                     )
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun MessageQueue(state: ScreenState, actions: ConversationActions, cover: Boolean) {
+    if (state.queuedMessages.isEmpty() && state.queueError == null) return
+    val enabled = state.ready && state.queueReady && !state.busy && state.journal == null
+    Column(Modifier.fillMaxWidth().testTag("message-queue")) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "Queued (${state.queuedMessages.size})",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.labelMedium,
+            )
+            if (state.queueError != null)
+                TextButton(actions::refreshQueue, enabled = state.ready && !state.busy) {
+                    Text("Refresh")
+                }
+        }
+        if (state.queueError != null)
+            Text(state.queueError, Modifier.padding(horizontal = 12.dp), fontSize = 11.sp)
+        LazyColumn(Modifier.fillMaxWidth().heightIn(max = if (cover) 112.dp else 176.dp)) {
+            items(state.queuedMessages, key = { it.id }) { message ->
+                Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp).testTag("queued-${message.id}")) {
+                    Text(
+                        message.preview,
+                        Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(
+                            { actions.removeQueued(message.id) },
+                            enabled = enabled,
+                            modifier = Modifier.testTag("remove-queued-${message.id}"),
+                        ) { Text("Remove") }
+                        Spacer(Modifier.weight(1f))
+                        TextButton(
+                            { actions.sendQueuedNow(message.id) },
+                            enabled = enabled,
+                            modifier = Modifier.testTag("send-queued-${message.id}"),
+                        ) { Text(if (state.activeTurn != null) "Steer now" else "Send now") }
+                    }
+                }
+            }
+        }
+        HorizontalDivider(Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant)
     }
 }
 
@@ -392,7 +454,7 @@ private fun ModelControls(
     val controlsEnabled =
         state.ready &&
             !state.busy &&
-            state.activeTurn == null &&
+            !state.willQueueMessage() &&
             state.modelCatalogStatus == ModelCatalogStatus.Ready
     val selectedModel =
         state.newTaskOptions.model?.let { id -> state.models.firstOrNull { it.id == id } }

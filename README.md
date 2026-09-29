@@ -3,6 +3,11 @@
 Codex on a remote host. Native Android text client for Grace's existing stock
 Codex app server, over WSS and Tailscale.
 
+Sending while Codex is working adds a follow-up to its server queue. Queued
+messages appear above the composer; tap **Steer now** to use one in the active
+turn, or **Remove** to cancel it. An idle, interrupted queue offers **Send now**.
+Queue actions preserve anything you are currently drafting.
+
 ## Project
 
 - `android/app`: Compose interface, assistant entry point, local storage.

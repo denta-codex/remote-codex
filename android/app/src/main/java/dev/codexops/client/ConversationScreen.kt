@@ -116,6 +116,7 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
                         Text(
                             when {
                                 st.busy -> StockWorkspaceAdapter.progress(journal.str("stage")).trimEnd('…')
+                                journal.containsKey("queuedMessage") -> "Queue action needs review"
                                 journal.str("failure").isNotEmpty() -> "Setup needs attention"
                                 journal.str("stage") == "accepted" -> "Message accepted"
                                 else -> "Operation needs review"
@@ -131,7 +132,8 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
                         )
                         SelectionContainer {
                             Text(
-                                "Task: ${journal.str("threadId").ifEmpty { "ID not received" }}\nWorkspace: ${journal.str("cwd").ifEmpty { "Existing task" }}",
+                                if (journal.containsKey("queuedMessage")) journal.str("text")
+                                else "Task: ${journal.str("threadId").ifEmpty { "ID not received" }}\nWorkspace: ${journal.str("cwd").ifEmpty { "Existing task" }}",
                                 fontSize = 11.sp,
                             )
                         }
@@ -141,7 +143,11 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
                                     onClick = actions::recoverPreparation,
                                     modifier = Modifier.testTag("check-setup"),
                                 ) {
-                                    Text("Check and continue")
+                                    Text(
+                                        if (journal.str("stage") in setOf("queuedRemoved", "queuedSteerRejected"))
+                                            "Send saved message"
+                                        else "Check and continue"
+                                    )
                                 }
                             }
                             TextButton(onClick = { confirmUnlock = true }) {
@@ -164,6 +170,8 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
                         st.ready &&
                         !st.busy &&
                         st.activeTurn == null &&
+                        st.queuedMessages.isEmpty() &&
+                        st.queueReady &&
                         st.journal == null,
                 onImplement = { actions.implementPlan(entry.key) },
             )

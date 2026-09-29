@@ -8,7 +8,9 @@ Record Android version, APK version/code, signer fingerprint, Codex version and 
 - [x] Authenticated WSS connection to Grace reports Connected on the Razr (2026-09-23).
 - [ ] Invalid QR and canceled scan leave an existing credential intact; manual entry works.
 - [ ] Select Remote Codex as default assistant; cold/warm gesture opens New chat.
-- [ ] Send text, observe streaming, follow up, steer while busy, and stop.
+- [ ] Send text, observe streaming, queue follow-ups, promote one with Steer now, and stop.
+- [ ] Verify queued text and images survive reopening, preserve a new draft when steered,
+      and match changes made on desktop. Resume an interrupted queue with Send now.
 - [ ] Enter Plan mode, answer a blocking question, view the completed plan full screen, and implement it.
 - [ ] Send one image-only turn and one text-plus-multiple-images turn from Photos.
 - [ ] Capture and send a camera image without granting broad media permissions.

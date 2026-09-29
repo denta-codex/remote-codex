@@ -225,6 +225,9 @@ internal class StockWorkspaceAdapter(private val rpc: RemoteSession) {
                 "attachmentDirectoryReady", "uploadingAttachment", "attachmentUploaded" ->
                     "Uploading images…"
                 "attachmentsReady", "sending" -> "Sending message…"
+                "removingQueued" -> "Removing queued message…"
+                "queuedRemoved", "steeringQueued" -> "Steering active turn…"
+                "startingQueued" -> "Starting queued message…"
                 else -> "Updating…"
             }
     }

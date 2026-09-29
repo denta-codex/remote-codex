@@ -40,6 +40,7 @@ constructor(
     private var selection = 0
     private var listSelection = 0
     private var modelCatalogSelection = 0
+    private var queueSelection = 0
     private var hydrating = false
     private var codexHome = expectedHome
     private val buffered = mutableListOf<JsonObject>()
@@ -96,6 +97,7 @@ constructor(
                         it.copy(
                             connection = "Connecting…",
                             ready = false,
+                            queueReady = false,
                             collaborationModes = emptyList(),
                             newTaskOptions =
                                 it.newTaskOptions.copy(collaborationMode = null),
@@ -492,6 +494,9 @@ constructor(
                     title = "New chat",
                     entries = emptyList(),
                     activeTurn = null,
+                    queuedMessages = emptyList(),
+                    queueReady = false,
+                    queueError = null,
                     decisions = emptyList(),
                     historyCursor = null,
                     draft = draft,
@@ -544,6 +549,9 @@ constructor(
                 title = "Conversation",
                 entries = emptyList(),
                 activeTurn = null,
+                queuedMessages = emptyList(),
+                queueReady = false,
+                queueError = null,
                 historyCursor = null,
                 attachments = emptyList(),
                 newTaskOptions = NewTaskOptions(),
@@ -559,7 +567,7 @@ constructor(
         var attachments = restoreAttachments(id)
         var journal = parse(local.get("journal/$id"))
         if (journal?.str("stage") == "accepted") {
-            if (draft == journal.str("text")) {
+            if (journal.str("clearDraft") != "false" && draft == journal.str("text")) {
                 local.remove("draft/$id")
                 draft = ""
                 attachments.forEach(attachmentStore::delete)
@@ -624,6 +632,7 @@ constructor(
                     attention = thread.map("status")["activeFlags"].toString().contains("waiting"),
                 )
             }
+            readQueue(id)
         } finally {
             if (n == selection) {
                 hydrating = false
@@ -953,6 +962,131 @@ constructor(
         submit(before.draft, before.newTaskOptions.collaborationMode, clearDraft = true)
     }
 
+    override fun refreshQueue() {
+        val id = _state.value.thread ?: return
+        if (!_state.value.ready) return
+        viewModelScope.launch { readQueue(id) }
+    }
+
+    private suspend fun readQueue(id: String) {
+        val selected = selection
+        val revision = ++queueSelection
+        val epoch = rpc.generation
+        if (_state.value.thread == id) _state.update { it.copy(queueReady = false) }
+        fun current() = selected == selection && revision == queueSelection &&
+            epoch == rpc.generation && _state.value.thread == id && _state.value.ready
+        try {
+            val messages = mutableListOf<QueuedMessage>()
+            val cursors = mutableSetOf<String>()
+            var cursor: String? = null
+            do {
+                val page = rpc.call(
+                    "thread/queue/list",
+                    obj("threadId" to s(id), "limit" to JsonPrimitive(100), "cursor" to cursor?.let(::s)),
+                )
+                require(page["data"] is JsonArray)
+                messages.addAll(page.list("data").map(QueuedMessage::parse))
+                cursor = page.cursor()
+                require(cursor == null || cursors.add(cursor))
+                if (!current()) return
+            } while (cursor != null)
+            _state.update {
+                it.copy(queuedMessages = messages.distinctBy(QueuedMessage::id), queueReady = true, queueError = null)
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException && e !is TimeoutCancellationException) throw e
+            if (current()) _state.update {
+                it.copy(queueReady = false, queueError = "Could not refresh queued messages.")
+            }
+        }
+    }
+
+    override fun sendQueuedNow(id: String) = mutateQueued(id, sendNow = true)
+
+    override fun removeQueued(id: String) = mutateQueued(id, sendNow = false)
+
+    private fun mutateQueued(id: String, sendNow: Boolean) {
+        val before = _state.value
+        val thread = before.thread ?: return
+        if (!before.ready || !before.queueReady || before.busy || before.journal != null) return
+        val message = before.queuedMessages.singleOrNull { it.id == id } ?: return
+        val journal = obj(
+            "operation" to s(UUID.randomUUID().toString()),
+            "threadId" to s(thread),
+            "text" to s(message.preview),
+            "clearDraft" to JsonPrimitive(false),
+            "queuedMessage" to message.json(),
+            "sendNow" to JsonPrimitive(sendNow),
+            "stage" to s("queueActionReady"),
+        )
+        _state.update { it.copy(busy = true, error = null) }
+        viewModelScope.launch { executeQueueAction(journal) }
+    }
+
+    private suspend fun executeQueueAction(initial: JsonObject, removed: Boolean = false) {
+        val thread = initial.str("threadId")
+        val message = QueuedMessage.parse(initial.map("queuedMessage"))
+        val sendNow = initial.str("sendNow") == "true"
+        var journal = initial
+        suspend fun record(stage: String) {
+            journal = JsonObject(journal.filterKeys { it !in setOf("failure", "uncertain") } + ("stage" to s(stage)))
+            local.put("journal/$thread", journal.toString())
+            _state.update { it.copy(journal = journal) }
+        }
+        suspend fun finish() {
+            record("accepted")
+            local.remove("journal/$thread")
+            _state.update { it.copy(journal = null) }
+        }
+        try {
+            val turn = _state.value.activeTurn
+            if (!removed && sendNow && turn == null) {
+                record("startingQueued")
+                rpc.call("thread/queue/start", queueItemParams(thread, message.id))
+                finish()
+            } else {
+                if (!removed) {
+                    record("removingQueued")
+                    val response = rpc.call("thread/queue/delete", queueItemParams(thread, message.id))
+                    if ((response["deleted"] as? JsonPrimitive)?.booleanOrNull != true) {
+                        // Another client or the server already consumed it. Never send our stale copy.
+                        finish()
+                        _state.update { it.copy(error = "That message is no longer queued. The queue has been refreshed.") }
+                        return
+                    }
+                    record("queuedRemoved")
+                }
+                if (sendNow) {
+                    record("steeringQueued")
+                    if (turn != null)
+                        rpc.call("turn/steer", turnSteerParams(thread, message.input, message.clientUserMessageId, turn))
+                    else
+                        rpc.call("turn/start", turnStartParams(thread, message.input, message.clientUserMessageId, NewTaskOptions(), null))
+                }
+                finish()
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException && e !is TimeoutCancellationException) throw e
+            val rejected = e is RpcRejected
+            if (rejected && journal.str("stage") in setOf("removingQueued", "startingQueued")) {
+                local.remove("journal/$thread")
+                _state.update { it.copy(journal = null, error = "The queue action was rejected. The queue has been refreshed.") }
+            } else {
+                val stage = if (rejected && journal.str("stage") == "steeringQueued") "queuedSteerRejected" else journal.str("stage")
+                val failure = if (stage == "queuedSteerRejected")
+                    "The message was removed from the queue, but the turn changed or rejected it. Your message is saved below. Tap Send saved message to try again."
+                else "The queue action is uncertain. Inspect the task before sending again. Your message is saved below."
+                journal = JsonObject(journal + ("stage" to s(stage)) + ("failure" to s(failure)) + ("uncertain" to JsonPrimitive(!rejected)))
+                local.put("journal/$thread", journal.toString())
+                _state.update { it.copy(journal = journal, error = failure) }
+            }
+        } finally {
+            if (_state.value.ready) readQueue(thread)
+            _state.update { it.copy(busy = false) }
+            if (foreground && !_state.value.ready) connect()
+        }
+    }
+
     override fun implementPlan(planKey: String) {
         val before = _state.value
         val plan = before.entries.lastOrNull { it.kind != "reasoning" }
@@ -961,6 +1095,7 @@ constructor(
                 plan.kind != "plan" ||
                 !plan.completed ||
                 before.activeTurn != null ||
+                before.queuedMessages.isNotEmpty() ||
                 before.collaborationModes.none {
                     it.mode == "default" &&
                         it.turnSetting(before.collaborationModel()) != null
@@ -972,8 +1107,9 @@ constructor(
 
     private fun submit(text: String, selectedMode: String?, clearDraft: Boolean) {
         val before = _state.value
+        val queue = clearDraft && before.thread != null && before.willQueueMessage()
         val hasTurnStartOverrides =
-            before.activeTurn == null &&
+            !queue &&
                 (before.newTaskOptions.model != null ||
                     before.newTaskOptions.reasoningEffort != null)
         if (
@@ -981,6 +1117,7 @@ constructor(
                 before.busy ||
                 (text.isBlank() && before.attachments.isEmpty()) ||
                 before.journal != null ||
+                before.thread != null && !before.queueReady ||
                 before.thread == null && !before.newTaskOptions.hasExecutionDestination() ||
                 hasTurnStartOverrides &&
                     before.modelCatalogStatus != ModelCatalogStatus.Ready
@@ -1010,6 +1147,7 @@ constructor(
                     "operation" to s(operation),
                     "text" to s(text),
                     "clearDraft" to JsonPrimitive(clearDraft),
+                    "queue" to JsonPrimitive(queue),
                     "stage" to s(if (plan == null) "taskReady" else "validatingWorkspace"),
                     "cwd" to plan?.workingDirectory?.let(::s),
                     "sourceCwd" to plan?.sourceDirectory?.let(::s),
@@ -1231,7 +1369,12 @@ constructor(
                         )
                     }
                 val input = turnInput(journal.str("text"), remotePaths)
-                if (expectedTurn == null)
+                if (journal.str("queue") == "true")
+                    rpc.call(
+                        "thread/queue/add",
+                        queueAddParams(id, input, journal.str("operation")),
+                    )
+                else if (expectedTurn == null)
                     rpc.call(
                         "turn/start",
                         turnStartParams(
@@ -1274,6 +1417,7 @@ constructor(
                             else it.newTaskOptions,
                     )
                 }
+                readQueue(id)
             }
         } catch (e: TimeoutCancellationException) {
             if (journal.str("stage") == "validatingWorkspace") {
@@ -1564,7 +1708,12 @@ constructor(
         if (!before.ready || before.busy || before.journal == null) return
         if (before.thread != null) {
             val stage = before.journal.str("stage")
-            if (stage in setOf("attachmentDirectoryReady", "attachmentUploaded", "attachmentsReady")) {
+            if (stage in setOf("queuedRemoved", "queuedSteerRejected")) {
+                // These stages prove no uncertain turn mutation remains. Only this explicit
+                // user action may attempt the saved input against the current active turn.
+                _state.update { it.copy(busy = true, error = null) }
+                viewModelScope.launch { executeQueueAction(before.journal, removed = true) }
+            } else if (stage in setOf("attachmentDirectoryReady", "attachmentUploaded", "attachmentsReady")) {
                 _state.update { it.copy(busy = true, error = null) }
                 viewModelScope.launch {
                     executeSubmission(
@@ -1618,6 +1767,7 @@ constructor(
             _state.update {
                 it.copy(
                     ready = false,
+                    queueReady = false,
                     connection = "Disconnected",
                     decisions = emptyList(),
                     modelCatalogStatus = ModelCatalogStatus.Unavailable,
@@ -1665,6 +1815,10 @@ constructor(
             return
         }
         if (p.str("threadId") != _state.value.thread) return
+        if (method == "thread/queue/changed") {
+            refreshQueue()
+            return
+        }
         timeline.event(method, p)
         if (method == "thread/settings/updated") {
             val settings = p.map("threadSettings")

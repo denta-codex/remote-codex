@@ -62,6 +62,14 @@ class AppTest {
     @Volatile private var threadStartParams: JsonObject? = null
     @Volatile private var askPlanQuestion = false
     private val turnRequests = CopyOnWriteArrayList<JsonObject>()
+    private val queueItems = CopyOnWriteArrayList<JsonObject>()
+    private val queueMutations = CopyOnWriteArrayList<JsonObject>()
+    private val steerRequests = CopyOnWriteArrayList<JsonObject>()
+    private val queueIds = AtomicInteger()
+    @Volatile private var holdTurnOpen = false
+    @Volatile private var dropQueueMethod: String? = null
+    @Volatile private var rejectSteer = false
+    @Volatile private var rejectQueueRead = false
     private val userInputResponses = CopyOnWriteArrayList<JsonObject>()
     private val app
         get() = ApplicationProvider.getApplicationContext<Application>()
@@ -122,6 +130,8 @@ class AppTest {
                                         return
                                     }
                                     if (method == "initialized") return
+                                    if (method.startsWith("thread/queue/") && method != "thread/queue/list")
+                                        queueMutations.add(m)
                                     val result =
                                         when (method) {
                                             "initialize" -> obj("codexHome" to s("/fixture"))
@@ -374,8 +384,34 @@ class AppTest {
                                                 }
                                             }
                                             "thread/turns/list" -> history()
+                                            "thread/queue/list" ->
+                                                if (rejectQueueRead)
+                                                    obj("_fixtureError" to obj("code" to JsonPrimitive(-32601), "message" to s("Queue unavailable")))
+                                                else obj("data" to JsonArray(if (params.str("threadId") == "task-test") queueItems.toList() else emptyList()))
+                                            "thread/queue/add" -> {
+                                                val queued = obj(
+                                                    "id" to s("queue-${queueIds.incrementAndGet()}"),
+                                                    "clientUserMessageId" to params["clientUserMessageId"],
+                                                    "input" to params["input"],
+                                                )
+                                                queueItems.add(queued)
+                                                obj("queuedSubmission" to queued)
+                                            }
+                                            "thread/queue/delete" ->
+                                                obj("deleted" to JsonPrimitive(queueItems.removeAll { it.str("id") == params.str("queuedSubmissionId") }))
+                                            "thread/queue/start" -> {
+                                                queueItems.removeAll { it.str("id") == params.str("queuedSubmissionId") }
+                                                obj("turn" to obj("id" to s("turn-queued")))
+                                            }
                                             "turn/start",
                                             "turn/steer" -> {
+                                                if (method == "turn/steer") {
+                                                    steerRequests.add(params)
+                                                    if (rejectSteer) {
+                                                        ws.send(obj("id" to m["id"], "error" to obj("code" to JsonPrimitive(-32600), "message" to s("Active turn changed"))).toString())
+                                                        return
+                                                    }
+                                                }
                                                 if (method == "turn/start") {
                                                     lastTurnStartParams = params
                                                     turnRequests.add(params)
@@ -397,6 +433,10 @@ class AppTest {
                                             }
                                             else -> obj()
                                         }
+                                    if (method == dropQueueMethod) {
+                                        ws.cancel()
+                                        return
+                                    }
                                     val fixtureError = result["_fixtureError"]
                                     ws.send(
                                         (if (fixtureError != null)
@@ -518,7 +558,7 @@ class AppTest {
                                                 ),
                                             )
                                         }
-                                        if (!waitingForAnswer)
+                                        if (!waitingForAnswer && !holdTurnOpen)
                                             emit(
                                                 ws,
                                                 "turn/completed",
@@ -694,7 +734,7 @@ class AppTest {
         val turn =
             obj(
                 "id" to s("turn-test"),
-                "status" to s("completed"),
+                "status" to s(if (holdTurnOpen) "inProgress" else "completed"),
                 "items" to JsonArray(listOfNotNull(user, image, assistant)),
             )
         return obj("data" to JsonArray(listOf(turn)))
@@ -955,6 +995,200 @@ class AppTest {
             model.state.value.page == "chat" && model.state.value.thread == null
         }
         compose.onNodeWithContentDescription("Copy deeplink").assertDoesNotExist()
+    }
+
+    private fun openRunningQueueFixture() {
+        holdTurnOpen = true
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy && model.state.value.queueReady }
+        compose.onNodeWithTag("composer").performTextInput("Start working")
+        compose.onNodeWithTag("send").performClick()
+        compose.waitUntil(10000) { model.state.value.activeTurn == "turn-test" && !model.state.value.busy }
+    }
+
+    private fun enqueueFixture(text: String = "Do this next") {
+        compose.onNodeWithTag("composer").performTextInput(text)
+        compose.onNodeWithContentDescription("Queue message").performClick()
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.queuedMessages.any { it.text == text } }
+    }
+
+    @Test
+    fun normalSendQueuesAndCanSteerWithoutChangingNewDraft() {
+        openRunningQueueFixture()
+        enqueueFixture()
+        enqueueFixture("Then review it")
+        assertEquals(1, sent.get())
+        assertTrue(steerRequests.isEmpty())
+        assertEquals(listOf("Do this next", "Then review it"), model.state.value.queuedMessages.map { it.text })
+        compose.onNodeWithTag("composer").performTextInput("An unfinished thought")
+        if (coverScreen) {
+            compose.onNodeWithTag("show-queue").assertIsDisplayed().performClick()
+            compose.waitUntil(5000) { compose.onAllNodesWithTag("message-queue").fetchSemanticsNodes().isNotEmpty() }
+        }
+        val queued = queueItems.first()
+        compose.onNodeWithTag("send-queued-queue-1").performScrollTo().performClick()
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.queuedMessages.size == 1 }
+        assertEquals(1, steerRequests.size)
+        assertEquals(queued["input"], steerRequests.single()["input"])
+        assertEquals(queued["clientUserMessageId"], steerRequests.single()["clientUserMessageId"])
+        assertEquals("turn-test", steerRequests.single().str("expectedTurnId"))
+        assertFalse(steerRequests.single().containsKey("model"))
+        assertEquals("An unfinished thought", model.state.value.draft)
+        assertNull(model.state.value.journal)
+        compose.onNodeWithTag("remove-queued-queue-2").performClick()
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.queuedMessages.isEmpty() }
+        assertEquals(1, steerRequests.size)
+        compose.onNodeWithTag("composer").assertTextContains("An unfinished thought")
+    }
+
+    @Test
+    fun serverQueueSurvivesRecreationAndTracksOtherClients() {
+        openRunningQueueFixture()
+        enqueueFixture()
+        compose.runOnUiThread {
+            store.clear()
+            model = ClientModel(app, "ws://127.0.0.1:${server.port}/rpc", "/fixture", true)
+            store.put("fixture", model)
+            compose.activity.setContent { RemoteTheme { App(model) } }
+            model.foreground(true)
+        }
+        compose.waitUntil(15000) { model.state.value.ready }
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(15000) { model.state.value.ready && !model.state.value.busy && model.state.value.queueReady }
+        assertEquals("Do this next", model.state.value.queuedMessages.single().text)
+        assertEquals(1, queueMutations.count { it.str("method") == "thread/queue/add" })
+        queueItems.add(obj("id" to s("desktop"), "clientUserMessageId" to s("desktop-message"), "input" to turnInput("From desktop", emptyList())))
+        emit(peer!!, "thread/queue/changed", obj())
+        compose.waitUntil(5000) { model.state.value.queuedMessages.size == 2 }
+        compose.runOnUiThread { model.openTask("project-task") }
+        compose.waitUntil(10000) { model.state.value.thread == "project-task" && !model.state.value.busy }
+        assertTrue(model.state.value.queuedMessages.isEmpty())
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy && model.state.value.queuedMessages.size == 2 }
+        // The server owns consumption. A completion and queue notification must never
+        // cause the client to send a second start or steer for the consumed submission.
+        queueItems.clear()
+        emit(peer!!, "turn/completed", obj("turn" to obj("id" to s("turn-test"), "status" to s("completed"))))
+        emit(peer!!, "thread/queue/changed", obj())
+        compose.waitUntil(5000) { model.state.value.activeTurn == null && model.state.value.queuedMessages.isEmpty() }
+        assertEquals(1, sent.get())
+        assertTrue(steerRequests.isEmpty())
+        assertEquals(1, queueMutations.size)
+    }
+
+    @Test
+    fun queuedMessageCanStartWhenIdle() {
+        openRunningQueueFixture()
+        enqueueFixture()
+        holdTurnOpen = false
+        emit(peer!!, "turn/completed", obj("turn" to obj("id" to s("turn-test"), "status" to s("interrupted"))))
+        compose.waitUntil(5000) { model.state.value.activeTurn == null }
+        compose.onNodeWithText("Send now").performClick()
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.queuedMessages.isEmpty() }
+        assertEquals(listOf("thread/queue/add", "thread/queue/start"), queueMutations.map { it.str("method") })
+        assertTrue(steerRequests.isEmpty())
+    }
+
+    @Test
+    fun uncertainQueueAddIsNotReplayed() {
+        openRunningQueueFixture()
+        dropQueueMethod = "thread/queue/add"
+        compose.onNodeWithTag("composer").performTextInput("Queue exactly once")
+        compose.onNodeWithTag("send").performClick()
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.journal != null }
+        dropQueueMethod = null
+        compose.runOnUiThread { model.connect() }
+        compose.waitUntil(15000) { model.state.value.ready && !model.state.value.busy && model.state.value.queueReady }
+        assertEquals(1, queueItems.size)
+        assertEquals(1, queueMutations.size)
+        assertNotNull(model.state.value.journal)
+        assertEquals("Queue exactly once", model.state.value.draft)
+        compose.onNodeWithTag("send-queued-queue-1").assertIsNotEnabled()
+    }
+
+    @Test
+    fun uncertainQueueSteerIsNotReplayed() {
+        openRunningQueueFixture()
+        enqueueFixture()
+        compose.onNodeWithTag("composer").performTextInput("Keep this draft")
+        dropQueueMethod = "turn/steer"
+        compose.onNodeWithText("Steer now").performClick()
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.journal != null }
+        dropQueueMethod = null
+        compose.runOnUiThread { model.connect() }
+        compose.waitUntil(15000) { model.state.value.ready && !model.state.value.busy && model.state.value.queueReady }
+        assertEquals(1, steerRequests.size)
+        assertTrue(queueItems.isEmpty())
+        assertEquals("steeringQueued", model.state.value.journal?.str("stage"))
+        assertEquals("Do this next", model.state.value.journal?.str("text"))
+        assertEquals("Keep this draft", model.state.value.draft)
+        compose.onNodeWithTag("send").assertIsNotEnabled()
+    }
+
+    @Test
+    fun rejectedQueueSteerPreservesInputForExplicitRetry() {
+        openRunningQueueFixture()
+        enqueueFixture()
+        rejectSteer = true
+        compose.onNodeWithText("Steer now").performClick()
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.journal?.str("stage") == "queuedSteerRejected" }
+        assertTrue(queueItems.isEmpty())
+        assertEquals(1, steerRequests.size)
+        rejectSteer = false
+        compose.onNodeWithText("Send saved message").performScrollTo().performClick()
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.journal == null }
+        assertEquals(2, steerRequests.size)
+        assertEquals(steerRequests[0], steerRequests[1])
+        assertEquals(1, queueMutations.count { it.str("method") == "thread/queue/delete" })
+    }
+
+    @Test
+    fun queueConsumptionRaceNeverSteersStaleCopy() {
+        openRunningQueueFixture()
+        enqueueFixture()
+        queueItems.clear()
+        compose.onNodeWithText("Steer now").performClick()
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.queuedMessages.isEmpty() }
+        assertTrue(steerRequests.isEmpty())
+        assertNull(model.state.value.journal)
+        assertEquals(1, sent.get())
+    }
+
+    @Test
+    fun queuedImageSteersWithOriginalUploadedInput() {
+        openRunningQueueFixture()
+        val image = fixtureImage("queued.png")
+        compose.runOnUiThread { model.addAttachments(listOf(Uri.fromFile(image))) }
+        compose.waitUntil(5000) { model.state.value.attachments.size == 1 }
+        compose.onNodeWithTag("send").performClick()
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.queuedMessages.size == 1 }
+        val queuedInput = queueItems.single()["input"] as JsonArray
+        assertTrue(queuedInput.filterIsInstance<JsonObject>().any { it.str("type") == "localImage" })
+        assertTrue(model.state.value.attachments.isEmpty())
+        compose.onNodeWithText("Steer now").performClick()
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.queuedMessages.isEmpty() }
+        assertEquals(queuedInput, steerRequests.single()["input"])
+    }
+
+    @Test
+    fun unavailableQueueNeverFallsBackToDirectSend() {
+        rejectQueueRead = true
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.queueError != null }
+        compose.onNodeWithTag("composer").performTextInput("Wait for the queue")
+        compose.onNodeWithTag("send").assertIsNotEnabled()
+        compose.runOnUiThread { model.send() }
+        compose.waitForIdle()
+        assertEquals(0, sent.get())
+        assertTrue(queueMutations.isEmpty())
+        assertEquals("Wait for the queue", model.state.value.draft)
+        rejectQueueRead = false
+        compose.onNodeWithText("Refresh").performClick()
+        compose.waitUntil(5000) { model.state.value.queueReady }
+        compose.onNodeWithTag("send").assertIsEnabled().performClick()
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.draft.isEmpty() }
+        assertEquals(1, sent.get())
+        assertTrue(queueMutations.isEmpty())
     }
 
     @Test

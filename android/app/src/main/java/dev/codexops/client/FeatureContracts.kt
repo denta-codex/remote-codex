@@ -134,6 +134,9 @@ data class ScreenState(
     val threadModel: String? = null,
     val threadReasoningEffort: String? = null,
     val activeTurn: String? = null,
+    val queuedMessages: List<QueuedMessage> = emptyList(),
+    val queueReady: Boolean = false,
+    val queueError: String? = null,
     val decisions: List<Decision> = emptyList(),
     val busy: Boolean = false,
     val error: String? = null,
@@ -208,6 +211,12 @@ interface ConversationActions {
     fun saveFile(destination: Uri)
 
     fun send()
+
+    fun sendQueuedNow(id: String)
+
+    fun removeQueued(id: String)
+
+    fun refreshQueue()
 
     fun implementPlan(planKey: String)
 

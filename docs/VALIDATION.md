@@ -1,5 +1,40 @@
 # Validation
 
+## September 29, 2026 — queued sending and explicit steering
+
+- Normal send during an active turn (or behind existing queued entries) now uses
+  stock `thread/queue/add`. The composer lists the server-owned queue and offers
+  Steer now, idle Send now, and Remove. Queue actions preserve the current draft.
+- Inspected desktop 26.924.22138 and Android reference 1.2026.258; see
+  [queue/steer research](QUEUE-STEER-RESEARCH.md) for source locations and protocol
+  findings. No app-server or forwarder changes were necessary.
+- `scripts/check` passed with `REMOTE_CODEX_TEST_CODEX` set to the existing managed
+  Codex 0.155.1 executable. The initial stock-socket check timed out because its
+  isolated home could not resolve the Mise shim from `command -v codex`; resolving
+  the executable fixed the check without changing toolchains or shared settings.
+  Rust formatting, Clippy, all seven Rust tests, Kotlin unit tests, Android debug
+  and instrumentation assembly, and lint passed (zero lint errors).
+- Eight selected Android 16 emulator cases passed with no failures or skips:
+  multiple queued messages and steering while preserving a draft; process
+  recreation, task switching, and other-client queue notifications; idle queue
+  start; lost add and steer acknowledgements without replay; rejected steer with
+  explicit retry; an already-consumed entry; and original image-input preservation.
+  The normal-phone result is retained at
+  `artifacts/validation/queue-steer/phone-tests.xml` (ignored fixture output).
+- The focused cover-viewport run passed image steering and unavailable-queue
+  handling. Its text follow-up case timed out because the compact keyboard layout
+  could push sending controls out of reach. The correction hides disabled
+  model/mode controls and replaces the queue panel with a Queued shortcut while
+  typing. The failed result is retained at
+  `artifacts/validation/queue-steer/cover-initial-tests.xml`. After the correction,
+  Android build, unit tests, lint, and instrumentation assembly passed. The
+  explicitly approved single-case cover-screen rerun also passed with no failures
+  or skips, verifying multiple queued messages, the keyboard's Queued shortcut,
+  steering, removal, and draft preservation. Its result is retained at
+  `artifacts/validation/queue-steer/cover-retest.xml`.
+- No signed release, live deployment, phone installation, or live-model prompt
+  was performed. Android behavior was verified through the stock-shaped fixture.
+
 ## September 25, 2026 — Android 0.2.2 release preparation
 
 - Integrated compact cover-screen layouts, thread-deeplink copying, and reliable
