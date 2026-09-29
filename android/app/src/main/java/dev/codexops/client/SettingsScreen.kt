@@ -23,11 +23,17 @@ internal fun SettingsScreen(st: ScreenState, actions: SettingsActions) {
     var credential by remember { mutableStateOf("") }
     var scanError by remember { mutableStateOf<String?>(null) }
     val context = LocalContext.current
+    val cover = LocalAppWindowClass.current.coverScreen
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+            .padding(if (cover) 12.dp else 24.dp),
+        verticalArrangement = Arrangement.spacedBy(if (cover) 12.dp else 18.dp),
     ) {
-        Text("Connection", fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            "Connection",
+            fontSize = if (cover) 22.sp else 28.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
         Text(
             "Your conversations run on ${st.host.displayName}. Turn on Tailscale, then enter your connection credential once.",
             color = MaterialTheme.colorScheme.onSurfaceVariant,

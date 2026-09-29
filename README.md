@@ -35,8 +35,13 @@ is explicit and reserved for cross-cutting or test-infrastructure changes:
 
 ```sh
 scripts/emulator-test --tests AppTest#textChatStreamsAndCanReopen
+scripts/emulator-test --cover   # Razr Ultra 2025 cover-size regression suite
 scripts/emulator-test --full
 ```
+
+The cover mode reproduces the 1080 × 1272, 420 dpi outer-display viewport and
+resets it after every test. See [cover-screen layout and testing](docs/COVER-SCREEN.md)
+for the device rationale, responsive behavior, and coverage.
 
 Interactive inspection and fixture recording retain a worktree-owned disposable
 emulator from the shared base AVD:
@@ -45,6 +50,7 @@ emulator from the shared base AVD:
 scripts/emulator-start             # build, install and open; expires after one hour
 scripts/emulator-start --ttl 2h    # override the lifetime
 scripts/emulator-record textChatStreamsAndCanReopen
+scripts/emulator-record coverScreenDestinationsRemainReachable --cover
 scripts/emulator-stop              # stop it early
 ```
 

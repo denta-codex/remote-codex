@@ -1,1 +1,1 @@
-Add generic file attachments and file results. Send documents alongside images, reopen attachment chips from task history, and preview, open, share, or save returned files.
+Adapt the interface for compact foldable cover screens, add thread deeplink copying, and make workspace validation reliable while preserving drafts for safe retries.

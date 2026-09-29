@@ -21,6 +21,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import dev.codexops.core.MediaLocation
 import dev.codexops.core.MediaRef
 import dev.codexops.core.AttachmentKind
@@ -56,9 +57,10 @@ internal suspend fun decodedBitmap(key: String, bytes: ByteArray, maximum: Int):
 
 @Composable
 internal fun DraftAttachmentPreview(attachment: DraftAttachment, remove: () -> Unit) {
+    val cover = LocalAppWindowClass.current.coverScreen
     if (attachment.kind == AttachmentKind.FILE) {
         Surface(
-            Modifier.width(180.dp).testTag("draft-file"),
+            Modifier.width(if (cover) 150.dp else 180.dp).testTag("draft-file"),
             shape = MaterialTheme.shapes.small,
             tonalElevation = 2.dp,
         ) {
@@ -97,20 +99,23 @@ internal fun DraftAttachmentPreview(attachment: DraftAttachment, remove: () -> U
                     .getOrNull()
         }
     Surface(
-        Modifier.width(112.dp).testTag("draft-attachment"),
+        Modifier.width(if (cover) 96.dp else 112.dp).testTag("draft-attachment"),
         shape = MaterialTheme.shapes.small,
         tonalElevation = 2.dp,
     ) {
         Column {
             if (bitmap == null)
-                Box(Modifier.fillMaxWidth().height(80.dp), contentAlignment = Alignment.Center) {
+                Box(
+                    Modifier.fillMaxWidth().height(if (cover) 64.dp else 80.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
                     CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                 }
             else
                 Image(
                     bitmap!!.asImageBitmap(),
                     attachment.displayName,
-                    Modifier.fillMaxWidth().height(80.dp),
+                    Modifier.fillMaxWidth().height(if (cover) 64.dp else 80.dp),
                     contentScale = ContentScale.Crop,
                 )
             TextButton(remove, Modifier.fillMaxWidth()) { Text("Remove", fontSize = 11.sp) }
@@ -136,6 +141,7 @@ internal fun MediaGallery(media: List<MediaRef>, actions: ConversationActions) {
 @Composable
 private fun MediaPreview(media: MediaRef, actions: ConversationActions) {
     val context = LocalContext.current
+    val cover = LocalAppWindowClass.current.coverScreen
     if (media.location == MediaLocation.EXTERNAL_URL) {
         TextButton(
             onClick = {
@@ -180,23 +186,31 @@ private fun MediaPreview(media: MediaRef, actions: ConversationActions) {
                 bitmap.asImageBitmap(),
                 "Conversation image",
                 Modifier.fillMaxWidth()
-                    .heightIn(max = 360.dp)
+                    .heightIn(max = if (cover) 240.dp else 360.dp)
                     .clip(MaterialTheme.shapes.medium)
                     .clickable { expanded = true }
                     .testTag("message-image"),
                 contentScale = ContentScale.Fit,
             )
             if (expanded)
-                Dialog(onDismissRequest = { expanded = false }) {
+                Dialog(
+                    onDismissRequest = { expanded = false },
+                    properties = DialogProperties(usePlatformDefaultWidth = !cover),
+                ) {
                     Surface(
-                        Modifier.fillMaxWidth().clickable { expanded = false },
-                        shape = MaterialTheme.shapes.medium,
+                        (if (cover) Modifier.fillMaxSize().systemBarsPadding()
+                            else Modifier.fillMaxWidth())
+                            .clickable { expanded = false },
+                        shape = if (cover)
+                            androidx.compose.foundation.shape.RoundedCornerShape(0.dp)
+                        else MaterialTheme.shapes.medium,
                     ) {
                         Column {
                             Image(
                                 bitmap.asImageBitmap(),
                                 "Expanded conversation image",
-                                Modifier.fillMaxWidth().heightIn(max = 720.dp),
+                                Modifier.fillMaxWidth().weight(1f, fill = false)
+                                    .heightIn(max = 720.dp),
                                 contentScale = ContentScale.Fit,
                             )
                             TextButton(

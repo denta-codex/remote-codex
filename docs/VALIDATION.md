@@ -1,5 +1,70 @@
 # Validation
 
+## September 25, 2026 — Android 0.2.2 release preparation
+
+- Integrated compact cover-screen layouts, thread-deeplink copying, and reliable
+  project-workspace validation with safe draft and attachment retention.
+- Advanced Android to 0.2.2 / code 12. `scripts/check` passed, including Rust,
+  Kotlin, and Android unit tests, debug and instrumentation APK assembly, and lint.
+- The five-test cover-screen suite passed. In the full normal-phone suite, every
+  existing test passed or skipped as designed; the new rejected-validation test
+  exposed a fixture response-dispatch problem. A focused JVM RPC rejection test
+  passed, the fixture was corrected, and the explicitly approved targeted emulator
+  rerun passed.
+- `scripts/release` repeated the checks and passed signed release assembly, release
+  lint, package and signer verification, manifest generation, and checksum
+  generation. The signed APK SHA-256 is
+  `0f9ce71874d5c9eae3897ba74a0eb14feca12461b64c1dc662c856d1ff11dd36`.
+- The Ansible publication dry run passed, then 0.2.2 was published to the private
+  stable channel. The authenticated endpoint returned versionCode 12. No Taildrop
+  delivery or physical-phone installation was performed.
+
+## September 25, 2026 — project-task workspace validation fix
+
+- Root cause: Remote Codex checked a selected project root with
+  `command/exec(["test", "-d", "--", path])`. The host's `test` implementation
+  rejects `--`, so an existing directory produced exit code 2 and the Android
+  client reported that the server-advertised workspace was inaccessible.
+- Replaced that shell probe with the existing stock `fs/getMetadata` RPC. A
+  selected root is accepted only when metadata identifies a directory, after
+  `project/read` has confirmed that the project still exists and continues to
+  advertise the exact root. Git and directory mutations remain on the journaled
+  `command/exec` path; trust configuration is not inspected.
+- Workspace-validation failures now remove the pre-mutation journal while
+  retaining the draft and attachments, allowing a safe retry. Failures after a
+  directory, worktree, task, attachment, or message mutation retain the existing
+  uncertain-operation behavior.
+- Focused JVM workspace tests passed, covering directory, file, missing path,
+  rejected metadata, changed project root, RPC order, absence of a `test`
+  command, and absence of trust reads or mutations. `scripts/check` passed,
+  including Rust format/clippy/tests, Kotlin tests, Android unit tests, debug and
+  instrumentation APK assembly, and lint.
+- One targeted managed-emulator run covered four scenarios. Current workspace,
+  new worktree, and projectless creation passed. The new rejected-validation
+  test exposed a fixture response-dispatch problem in the integrated full suite;
+  after that fixture was corrected, its explicitly approved targeted rerun passed.
+- No release, deployment, phone delivery, or physical-device acceptance was
+  performed. Current- and new-worktree creation against Grace on the Razr remain
+  required before declaring the user-visible bug fixed.
+
+## September 25, 2026 — compact cover-screen adaptation
+
+- Added window-based compact-height and nearly-square classification, then adapted
+  the task browser, settings, empty and active conversations, composer, attachment
+  controls, plan and question flows, and file/image overlays for the Razr Ultra
+  2025 cover display's approximately 411 × 485 dp usable window.
+- Added a documented `scripts/emulator-test --cover` mode. Its five focused tests
+  passed on the managed Android 16 emulator at 1080 × 1272 pixels and 420 dpi,
+  covering every destination plus attachments, file preview, plans, and decisions.
+- The normal-phone full run completed 26 tests: 23 passed, two expected tests
+  skipped, and the long-history test exposed a synchronous lazy-list remeasure race
+  while Markdown was laying out. After replacing that forced scroll with a deferred
+  list-anchor request, the affected normal-phone test passed independently.
+- `scripts/check` passed against the final code, including Rust and Kotlin tests,
+  Android unit tests, debug and instrumentation APK assembly, and lint.
+- No release build, publication, live deployment, Taildrop delivery, or physical-
+  phone installation was performed.
+
 ## September 24, 2026 — Android file support release
 
 - Advanced Android to 0.2.1 / code 11 for generic file attachments and file

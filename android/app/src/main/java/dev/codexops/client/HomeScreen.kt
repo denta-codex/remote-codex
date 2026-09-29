@@ -18,27 +18,40 @@ import dev.codexops.core.str
 
 @Composable
 internal fun HomeScreen(st: ScreenState, actions: HomeActions) {
-    Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
+    val cover = LocalAppWindowClass.current.coverScreen
+    val horizontalPadding = if (cover) 12.dp else 20.dp
+    Column(Modifier.fillMaxSize().padding(horizontal = horizontalPadding)) {
         Row(
-            Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 20.dp),
+            Modifier.fillMaxWidth().padding(
+                top = if (cover) 8.dp else 20.dp,
+                bottom = if (cover) 8.dp else 20.dp,
+            ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text("Your tasks", fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
                 Text(
-                    "Pick up where you left off",
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    "Your tasks",
+                    fontSize = if (cover) 22.sp else 28.sp,
+                    fontWeight = FontWeight.SemiBold,
                 )
+                if (!cover)
+                    Text(
+                        "Pick up where you left off",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
             }
-            FilledTonalIconButton(onClick = actions::newChat, modifier = Modifier.size(48.dp)) {
+            FilledTonalIconButton(
+                onClick = actions::newChat,
+                modifier = Modifier.size(if (cover) 40.dp else 48.dp),
+            ) {
                 Glyph(R.drawable.ic_compose, "New chat")
             }
         }
         OutlinedTextField(
             st.query,
             actions::query,
-            Modifier.fillMaxWidth().padding(bottom = 16.dp),
+            Modifier.fillMaxWidth().padding(bottom = if (cover) 8.dp else 16.dp),
             placeholder = { Text("Search tasks") },
             leadingIcon = { Glyph(R.drawable.ic_search) },
             shape = RoundedCornerShape(16.dp),
@@ -48,13 +61,17 @@ internal fun HomeScreen(st: ScreenState, actions: HomeActions) {
                     unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
                 ),
         )
-        Text(
-            "Projects",
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
-        )
+        if (!cover)
+            Text(
+                "Projects",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
         LazyRow(
-            Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 12.dp),
+            Modifier.fillMaxWidth().padding(
+                top = if (cover) 2.dp else 8.dp,
+                bottom = if (cover) 4.dp else 12.dp,
+            ),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             item {
@@ -152,7 +169,10 @@ internal fun HomeScreen(st: ScreenState, actions: HomeActions) {
                     color = MaterialTheme.colorScheme.surface,
                 ) {
                     Row(
-                        Modifier.fillMaxWidth().padding(vertical = 16.dp, horizontal = 4.dp),
+                        Modifier.fillMaxWidth().padding(
+                            vertical = if (cover) 10.dp else 16.dp,
+                            horizontal = 4.dp,
+                        ),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
@@ -160,11 +180,17 @@ internal fun HomeScreen(st: ScreenState, actions: HomeActions) {
                             shape = RoundedCornerShape(12.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant,
                         ) {
-                            Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                            Box(
+                                Modifier.size(if (cover) 36.dp else 40.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
                                 Glyph(R.drawable.ic_chat)
                             }
                         }
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Column(
+                            Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(if (cover) 3.dp else 6.dp),
+                        ) {
                             Text(
                                 task.str("name").ifBlank {
                                     task.str("preview").take(100).ifBlank { "Untitled task" }

@@ -5,14 +5,19 @@ cd "$(dirname "$0")/.."
 source scripts/emulator-common
 
 usage() {
-    echo 'Usage: scripts/emulator-record TEST_METHOD [--output PATH.mp4]' >&2
+    echo 'Usage: scripts/emulator-record TEST_METHOD [--cover] [--output PATH.mp4]' >&2
     exit 2
 }
 
 method=''
 output=''
+cover=false
 while (( $# > 0 )); do
     case "$1" in
+        --cover)
+            cover=true
+            shift
+            ;;
         --output)
             (( $# >= 2 )) || usage
             output="$2"
@@ -83,6 +88,10 @@ stop_recording() {
 
 cleanup() {
     stop_recording
+    if [[ "$cover" == true ]]; then
+        "$RC_ADB" -s "$serial" shell wm size reset >/dev/null 2>&1 || true
+        "$RC_ADB" -s "$serial" shell wm density reset >/dev/null 2>&1 || true
+    fi
     "$RC_ADB" -s "$serial" shell rm -f "$remote_video" >/dev/null 2>&1 || true
     "$RC_ADB" -s "$serial" shell pm clear dev.codexops.client.debug >/dev/null 2>&1 || true
     rm -f -- "$local_video" "$instrument_output"
@@ -104,6 +113,11 @@ android/gradlew -p android --no-daemon :app:assembleDebug :app:assembleDebugAndr
 "$RC_ADB" -s "$serial" install -r \
     android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk >/dev/null
 "$RC_ADB" -s "$serial" shell pm clear dev.codexops.client.debug >/dev/null
+if [[ "$cover" == true ]]; then
+    # screenrecord fixes its canvas at startup, so resize before launching it.
+    "$RC_ADB" -s "$serial" shell wm size 1080x1272 >/dev/null
+    "$RC_ADB" -s "$serial" shell wm density 420 >/dev/null
+fi
 
 record_pid="$(
     "$RC_ADB" -s "$serial" shell \
@@ -113,10 +127,17 @@ record_pid="$(
 [[ "$record_pid" =~ ^[0-9]+$ ]] || { echo 'Could not start screen recording.' >&2; exit 1; }
 sleep 1
 
+instrument_args=(
+    -e class "dev.codexops.client.AppTest#$method"
+    -e demo true
+)
+if [[ "$cover" == true ]]; then
+    instrument_args+=(-e coverScreen true)
+fi
+
 set +e
 "$RC_ADB" -s "$serial" shell am instrument -w \
-    -e class "dev.codexops.client.AppTest#$method" \
-    -e demo true \
+    "${instrument_args[@]}" \
     dev.codexops.client.debug.test/androidx.test.runner.AndroidJUnitRunner |
     tee "$instrument_output"
 instrument_status=${PIPESTATUS[0]}

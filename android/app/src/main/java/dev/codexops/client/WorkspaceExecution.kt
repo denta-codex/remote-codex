@@ -5,6 +5,7 @@ import java.io.File
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 
 internal data class WorkspacePlan(
     val target: ExecutionTarget,
@@ -177,8 +178,13 @@ internal class StockWorkspaceAdapter(private val rpc: RemoteSession) {
         )
     }
 
-    suspend fun directoryExists(path: String): Boolean =
-        commandResult(listOf("test", "-d", "--", path)).str("exitCode") == "0"
+    suspend fun directoryExists(path: String): Boolean {
+        val response = rpc.getMetadata(path)
+        val metadata = response["metadata"] as? JsonObject ?: response
+        val type = metadata.str("type").ifBlank { metadata.str("kind") }
+        return type.equals("directory", ignoreCase = true) ||
+            (metadata["isDirectory"] as? JsonPrimitive)?.booleanOrNull == true
+    }
 
     suspend fun worktreeExists(source: String, destination: String): Boolean {
         val result =

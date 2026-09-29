@@ -6,6 +6,7 @@ import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -21,6 +22,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.mikepenz.markdown.m3.Markdown
 import dev.codexops.core.FileRef
 import java.io.File
@@ -83,12 +85,22 @@ internal fun FilePreviewDialog(
     onSave: () -> Unit,
 ) {
     val context = LocalContext.current
-    Dialog(onDismissRequest = onDismiss) {
+    val cover = LocalAppWindowClass.current.coverScreen
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = !cover),
+    ) {
         Surface(
-            Modifier.fillMaxWidth().heightIn(max = 720.dp).testTag("file-preview"),
-            shape = MaterialTheme.shapes.large,
+            (if (cover) Modifier.fillMaxSize().systemBarsPadding()
+                else Modifier.fillMaxWidth().heightIn(max = 720.dp))
+                .testTag("file-preview"),
+            shape = if (cover) androidx.compose.foundation.shape.RoundedCornerShape(0.dp)
+                else MaterialTheme.shapes.large,
         ) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                Modifier.padding(if (cover) 12.dp else 16.dp),
+                verticalArrangement = Arrangement.spacedBy(if (cover) 8.dp else 12.dp),
+            ) {
                 Text(preview.reference.displayName, style = MaterialTheme.typography.titleMedium)
                 when {
                     preview.loading ->
@@ -116,7 +128,7 @@ internal fun FilePreviewDialog(
                             Image(
                                 bitmap!!.asImageBitmap(),
                                 preview.reference.displayName,
-                                Modifier.fillMaxWidth().heightIn(max = 480.dp),
+                                Modifier.fillMaxWidth().heightIn(max = if (cover) 280.dp else 480.dp),
                                 contentScale = ContentScale.Fit,
                             )
                     }
@@ -141,7 +153,10 @@ internal fun FilePreviewDialog(
                                 .joinToString(" · ")
                         )
                 }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.End,
+                ) {
                     if (!preview.loading && preview.error == null && preview.contentUri != null) {
                         TextButton(
                             onClick = {

@@ -7,10 +7,12 @@ usage() {
     cat >&2 <<'EOF'
 Usage:
   scripts/emulator-test --tests Class#method [Class#method ...]
+  scripts/emulator-test --cover
   scripts/emulator-test --full
 
 Examples:
   scripts/emulator-test --tests AppTest#textChatStreamsAndCanReopen
+  scripts/emulator-test --cover
   scripts/emulator-test --tests \
     AppTest#imageOnlyUploadsAndRendersThroughStockRpc \
     AppTest#advertisedPlanModeRendersFullscreenPlanAndImplementsWithDefaultMode
@@ -19,7 +21,7 @@ EOF
 }
 
 mode="${1:-}"
-[[ "$mode" == --tests || "$mode" == --full ]] || usage
+[[ "$mode" == --tests || "$mode" == --cover || "$mode" == --full ]] || usage
 shift
 
 selectors=()
@@ -39,6 +41,17 @@ case "$mode" in
         (( $# == 0 )) || usage
         timeout_duration=8m
         ;;
+    --cover)
+        (( $# == 0 )) || usage
+        selectors=(
+            dev.codexops.client.AppTest#coverScreenDestinationsRemainReachable
+            dev.codexops.client.AppTest#imageOnlyUploadsAndRendersThroughStockRpc
+            dev.codexops.client.AppTest#remoteTextFileUsesMetadataAndOpensAReadablePreview
+            dev.codexops.client.AppTest#advertisedPlanModeRendersFullscreenPlanAndImplementsWithDefaultMode
+            dev.codexops.client.AppTest#planModeQuestionCanBeAnswered
+        )
+        timeout_duration=6m
+        ;;
 esac
 
 export JAVA_HOME="${JAVA_HOME:-$(mise where java@temurin-17.0.20+8)}"
@@ -46,6 +59,9 @@ export ANDROID_HOME="${ANDROID_HOME:-/home/agent/Android/Sdk}"
 export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH"
 
 gradle_args=(-p android --no-daemon :app:remoteCodexApi36DebugAndroidTest)
+if [[ "$mode" == --cover ]]; then
+    gradle_args+=("-Pandroid.testInstrumentationRunnerArguments.coverScreen=true")
+fi
 if (( ${#selectors[@]} > 0 )); then
     filter="$(IFS=,; echo "${selectors[*]}")"
     gradle_args+=("-Pandroid.testInstrumentationRunnerArguments.class=$filter")

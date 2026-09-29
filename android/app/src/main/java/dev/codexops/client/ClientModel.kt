@@ -1057,6 +1057,10 @@ constructor(
             local.put("journal/$key", journal.toString())
             _state.update { it.copy(journal = journal, error = message) }
         }
+        suspend fun validationFailure(message: String) {
+            local.remove("journal/$key")
+            _state.update { it.copy(journal = null, error = message) }
+        }
 
         try {
             var stage = journal.str("stage")
@@ -1271,15 +1275,26 @@ constructor(
                     )
                 }
             }
+        } catch (e: TimeoutCancellationException) {
+            if (journal.str("stage") == "validatingWorkspace") {
+                validationFailure(
+                    "The host timed out while checking the selected workspace. Try again."
+                )
+            } else {
+                throw e
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: WorkspaceSetupFailure) {
             if (journal.str("stage") == "validatingWorkspace" && !e.uncertain) {
-                local.remove("journal/$key")
-                _state.update { it.copy(journal = null, error = e.userMessage) }
+                validationFailure(e.userMessage)
             } else failure(e.userMessage, e.uncertain)
         } catch (e: RpcRejected) {
-            if (journal.str("stage") == "sending") {
+            if (journal.str("stage") == "validatingWorkspace") {
+                validationFailure(
+                    "The host could not inspect the selected workspace. Refresh projects and try again."
+                )
+            } else if (journal.str("stage") == "sending") {
                 local.remove("journal/$key")
                 _state.update {
                     it.copy(journal = null, error = "Server rejected the message. It was not sent.")
@@ -1295,16 +1310,22 @@ constructor(
                 )
             }
         } catch (_: Exception) {
-            failure(
-                when (journal.str("stage")) {
-                    "creatingDirectory", "creatingWorktreeRoot", "creatingWorktree" ->
-                        "Workspace preparation is uncertain. Reconnect to inspect the retained destination."
-                    "creatingTask" ->
-                        "Task creation is uncertain. Reconnect to inspect the workspace before retrying."
-                    else -> "Delivery is uncertain. Inspect the task before sending again."
-                },
-                true,
-            )
+            if (journal.str("stage") == "validatingWorkspace") {
+                validationFailure(
+                    "The selected workspace could not be checked. Check the connection and try again."
+                )
+            } else {
+                failure(
+                    when (journal.str("stage")) {
+                        "creatingDirectory", "creatingWorktreeRoot", "creatingWorktree" ->
+                            "Workspace preparation is uncertain. Reconnect to inspect the retained destination."
+                        "creatingTask" ->
+                            "Task creation is uncertain. Reconnect to inspect the workspace before retrying."
+                        else -> "Delivery is uncertain. Inspect the task before sending again."
+                    },
+                    true,
+                )
+            }
         } finally {
             _state.update { it.copy(busy = false) }
             if (foreground && !_state.value.ready) connect()
