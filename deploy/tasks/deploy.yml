@@ -1,0 +1,89 @@
+---
+- name: "Stage: deploy forwarder"
+  ansible.builtin.set_fact:
+    release_stage: deploy forwarder
+
+- name: Read existing Serve configuration
+  ansible.builtin.command: tailscale serve status --json
+  register: serve
+  changed_when: false
+  check_mode: false
+- name: Preserve unrelated Serve routes and refuse replacing an existing root
+  ansible.builtin.assert:
+    that:
+      - "(serve.stdout | from_json).get('Web', {}).get(route_host, {}).get('Handlers', {}).get('/', {}) in [{}, {'Proxy': 'http://127.0.0.1:8787'}]"
+      - "'/codex' not in (serve.stdout | from_json).get('Web', {}).get(route_host, {}).get('Handlers', {})"
+      - "'/codex/rpc' not in (serve.stdout | from_json).get('Web', {}).get(route_host, {}).get('Handlers', {})"
+- name: Prepare owned service and workspace directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0700'
+  loop:
+    - /home/agent/.local/libexec
+    - /home/agent/.config/systemd/user
+    - "{{ secret_dir }}"
+    - "{{ secret_dir }}/updates"
+    - /home/agent/Documents/RemoteCodex
+- name: Provision encrypted connection credential only if absent
+  ansible.builtin.shell: |
+    set -euo pipefail
+    umask 077
+    tmp="$(mktemp "{{ secret_dir }}/.connection-token.XXXXXX")"
+    trap 'rm -f "$tmp"' EXIT
+    openssl rand -hex 32 | systemd-creds encrypt --user --name=connection-token - "$tmp"
+    chmod 0600 "$tmp"
+    mv "$tmp" "{{ secret_dir }}/connection-token.cred"
+  args:
+    executable: /bin/bash
+    creates: "{{ secret_dir }}/connection-token.cred"
+  no_log: true
+- name: Verify encrypted credential can be decrypted by agent
+  ansible.builtin.shell: systemd-creds decrypt --user --name=connection-token "{{ secret_dir }}/connection-token.cred" - >/dev/null
+  changed_when: false
+  no_log: true
+  when: not ansible_check_mode
+- name: Install validated forwarder
+  ansible.builtin.copy:
+    src: "{{ repo }}/dist/remote-codex-forwarder"
+    dest: /home/agent/.local/libexec/remote-codex-forwarder
+    mode: '0700'
+  notify: Restart forwarder
+- name: Install user service
+  ansible.builtin.template:
+    src: remote-codex-forwarder.service.j2
+    dest: /home/agent/.config/systemd/user/remote-codex-forwarder.service
+    mode: '0600'
+  notify: Restart forwarder
+- name: Enable forwarder
+  when: not ansible_check_mode
+  ansible.builtin.systemd_service:
+    name: remote-codex-forwarder.service
+    scope: user
+    enabled: true
+    state: started
+    daemon_reload: true
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ user_id.stdout }}"
+- name: Flush service restart before verification
+  when: not ansible_check_mode
+  ansible.builtin.meta: flush_handlers
+- name: Verify unauthenticated connection is rejected
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8787/codex/rpc
+    status_code: 401
+  when: not ansible_check_mode
+- name: Configure persistent Tailscale Serve without resetting other routes
+  ansible.builtin.command:
+    argv: [tailscale, serve, --bg, --https=443, --set-path=/, 'http://127.0.0.1:8787']
+  become: true
+  when: (serve.stdout | from_json).get('Web', {}).get(route_host, {}).get('Handlers', {}).get('/', {}).get('Proxy', '') != 'http://127.0.0.1:8787'
+- name: Confirm service persistence prerequisite
+  ansible.builtin.command: loginctl show-user agent --property=Linger --value
+  register: linger
+  changed_when: false
+  check_mode: false
+- name: Require lingering for unattended service startup
+  ansible.builtin.assert:
+    that: linger.stdout == 'yes'
+    fail_msg: Enable user lingering for agent before claiming reboot persistence.

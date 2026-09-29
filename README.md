@@ -24,8 +24,27 @@ Use the existing Mise JDK 17, Rust 1.95 and Android SDK 36 toolchains.
 ```sh
 scripts/check
 scripts/init-signing   # once for a new identity; refuses to overwrite
-scripts/release
+scripts/deploy -e remote_codex_action=build
 ```
+
+The build action requires a clean checkout, chooses the next patch version and
+Android build number, prepares notes from commit subjects, and calls the internal
+`scripts/release` builder once. That builder already runs `scripts/check`; do not
+run checks separately for a routine release. On success Ansible records the source
+revision, checksums and validation outcome in a local commit. It does not push.
+
+For an update available through the app's install button, use one command:
+
+```sh
+scripts/deploy -e remote_codex_action=release
+```
+
+Release runs the same build, publishes the private stable update, and verifies
+the authenticated HTTPS manifest and complete APK. It does not deploy the
+forwarder or install on the phone. Optional variables are
+`remote_codex_version=X.Y.Z` and `remote_codex_notes_file=/absolute/path/notes.md`.
+Console output contains stages and a compact result; detailed logs are saved in
+`artifacts/releases/`. See [release operation and recovery](docs/RELEASING.md).
 
 ## Parallel worktree development
 
@@ -76,7 +95,7 @@ Keep the PKCS12 file and password secure and backed up. The independently record
 public certificate digest is `docs/signing-certificate.sha256`. Releases must match
 it. Increase versionCode for upgrades; never uninstall to force an update.
 
-`dist/` contains the signed APK, forwarder and SHA256SUMS. Build scripts never deploy.
+`dist/` contains the signed APK, forwarder and SHA256SUMS. The build action never publishes or deploys.
 Tests use an isolated Codex home and fake model, not live account credentials.
 
 ## Deployment (explicit steps)
@@ -95,7 +114,8 @@ Serve routes, then installs the user service and configures private Serve with
 `--bg`. It does not change or restart Codex. Delivery targets the single phone in
 inventory. The user opens the APK and confirms installation.
 
-Publish is a separate, explicit phone-delivery step. It requires a running host
+Publish is the explicit prepared-artifact publication action; release includes
+it after building. It requires a running host
 that exposes the authenticated update extension, but Android-only releases do not
 require an identical forwarder build. It copies the signed APK to an immutable
 private release path and atomically advances the stable manifest. In app Settings,

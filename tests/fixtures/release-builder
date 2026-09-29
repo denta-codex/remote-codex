@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+scripts/check
+if [[ "${FIXTURE_BUILD_FAIL:-}" == 1 ]]; then
+    echo 'fixture build failed' >&2
+    exit 19
+fi
+code="$(sed -n 's/ *versionCode = //p' android/app/build.gradle.kts)"
+version="$(sed -n 's/ *versionName = "\(.*\)"/\1/p' android/app/build.gradle.kts)"
+dir="dist/updates/releases/$code"
+mkdir -p "$dir" dist/updates/stable
+printf 'fixture APK version %s\n' "$code" > "$dir/remote-codex.apk"
+printf 'fixture forwarder\n' > dist/remote-codex-forwarder
+sha="$(sha256sum "$dir/remote-codex.apk" | cut -d' ' -f1)"
+size="$(stat --format='%s' "$dir/remote-codex.apk")"
+jq -n --argjson code "$code" --arg version "$version" --arg sha "$sha" --argjson size "$size" \
+    --arg cert "$(cat docs/signing-certificate.sha256)" --rawfile notes docs/release-notes.md \
+    '{schema:"dev.codexops.remote-codex.update/v1",channel:"stable",packageName:"dev.codexops.client",
+      versionCode:$code,versionName:$version,publishedAt:"2026-09-29T00:00:00Z",
+      apkUrl:("/remote-codex/v1/updates/releases/"+($code|tostring)+"/remote-codex.apk"),
+      apkSize:$size,sha256:$sha,signingCertificateSha256:$cert,releaseNotes:$notes}' > dist/updates/stable/latest.json
+(cd dist && sha256sum "updates/releases/$code/remote-codex.apk" updates/stable/latest.json remote-codex-forwarder > SHA256SUMS)

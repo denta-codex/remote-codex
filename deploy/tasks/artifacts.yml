@@ -1,0 +1,31 @@
+---
+- name: "Stage: artifact verification"
+  ansible.builtin.set_fact:
+    release_stage: artifact verification
+
+- name: Validate prepared release checksums
+  ansible.builtin.command:
+    argv: [sha256sum, --check, SHA256SUMS]
+    chdir: "{{ repo }}/dist"
+  changed_when: false
+  check_mode: false
+
+- name: Read prepared update manifest
+  ansible.builtin.include_vars:
+    file: "{{ repo }}/dist/updates/stable/latest.json"
+    name: release_manifest
+  when: remote_codex_action != 'deploy'
+
+- name: Validate prepared update manifest
+  ansible.builtin.assert:
+    that:
+      - release_manifest.schema == 'dev.codexops.remote-codex.update/v1'
+      - release_manifest.channel == 'stable'
+      - release_manifest.packageName == 'dev.codexops.client'
+      - release_manifest.versionCode | int > 0
+      - release_manifest.versionName | length > 0
+      - release_manifest.apkUrl == '/remote-codex/v1/updates/releases/' + (release_manifest.versionCode | string) + '/remote-codex.apk'
+      - release_manifest.apkSize | int > 0
+      - release_manifest.sha256 is match('^[0-9a-f]{64}$')
+      - release_manifest.signingCertificateSha256 == lookup('ansible.builtin.file', repo + '/docs/signing-certificate.sha256')
+  when: remote_codex_action != 'deploy'

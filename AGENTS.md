@@ -2,8 +2,28 @@
 Keep Codex stock; attach to the existing control socket. Android uses WSS only.
 Never automatically retry an uncertain mutation. Server state is authoritative.
 Do not log credentials, RPC payloads, or transcripts in operational logs.
-Use the existing managed JDK/Android SDK. Run scripts/check before preparing release.
-Live deployment and phone delivery are separate, explicit steps after local checks.
+Use the existing managed JDK/Android SDK.
+
+## Routine builds and releases
+
+- Build/sign: `scripts/deploy -e remote_codex_action=build`.
+- Publish an in-app update: `scripts/deploy -e remote_codex_action=release`.
+- Ansible chooses the next patch/build number, prepares notes, invokes
+  `scripts/release` once (which runs `scripts/check`), verifies artifacts, and
+  commits the completed build/release record locally. Do not run checks separately.
+- Override the version with `-e remote_codex_version=X.Y.Z` or notes with
+  `-e remote_codex_notes_file=/absolute/path/to/notes.md` when requested.
+- Account for source changes before invoking the workflow: build/release requires
+  a clean checkout. It uses the current branch, or creates a release branch when
+  detached. It never pushes.
+- Use the command's stages and final result. Wait in 30–60-second intervals;
+  do not repeatedly read unchanged logs, re-explore the repository, research the
+  release process, or write bespoke verification commands for a routine build.
+- Investigate only failures. Detailed logs and failed build artifacts are retained
+  under `artifacts/releases/` and `dist/`. Inspect the reported publication state
+  before an explicit recovery; never automatically replay an uncertain mutation.
+- Build/release does not deploy the forwarder or install on the phone. Those
+  remain separate explicit actions. Do not rerun emulator tests merely to release.
 
 The ignored ChatGPT Android reference is in `artifacts/chatgpt-android`: use
 `simple/sources` for decompiled code, `com.openai.chatgpt.apk` for the base APK,

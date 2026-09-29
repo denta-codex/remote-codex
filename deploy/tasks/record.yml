@@ -1,0 +1,58 @@
+---
+- name: "Stage: record release"
+  ansible.builtin.set_fact:
+    release_stage: record release
+
+- name: Read existing validation record
+  ansible.builtin.slurp:
+    src: "{{ repo }}/docs/VALIDATION.md"
+  register: validation_record
+
+- name: Write completed release record
+  ansible.builtin.copy:
+    dest: "{{ repo }}/docs/VALIDATION.md"
+    mode: '0644'
+    content: |
+      # Validation
+
+      ## {{ now(utc=True, fmt='%Y-%m-%d') }} — Android {{ release_manifest.versionName }} ({{ release_manifest.versionCode }})
+
+      - Source revision: `{{ source_revision.stdout }}`.
+      - Required checks, signed build, lint, package and signing verification passed.
+      - APK SHA-256: `{{ release_manifest.sha256 }}`.
+      - Outcome: {{ 'Published to the private stable channel; authenticated HTTPS manifest and full APK verified.' if release_verified else 'Built and signed locally; not published.' }}
+      - Build log: `{{ run_log }}.build.log`.
+      - Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
+      {{ (validation_record.content | b64decode) | regex_replace('^# Validation\\s*', '') }}
+
+- name: Check branch attachment
+  ansible.builtin.command:
+    argv: [git, symbolic-ref, --quiet, --short, HEAD]
+    chdir: "{{ repo }}"
+  register: current_branch
+  changed_when: false
+  failed_when: current_branch.rc not in [0, 1]
+
+- name: Attach detached release commit to a branch
+  ansible.builtin.command:
+    argv: [git, switch, '-c', "codex/release-{{ release_manifest.versionName }}"]
+    chdir: "{{ repo }}"
+  when: current_branch.rc == 1
+
+- name: Stage release metadata and record
+  ansible.builtin.command:
+    argv: [git, add, --, android/app/build.gradle.kts, docs/release-notes.md, docs/VALIDATION.md]
+    chdir: "{{ repo }}"
+
+- name: Commit completed release locally
+  ansible.builtin.command:
+    argv: [git, commit, '-m', "{{ 'Publish' if release_verified else 'Build' }} Android {{ release_manifest.versionName }} ({{ release_manifest.versionCode }})"]
+    chdir: "{{ repo }}"
+
+- name: Read release commit
+  ansible.builtin.command:
+    argv: [git, rev-parse, --short, HEAD]
+    chdir: "{{ repo }}"
+  register: recorded_commit
+  changed_when: false

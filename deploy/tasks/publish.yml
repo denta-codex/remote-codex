@@ -1,0 +1,84 @@
+---
+- name: "Stage: publish update"
+  ansible.builtin.set_fact:
+    release_stage: publish update
+
+- name: Confirm compatible update service is active
+  ansible.builtin.command: systemctl --user is-active remote-codex-forwarder.service
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ user_id.stdout }}"
+  changed_when: false
+  check_mode: false
+- name: Confirm private update route requires authentication
+  ansible.builtin.uri:
+    url: "{{ remote_codex_loopback_url }}/remote-codex/v1/updates/stable/latest.json"
+    status_code: 401
+  when: not ansible_check_mode
+- name: Prepare private update directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0700'
+  loop:
+    - "{{ secret_dir }}/updates"
+    - "{{ secret_dir }}/updates/releases"
+    - "{{ secret_dir }}/updates/releases/{{ release_manifest.versionCode }}"
+    - "{{ secret_dir }}/updates/stable"
+- name: Inspect existing immutable APK
+  ansible.builtin.stat:
+    path: "{{ secret_dir }}/updates/releases/{{ release_manifest.versionCode }}/remote-codex.apk"
+    checksum_algorithm: sha256
+  register: published_apk
+- name: Inspect current stable manifest
+  ansible.builtin.stat:
+    path: "{{ secret_dir }}/updates/stable/latest.json"
+  register: stable_manifest_file
+- name: Read current stable manifest
+  ansible.builtin.slurp:
+    src: "{{ secret_dir }}/updates/stable/latest.json"
+  register: stable_manifest_content
+  when: stable_manifest_file.stat.exists
+- name: Refuse moving the stable channel backward
+  ansible.builtin.assert:
+    that:
+      - (stable_manifest_content.content | b64decode | from_json).versionCode <= release_manifest.versionCode
+      - (stable_manifest_content.content | b64decode | from_json).versionCode != release_manifest.versionCode or (stable_manifest_content.content | b64decode | from_json).sha256 == release_manifest.sha256
+    fail_msg: Stable already points to a newer or different release; publish a higher versionCode.
+  when: stable_manifest_file.stat.exists
+- name: Inspect prepared signed APK
+  ansible.builtin.stat:
+    path: "{{ repo }}/dist/updates/releases/{{ release_manifest.versionCode }}/remote-codex.apk"
+    checksum_algorithm: sha256
+  register: prepared_apk
+- name: Confirm prepared APK matches manifest
+  ansible.builtin.assert:
+    that:
+      - prepared_apk.stat.exists
+      - prepared_apk.stat.size == release_manifest.apkSize
+      - prepared_apk.stat.checksum == release_manifest.sha256
+- name: Refuse changing an existing release
+  ansible.builtin.assert:
+    that:
+      - not published_apk.stat.exists or published_apk.stat.checksum == release_manifest.sha256
+    fail_msg: This versionCode already contains a different APK; publish a higher versionCode.
+- name: Copy immutable signed APK
+  ansible.builtin.copy:
+    src: "{{ repo }}/dist/updates/releases/{{ release_manifest.versionCode }}/remote-codex.apk"
+    dest: "{{ secret_dir }}/updates/releases/{{ release_manifest.versionCode }}/remote-codex.apk"
+    mode: '0600'
+    force: false
+- name: Record publication attempt before advancing stable
+  ansible.builtin.set_fact:
+    publication_attempted: true
+  when: not ansible_check_mode
+
+- name: Publish stable manifest atomically
+  ansible.builtin.copy:
+    src: "{{ repo }}/dist/updates/stable/latest.json"
+    dest: "{{ secret_dir }}/updates/stable/latest.json"
+    mode: '0600'
+
+- name: Mark stable manifest published
+  ansible.builtin.set_fact:
+    release_published: true
+  when: not ansible_check_mode

@@ -1,4 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+umask 077
+# One lock for all worktrees; flock releases it even if the caller is interrupted.
+lock_dir="${XDG_RUNTIME_DIR:-/tmp/remote-codex-$UID}/remote-codex"
+mkdir -p "$lock_dir" artifacts/releases
+exec 9>"$lock_dir/deploy.lock"
+flock -n 9 || { echo 'Another Remote Codex deployment or release is running.' >&2; exit 1; }
+export REMOTE_CODEX_RUN_LOG="$(mktemp "$PWD/artifacts/releases/run-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX.log")"
+export ANSIBLE_STDOUT_CALLBACK=remote_codex
+export ANSIBLE_CALLBACK_PLUGINS="$PWD/deploy/callback_plugins"
+export ANSIBLE_FILTER_PLUGINS="$PWD/deploy/filter_plugins"
+echo "Log: $REMOTE_CODEX_RUN_LOG"
 exec mise exec pipx:ansible-core@2.21.4 -- ansible-playbook deploy/remote-codex.yml "$@"

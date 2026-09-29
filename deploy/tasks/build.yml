@@ -1,0 +1,31 @@
+---
+- name: "Stage: build and sign"
+  ansible.builtin.set_fact:
+    release_stage: build and sign
+
+- name: Run checks and signed build once
+  ansible.builtin.shell: "scripts/release > {{ (run_log + '.build.log') | quote }} 2>&1"
+  args:
+    chdir: "{{ repo }}"
+    executable: /bin/bash
+  environment:
+    REMOTE_CODEX_TEST_CODEX: "{{ managed_codex.stdout }}"
+  register: build_result
+  # A nonzero exit is handled below so its bounded diagnostic reaches the console.
+  failed_when: false
+
+- name: Read failed build diagnostic
+  ansible.builtin.command:
+    argv: [tail, -n, '25', "{{ run_log }}.build.log"]
+  register: build_diagnostic
+  changed_when: false
+  when: build_result.rc != 0
+
+- name: Require successful build
+  ansible.builtin.assert:
+    that: build_result.rc == 0
+    fail_msg: "{{ build_diagnostic.stdout | default('Build failed; inspect its log.') }}"
+
+- name: Mark build complete
+  ansible.builtin.set_fact:
+    release_built: true

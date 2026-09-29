@@ -1,0 +1,83 @@
+---
+- name: "Stage: verify published update"
+  ansible.builtin.set_fact:
+    release_stage: verify published update
+
+- name: Require HTTPS update verification
+  ansible.builtin.assert:
+    that: remote_codex_update_url is match('^https://[^/]+$')
+
+- name: Confirm HTTPS manifest requires authentication
+  ansible.builtin.uri:
+    url: "{{ remote_codex_update_url }}/remote-codex/v1/updates/stable/latest.json"
+    status_code: 401
+    follow_redirects: none
+
+- name: Decrypt connection credential for verification
+  ansible.builtin.command:
+    argv: [systemd-creds, decrypt, --user, --name=connection-token, "{{ secret_dir }}/connection-token.cred", '-']
+  register: verification_credential
+  changed_when: false
+  no_log: true
+
+- name: Create disposable verification directory
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: remote-codex-verify-
+  register: verification_directory
+
+- name: Verify authenticated manifest and full APK
+  block:
+    - name: Fetch authenticated HTTPS manifest
+      ansible.builtin.uri:
+        url: "{{ remote_codex_update_url }}/remote-codex/v1/updates/stable/latest.json"
+        headers:
+          Authorization: "Bearer {{ verification_credential.stdout | trim }}"
+        return_content: true
+        follow_redirects: none
+      register: published_manifest
+      no_log: true
+
+    - name: Confirm exact published manifest
+      ansible.builtin.assert:
+        that: published_manifest.content == lookup('ansible.builtin.file', repo + '/dist/updates/stable/latest.json', rstrip=False)
+        fail_msg: Served manifest does not match the prepared release.
+      no_log: true
+
+    - name: Download authenticated HTTPS APK
+      ansible.builtin.uri:
+        url: "{{ remote_codex_update_url }}{{ release_manifest.apkUrl }}"
+        dest: "{{ verification_directory.path }}/remote-codex.apk"
+        headers:
+          Authorization: "Bearer {{ verification_credential.stdout | trim }}"
+        follow_redirects: none
+        status_code: 200
+        mode: '0600'
+        timeout: 120
+      no_log: true
+
+    - name: Inspect downloaded APK
+      ansible.builtin.stat:
+        path: "{{ verification_directory.path }}/remote-codex.apk"
+        checksum_algorithm: sha256
+      register: downloaded_apk
+
+    - name: Confirm complete APK matches release
+      ansible.builtin.assert:
+        that:
+          - downloaded_apk.stat.size == release_manifest.apkSize
+          - downloaded_apk.stat.checksum == release_manifest.sha256
+
+    - name: Mark publication verified
+      ansible.builtin.set_fact:
+        release_verified: true
+  always:
+    - name: Remove temporary verification download
+      ansible.builtin.file:
+        path: "{{ verification_directory.path }}"
+        state: absent
+
+    - name: Discard verification credential variable
+      ansible.builtin.set_fact:
+        verification_credential: {}
+      no_log: true

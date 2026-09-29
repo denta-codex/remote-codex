@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 export JAVA_HOME="${JAVA_HOME:-$(mise where java@temurin-17.0.20+8)}"
 export ANDROID_HOME="${ANDROID_HOME:-/home/agent/Android/Sdk}"
 export PATH="$JAVA_HOME/bin:$PATH"
-export REMOTE_CODEX_TEST_CODEX="${REMOTE_CODEX_TEST_CODEX:-$(command -v codex)}"
+export REMOTE_CODEX_TEST_CODEX="${REMOTE_CODEX_TEST_CODEX:-$(mise which codex)}"
 (
     cd forwarder
     mise x rust@1.95.0 -- cargo fmt --all -- --check

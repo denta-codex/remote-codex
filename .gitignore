@@ -9,3 +9,4 @@ artifacts/
 *.p12
 *.keystore
 .env
+__pycache__/

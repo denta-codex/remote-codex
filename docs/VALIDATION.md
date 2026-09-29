@@ -1,5 +1,21 @@
 # Validation
 
+## September 29, 2026 — Ansible build and release workflow
+
+- Added build-only and complete release actions to the existing Ansible entry
+  point, with shared task groups, automatic version allocation, one-time checks,
+  signed artifact verification, HTTPS publication verification, and local commits.
+- Ansible syntax validation and the non-mutating preview passed. Twelve initial
+  fixture regression tests passed; three focused follow-up tests passed after
+  adding cross-worktree version reservations and matching Android's rejection of
+  APK redirects. Together these cover thirteen distinct test cases, including
+  dirty checkouts, explicit versions/notes, host locking, immutable conflicts,
+  failed builds, authentication/checksum failures, and failure after publication.
+- Fixture tests use disposable repositories, a fake build primitive, and a local
+  TLS server. They verify checks run once, build-only does not publish, credentials
+  are excluded from logs, and publication/verification state is reported honestly
+  if local Git recording fails. No live publication or phone operation occurred.
+
 ## September 29, 2026 — Android 0.2.3 publication
 
 - Advanced Android to 0.2.3 / code 13 with queued follow-ups, explicit steering,

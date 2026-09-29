@@ -1,0 +1,144 @@
+---
+- name: Read checkout status
+  ansible.builtin.command:
+    argv: [git, status, --porcelain, --untracked-files=normal]
+    chdir: "{{ repo }}"
+  register: checkout_status
+  changed_when: false
+
+- name: Require clean source checkout
+  ansible.builtin.assert:
+    that: checkout_status.stdout | length == 0
+    fail_msg: Commit or otherwise account for checkout changes before building. No files have been changed.
+
+- name: Resolve managed Codex executable
+  ansible.builtin.shell: 'printf "%s" "${REMOTE_CODEX_TEST_CODEX:-$(mise which codex)}"'
+  args:
+    executable: /bin/bash
+  register: managed_codex
+  changed_when: false
+
+- name: Validate existing build and signing toolchains
+  ansible.builtin.shell: |
+    set -euo pipefail
+    java_dir="${JAVA_HOME:-$(mise where java@temurin-17.0.20+8)}"
+    sdk_dir="${ANDROID_HOME:-/home/agent/Android/Sdk}"
+    signing_dir="${REMOTE_CODEX_SIGNING_DIR:-/home/agent/.local/share/remote-codex/signing}"
+    "$java_dir/bin/java" -version 2>&1 | grep -q 'version "17\.'
+    mise where rust@1.95.0 >/dev/null
+    test -x {{ managed_codex.stdout | quote }}
+    test -f "$sdk_dir/platforms/android-36/android.jar"
+    test -x "$sdk_dir/build-tools/36.0.0/apksigner"
+    test -x "$sdk_dir/build-tools/36.0.0/aapt"
+    test -r "$signing_dir/release.p12"
+    test -r "$signing_dir/password"
+    command -v jq >/dev/null
+    git var GIT_AUTHOR_IDENT >/dev/null
+    git var GIT_COMMITTER_IDENT >/dev/null
+  args:
+    executable: /bin/bash
+    chdir: "{{ repo }}"
+  changed_when: false
+
+- name: Capture source revision
+  ansible.builtin.command:
+    argv: [git, rev-parse, HEAD]
+    chdir: "{{ repo }}"
+  register: source_revision
+  changed_when: false
+
+- name: Inspect prepared and published manifests
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ repo }}/dist/updates/stable/latest.json"
+    - "{{ secret_dir }}/updates/stable/latest.json"
+    - "{{ secret_dir }}/builds/latest.json"
+  register: manifest_files
+
+- name: Initialize version inputs
+  ansible.builtin.set_fact:
+    existing_manifests: []
+
+- name: Read existing manifest versions
+  ansible.builtin.set_fact:
+    existing_manifests: "{{ existing_manifests + [lookup('ansible.builtin.file', item.item) | from_json] }}"
+  loop: "{{ manifest_files.results }}"
+  when: item.stat.exists
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Find occupied prepared and published build numbers
+  ansible.builtin.find:
+    paths:
+      - "{{ repo }}/dist/updates/releases"
+      - "{{ secret_dir }}/updates/releases"
+    file_type: directory
+    use_regex: true
+    patterns: '^[0-9]+$'
+    recurse: false
+  register: existing_releases
+
+- name: Select release version
+  ansible.builtin.set_fact:
+    selected_version: "{{ lookup('ansible.builtin.file', repo + '/android/app/build.gradle.kts') | remote_codex_select_version(existing_manifests, existing_releases.files | map(attribute='path') | map('basename') | list, remote_codex_version | default(None)) }}"
+
+- name: Find previous version change
+  ansible.builtin.command:
+    argv: [git, log, '-1', '--format=%H', '-G', 'version(Code|Name) =', '--', android/app/build.gradle.kts]
+    chdir: "{{ repo }}"
+  register: previous_version_change
+  changed_when: false
+
+- name: Read change subjects
+  ansible.builtin.command:
+    argv: [git, log, --reverse, '--format=- %s', "{{ previous_version_change.stdout }}..HEAD"]
+    chdir: "{{ repo }}"
+  register: change_subjects
+  changed_when: false
+  when: remote_codex_notes_file is not defined
+
+- name: Prepare release notes
+  ansible.builtin.set_fact:
+    selected_notes: "{{ lookup('ansible.builtin.file', remote_codex_notes_file) if remote_codex_notes_file is defined else (change_subjects.stdout | default('') | trim or ('Rebuild of source ' + source_revision.stdout[:12] + '.')) }}"
+
+- name: Validate release notes
+  ansible.builtin.assert:
+    that:
+      - selected_notes | trim | length > 0
+      - selected_notes | length <= 16000
+    fail_msg: Release notes must be nonempty and at most 16000 characters.
+
+- name: "Stage: prepare version and notes"
+  ansible.builtin.set_fact:
+    release_stage: prepare version and notes
+
+- name: Prepare shared version reservation directory
+  ansible.builtin.file:
+    path: "{{ secret_dir }}/builds"
+    state: directory
+    mode: '0700'
+
+- name: Reserve version across worktrees before building
+  ansible.builtin.copy:
+    content: "{{ (selected_version | combine({'sourceRevision': source_revision.stdout, 'log': run_log})) | to_nice_json }}\n"
+    dest: "{{ secret_dir }}/builds/latest.json"
+    mode: '0600'
+
+- name: Update Android build number
+  ansible.builtin.lineinfile:
+    path: "{{ repo }}/android/app/build.gradle.kts"
+    regexp: '^        versionCode = '
+    line: "        versionCode = {{ selected_version.versionCode }}"
+
+- name: Update Android version
+  ansible.builtin.lineinfile:
+    path: "{{ repo }}/android/app/build.gradle.kts"
+    regexp: '^        versionName = '
+    line: '        versionName = "{{ selected_version.versionName }}"'
+
+- name: Write selected release notes
+  ansible.builtin.copy:
+    content: "{{ selected_notes | trim }}\n"
+    dest: "{{ repo }}/docs/release-notes.md"
+    mode: '0644'
