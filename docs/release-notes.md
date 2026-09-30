@@ -1,1 +1,2 @@
-- Automate builds and in-app releases with Ansible
+- Keep one heading in generated release records
+- Repair stock socket attachment and verify remote connections

@@ -583,13 +583,13 @@ fn should_log(last: &mut Option<Instant>, now: Instant) -> bool {
 
 async fn write_bad_gateway(stream: &mut TcpStream, failure: GatewayFailure) -> io::Result<()> {
     static LAST_FAILURE: Mutex<Option<Instant>> = Mutex::new(None);
-    if let Ok(mut last) = LAST_FAILURE.lock() {
-        if should_log(&mut last, Instant::now()) {
-            eprintln!(
-                "Remote Codex upstream failure: reason={} status=502",
-                failure.label()
-            );
-        }
+    if let Ok(mut last) = LAST_FAILURE.lock()
+        && should_log(&mut last, Instant::now())
+    {
+        eprintln!(
+            "Remote Codex upstream failure: reason={} status=502",
+            failure.label()
+        );
     }
     write_rejection(
         stream,
@@ -944,16 +944,15 @@ mod tests {
             let target = std::fs::canonicalize(&self.1).ok();
             let _ = self.0.kill();
             let _ = self.0.wait();
-            if let Some(target) = target {
-                if target.parent()
+            if let Some(target) = target
+                && target.parent()
                     == Some(Path::new(&format!("/tmp/codex-daemon-{}", current_uid())))
-                {
-                    let lock = target.with_file_name(format!(
-                        "{}.lock",
-                        target.file_name().unwrap().to_string_lossy()
-                    ));
-                    let _ = std::fs::remove_file(lock);
-                }
+            {
+                let lock = target.with_file_name(format!(
+                    "{}.lock",
+                    target.file_name().unwrap().to_string_lossy()
+                ));
+                let _ = std::fs::remove_file(lock);
             }
         }
     }
