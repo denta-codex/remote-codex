@@ -5,6 +5,7 @@ export JAVA_HOME="${JAVA_HOME:-$(mise where java@temurin-17.0.20+8)}"
 export ANDROID_HOME="${ANDROID_HOME:-/home/agent/Android/Sdk}"
 export PATH="$JAVA_HOME/bin:$PATH"
 export REMOTE_CODEX_TEST_CODEX="${REMOTE_CODEX_TEST_CODEX:-$(mise which codex)}"
+uv run --no-project tests/connection_check_test.py
 (
     cd forwarder
     mise x rust@1.95.0 -- cargo fmt --all -- --check

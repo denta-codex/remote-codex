@@ -154,3 +154,33 @@ Limits: no push notifications, directory attachments, terminal emulator, or inte
 command previews. Activity text is bounded for phone rendering; full output
 remains on Grace. End-to-end physical-device behavior is a release acceptance step,
 not inferred from successful builds.
+
+## Control socket and upgrade acceptance
+
+The forwarder resolves the configured control-socket alias for each authenticated
+connection. The alias and resolved Unix socket must belong to the agent account,
+their containing directories must be private, and the socket must not be writable
+by other accounts. The connected peer's kernel-reported UID is checked before any
+HTTP upgrade bytes are sent. Missing or unsafe targets fail closed with 502.
+
+Stock Codex 0.159.2 publishes an alias into `/tmp/codex-daemon-<uid>/`. The service
+shares host `/tmp` so that target is visible; `ProtectSystem=strict` still makes
+the filesystem read-only. Upstream failures emit fixed reason codes and HTTP
+status, at most once per 30 seconds, without paths, credentials or RPC content.
+
+`uv run --no-project scripts/connection-check.py` checks the live authenticated
+WSS route, stock initialization, account home, and read-only project/task listing.
+Deployment installs this check and requires it before reporting success.
+`candidate-check.py --codex-binary /absolute/bin/codex` uses the installed
+forwarder and its actual unit/drop-in protections with isolated systemd units,
+a synthetic credential and an empty Codex home. It checks a connection and a
+candidate restart, then removes its scoped units, files and daemon locks. It
+never sends inference requests or restarts the live server.
+
+Grace's LiteLLM runtime utility requires candidate acceptance before staging a
+version, and live WSS acceptance during verification and immediately before
+finishing a transaction. A failed gate preserves runtime selection or pending
+recovery state; rollback and Desktop Restart remain explicit. Forwarder deployment
+keeps narrow Ansible backups of the old binary and unit until live acceptance
+succeeds. If deployment fails, retain the reported backup paths for explicit
+recovery; remove them once recovery and verification are complete.

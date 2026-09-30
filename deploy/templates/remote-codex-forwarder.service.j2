@@ -14,7 +14,9 @@ UMask=0077
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-PrivateTmp=true
+# Stock Codex's control-socket alias points into its private directory in host /tmp.
+# ProtectSystem=strict keeps the shared filesystem read-only for this service.
+PrivateTmp=false
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 [Install]

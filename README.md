@@ -166,3 +166,16 @@ This uses the actual Android client over WSS to initialize and load tasks. It
 passes the host credential through an app-private FIFO, stores it using the
 Android Keystore, and clears it after the test. No prompt or task mutation is
 submitted. Shut down and remove the disposable emulator after acceptance.
+
+## Connection diagnosis
+
+Run `uv run --no-project scripts/connection-check.py` for a read-only check of the
+same authenticated WSS route used by the phone. It checks initialization and
+project/task listing, including an empty account, and prints only result metadata.
+Inspect `journalctl --user -u remote-codex-forwarder.service` for bounded upstream
+failure reason codes. On hosts with system-only journals, use
+`sudo journalctl _UID=$(id -u) _SYSTEMD_USER_UNIT=remote-codex-forwarder.service`.
+
+The deployed checks are under `~/.local/libexec/remote-codex-checks/`. Runtime
+upgrades require an isolated candidate check with the installed forwarder and its
+systemd protections before staging, plus a live WSS check before acceptance.

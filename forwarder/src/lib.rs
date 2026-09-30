@@ -6,7 +6,8 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UnixStream};
@@ -93,15 +94,48 @@ pub fn load_config_from_credential(
     Config::new(socket, raw.trim())
 }
 
-pub fn check_socket(path: &Path) -> io::Result<()> {
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|_| io::Error::new(io::ErrorKind::NotFound, "control socket unavailable"))?;
+fn current_uid() -> u32 {
     // SAFETY: geteuid has no preconditions and does not access memory.
-    let current_uid = unsafe { libc::geteuid() };
-    if !metadata.file_type().is_socket() || metadata.uid() != current_uid {
+    unsafe { libc::geteuid() }
+}
+
+pub fn check_socket(path: &Path) -> io::Result<PathBuf> {
+    resolve_socket_for_uid(path, current_uid())
+}
+
+fn resolve_socket_for_uid(path: &Path, uid: u32) -> io::Result<PathBuf> {
+    let denied = || {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "control socket is not private and owned",
+        )
+    };
+    let alias = std::fs::symlink_metadata(path)?;
+    if alias.uid() != uid || !(alias.file_type().is_socket() || alias.file_type().is_symlink()) {
+        return Err(denied());
+    }
+    let resolved = std::fs::canonicalize(path)?;
+    let socket = std::fs::symlink_metadata(&resolved)?;
+    if !socket.file_type().is_socket() || socket.uid() != uid || socket.mode() & 0o022 != 0 {
+        return Err(denied());
+    }
+    // Validate both ends of the alias. A private directory protects socket replacement;
+    // SO_PEERCRED below checks the actual connection after pathname resolution.
+    for parent in [path.parent(), resolved.parent()] {
+        let parent = parent.ok_or_else(denied)?;
+        let metadata = std::fs::metadata(parent)?;
+        if !metadata.is_dir() || metadata.uid() != uid || metadata.mode() & 0o077 != 0 {
+            return Err(denied());
+        }
+    }
+    Ok(resolved)
+}
+
+fn check_peer_uid(actual: u32, expected: u32) -> io::Result<()> {
+    if actual != expected {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "control socket must be an owned Unix socket, not a symlink",
+            "control socket peer is not owned",
         ));
     }
     Ok(())
@@ -177,17 +211,40 @@ async fn handle_client(
         ValidatedRequest::WebSocket(request) => request,
     };
 
-    if check_socket(&config.socket).is_err() {
-        write_bad_gateway(&mut client).await?;
-        return Ok(());
-    }
-    let mut upstream = match timeout(CONNECT_TIMEOUT, UnixStream::connect(&config.socket)).await {
-        Ok(Ok(stream)) => stream,
-        _ => {
-            write_bad_gateway(&mut client).await?;
+    let socket = match check_socket(&config.socket) {
+        Ok(socket) => socket,
+        Err(error) => {
+            write_bad_gateway(
+                &mut client,
+                if error.kind() == io::ErrorKind::NotFound {
+                    GatewayFailure::SocketUnavailable
+                } else {
+                    GatewayFailure::SocketValidation
+                },
+            )
+            .await?;
             return Ok(());
         }
     };
+    let mut upstream = match timeout(CONNECT_TIMEOUT, UnixStream::connect(&socket)).await {
+        Ok(Ok(stream)) => stream,
+        Ok(Err(_)) => {
+            write_bad_gateway(&mut client, GatewayFailure::SocketConnect).await?;
+            return Ok(());
+        }
+        Err(_) => {
+            write_bad_gateway(&mut client, GatewayFailure::SocketTimeout).await?;
+            return Ok(());
+        }
+    };
+    if upstream
+        .peer_cred()
+        .and_then(|peer| check_peer_uid(peer.uid(), current_uid()))
+        .is_err()
+    {
+        write_bad_gateway(&mut client, GatewayFailure::PeerOwner).await?;
+        return Ok(());
+    }
     let upstream_request = format!(
         "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {}\r\nSec-WebSocket-Version: 13\r\n\r\n",
         request.websocket_key
@@ -197,21 +254,25 @@ async fn handle_client(
         .await
         .is_err()
     {
-        write_bad_gateway(&mut client).await?;
+        write_bad_gateway(&mut client, GatewayFailure::UpstreamWrite).await?;
         return Ok(());
     }
     let (response_head, upstream_tail) =
         match timeout(UPSTREAM_HEADER_TIMEOUT, read_head(&mut upstream)).await {
             Ok(Ok(value)) => value,
-            _ => {
-                write_bad_gateway(&mut client).await?;
+            Ok(Err(_)) => {
+                write_bad_gateway(&mut client, GatewayFailure::UpstreamRead).await?;
+                return Ok(());
+            }
+            Err(_) => {
+                write_bad_gateway(&mut client, GatewayFailure::UpstreamTimeout).await?;
                 return Ok(());
             }
         };
     let accept = match validate_upstream_response(&response_head) {
         Ok(accept) => accept,
         Err(()) => {
-            write_bad_gateway(&mut client).await?;
+            write_bad_gateway(&mut client, GatewayFailure::UpstreamUpgrade).await?;
             return Ok(());
         }
     };
@@ -483,7 +544,53 @@ impl Rejection {
     }
 }
 
-async fn write_bad_gateway(stream: &mut TcpStream) -> io::Result<()> {
+#[derive(Clone, Copy)]
+enum GatewayFailure {
+    SocketUnavailable,
+    SocketValidation,
+    SocketConnect,
+    SocketTimeout,
+    PeerOwner,
+    UpstreamWrite,
+    UpstreamRead,
+    UpstreamTimeout,
+    UpstreamUpgrade,
+}
+
+impl GatewayFailure {
+    fn label(self) -> &'static str {
+        match self {
+            Self::SocketUnavailable => "socket_unavailable",
+            Self::SocketValidation => "socket_validation",
+            Self::SocketConnect => "socket_connect",
+            Self::SocketTimeout => "socket_timeout",
+            Self::PeerOwner => "peer_owner",
+            Self::UpstreamWrite => "upstream_write",
+            Self::UpstreamRead => "upstream_read",
+            Self::UpstreamTimeout => "upstream_timeout",
+            Self::UpstreamUpgrade => "upstream_upgrade",
+        }
+    }
+}
+
+fn should_log(last: &mut Option<Instant>, now: Instant) -> bool {
+    if last.is_some_and(|previous| now.duration_since(previous) < Duration::from_secs(30)) {
+        return false;
+    }
+    *last = Some(now);
+    true
+}
+
+async fn write_bad_gateway(stream: &mut TcpStream, failure: GatewayFailure) -> io::Result<()> {
+    static LAST_FAILURE: Mutex<Option<Instant>> = Mutex::new(None);
+    if let Ok(mut last) = LAST_FAILURE.lock() {
+        if should_log(&mut last, Instant::now()) {
+            eprintln!(
+                "Remote Codex upstream failure: reason={} status=502",
+                failure.label()
+            );
+        }
+    }
     write_rejection(
         stream,
         Rejection::new(502, "Bad Gateway", "Codex unavailable"),
@@ -642,7 +749,7 @@ mod tests {
         assert!(check_socket(&socket).is_ok());
         let link = directory.path().join("link.sock");
         symlink(&socket, &link).unwrap();
-        assert!(check_socket(&link).is_err());
+        assert_eq!(check_socket(&link).unwrap(), socket);
         let regular = directory.path().join("regular");
         std::fs::write(&regular, b"x").unwrap();
         assert!(check_socket(&regular).is_err());
@@ -670,7 +777,7 @@ mod tests {
 
         let tcp = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = tcp.local_addr().unwrap();
-        let config = Arc::new(Config::new(&socket, TOKEN).unwrap());
+        let config = Arc::new(Config::new(&link, TOKEN).unwrap());
         let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
         let server = tokio::spawn(async move {
             let (stream, _) = tcp.accept().await.unwrap();
@@ -693,6 +800,71 @@ mod tests {
         drop(client);
         assert_eq!(upstream.await.unwrap(), frame);
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejects_unsafe_socket_aliases_and_peers() {
+        let directory = tempdir().unwrap();
+        let socket = directory.path().join("stock.sock");
+        let _listener = UnixListener::bind(&socket).unwrap();
+        let link = directory.path().join("link.sock");
+        symlink(&socket, &link).unwrap();
+        assert!(resolve_socket_for_uid(&link, current_uid() + 1).is_err());
+        assert!(check_peer_uid(current_uid() + 1, current_uid()).is_err());
+        assert!(check_peer_uid(current_uid(), current_uid()).is_ok());
+
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(check_socket(&link).is_err());
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(check_socket(&link).is_err());
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let regular = directory.path().join("regular");
+        std::fs::write(&regular, b"private").unwrap();
+        std::fs::remove_file(&link).unwrap();
+        symlink(&regular, &link).unwrap();
+        assert!(check_socket(&link).is_err());
+        std::fs::remove_file(&link).unwrap();
+        symlink(directory.path().join("missing"), &link).unwrap();
+        let response =
+            request_once_with_config(&valid_request(), Config::new(&link, TOKEN).unwrap()).await;
+        assert!(response.starts_with("HTTP/1.1 502 Bad Gateway"));
+        assert!(!response.contains("private"));
+        assert!(!response.contains(TOKEN));
+    }
+
+    #[tokio::test]
+    async fn resolves_replaced_socket_for_each_connection() {
+        let directory = tempdir().unwrap();
+        let link = directory.path().join("control.sock");
+        let config = Config::new(&link, TOKEN).unwrap();
+        for generation in 0..2 {
+            let socket = directory.path().join(format!("stock-{generation}.sock"));
+            let listener = UnixListener::bind(&socket).unwrap();
+            if generation > 0 {
+                std::fs::remove_file(&link).unwrap();
+            }
+            symlink(&socket, &link).unwrap();
+            let upstream = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                read_head(&mut stream).await.unwrap();
+                stream.write_all(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: fixture\r\n\r\n").await.unwrap();
+            });
+            let response = request_once_with_config(&valid_request(), config.clone()).await;
+            assert!(response.starts_with("HTTP/1.1 101 "));
+            upstream.await.unwrap();
+            std::fs::remove_file(&socket).unwrap();
+        }
+    }
+
+    #[test]
+    fn bounds_upstream_failure_logging() {
+        let start = Instant::now();
+        let mut last = None;
+        assert!(should_log(&mut last, start));
+        assert!(!should_log(&mut last, start + Duration::from_secs(29)));
+        assert!(should_log(&mut last, start + Duration::from_secs(30)));
     }
 
     #[tokio::test]
@@ -765,12 +937,24 @@ mod tests {
         )
     }
 
-    struct ChildGuard(Child);
+    struct ChildGuard(Child, PathBuf);
 
     impl Drop for ChildGuard {
         fn drop(&mut self) {
+            let target = std::fs::canonicalize(&self.1).ok();
             let _ = self.0.kill();
             let _ = self.0.wait();
+            if let Some(target) = target {
+                if target.parent()
+                    == Some(Path::new(&format!("/tmp/codex-daemon-{}", current_uid())))
+                {
+                    let lock = target.with_file_name(format!(
+                        "{}.lock",
+                        target.file_name().unwrap().to_string_lossy()
+                    ));
+                    let _ = std::fs::remove_file(lock);
+                }
+            }
         }
     }
 
@@ -999,7 +1183,10 @@ mod tests {
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        let _child = ChildGuard(child);
+        let _child = ChildGuard(
+            child,
+            home.join("app-server-control/app-server-control.sock"),
+        );
         let socket = home.join("app-server-control/app-server-control.sock");
         timeout(Duration::from_secs(15), async {
             while check_socket(&socket).is_err() {

@@ -21,6 +21,7 @@
     mode: '0700'
   loop:
     - /home/agent/.local/libexec
+    - /home/agent/.local/libexec/remote-codex-checks
     - /home/agent/.config/systemd/user
     - "{{ secret_dir }}"
     - "{{ secret_dir }}/updates"
@@ -48,13 +49,23 @@
     src: "{{ repo }}/dist/remote-codex-forwarder"
     dest: /home/agent/.local/libexec/remote-codex-forwarder
     mode: '0700'
+    backup: true
+  register: installed_forwarder
   notify: Restart forwarder
 - name: Install user service
   ansible.builtin.template:
     src: remote-codex-forwarder.service.j2
     dest: /home/agent/.config/systemd/user/remote-codex-forwarder.service
     mode: '0600'
+    backup: true
+  register: installed_service
   notify: Restart forwarder
+- name: Install read-only connection and candidate acceptance checks
+  ansible.builtin.copy:
+    src: "{{ repo }}/scripts/{{ item }}"
+    dest: "/home/agent/.local/libexec/remote-codex-checks/{{ item }}"
+    mode: '0700'
+  loop: [connection-check.py, candidate-check.py]
 - name: Enable forwarder
   when: not ansible_check_mode
   ansible.builtin.systemd_service:
@@ -87,3 +98,14 @@
   ansible.builtin.assert:
     that: linger.stdout == 'yes'
     fail_msg: Enable user lingering for agent before claiming reboot persistence.
+- name: Verify authenticated WSS initialization and project and task listing
+  ansible.builtin.command:
+    argv: [uv, run, --no-project, /home/agent/.local/libexec/remote-codex-checks/connection-check.py, --url, "{{ remote_codex_update_url | replace('https://', 'wss://') }}/codex/rpc"]
+  changed_when: false
+  when: not ansible_check_mode
+- name: Remove narrow deployment recovery copies after successful acceptance
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ [installed_forwarder.backup_file | default(''), installed_service.backup_file | default('')] | reject('equalto', '') | list }}"
+  when: not ansible_check_mode

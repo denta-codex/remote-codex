@@ -125,6 +125,7 @@
               uncommitted_changes: "{{ remaining_changes.stdout }}"
               log: "{{ run_log }}"
               build_log: "{{ run_log }}.build.log"
+              deployment_recovery_files: "{{ [installed_forwarder.backup_file | default(''), installed_service.backup_file | default('')] | reject('equalto', '') | list }}"
               recovery: Inspect the failed stage and current published state before explicitly resuming. No mutation was retried or rolled back.
 
         - name: Stop after failed workflow
