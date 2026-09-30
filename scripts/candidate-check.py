@@ -72,6 +72,7 @@ LoadCredential=
 LoadCredential=connection-token:{fixture}/connection-token
 Restart=no
 TimeoutStopSec=10
+RuntimeMaxSec=120
 '''
     if private_tmp is not None:
         override += f'PrivateTmp={private_tmp}\n'
@@ -127,6 +128,7 @@ stream_max_retries = 0
         attempted.append(units[0])
         command(['systemd-run', '--user', '--quiet', '--collect', f'--unit={units[0]}',
                  '--property=Type=exec', '--property=KillMode=control-group', '--property=TimeoutStopSec=10',
+                 '--property=RuntimeMaxSec=120',
                  '--property=UMask=0077', '--property=StandardOutput=null', '--property=StandardError=null',
                  '--property=UnsetEnvironment=LITELLM_PROXY_KEY OPENAI_API_KEY OPENAI_AUTH_TOKEN',
                  f'--setenv=HOME={home}', f'--setenv=CODEX_HOME={home}',

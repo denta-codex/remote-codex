@@ -527,3 +527,37 @@ route was installed. APK SHA-256:
 
 Physical-device installation, exact-host WSS connectivity, and actual assistant
 gesture are still pending user-authorized live deployment and delivery.
+
+## September 30, 2026 — stock socket repair and runtime upgrade gates
+
+- Reproduced authenticated HTTP 502 through loopback and Tailscale WSS after
+  Codex 0.159.2 activation. The owned control-socket alias was rejected, and the
+  forwarder's private `/tmp` hid its target. Direct stock initialization and
+  read-only project/task listing succeeded.
+- The forwarder now validates the alias, private containing directories, target
+  ownership/type/permissions and kernel peer UID, resolving anew on each
+  connection. The service shares host `/tmp` while retaining `ProtectSystem=strict`.
+  Fixed upstream failure reason codes are rate-limited without logging credentials,
+  headers, RPC documents or transcripts.
+- Five offline checker regressions and twenty LiteLLM runtime regressions passed.
+  An isolated candidate connected and reconnected after a controlled restart with
+  the real systemd protections. Restoring `PrivateTmp=true` reproduced 502.
+  Candidate tests use an isolated home and synthetic credential, stop their scoped
+  units, remove their socket/lock files, and have a 120-second service backstop.
+- The first build stopped on two Clippy style errors before any publication or
+  deployment. Its log and reserved version were retained. Corrected source passed
+  the complete build workflow against exact Codex 0.159.2 and produced local
+  Android 0.2.6 (16); its APK was not published or installed.
+- Forwarder deployment succeeded, including authenticated WSS initialization and
+  project/task listing. Narrow binary/unit recovery copies were removed after
+  acceptance. The deployed candidate/restart check and runtime verification passed.
+  Codex's live service start time remained September 30 at 16:39:32 EDT; only the
+  forwarder restarted, at 18:15:48 EDT.
+- Upgrade gates are committed in LiteLLM branch `codex/remote-connection-gates`
+  (`94ff3bb`) and its utilities are installed. Merging that branch into `main`
+  awaits explicit approval after automatic approval review rejected the merge.
+  Temporary worktree `/tmp/remote-codex-litellm-connection-gates` is retained for
+  that review and should be removed after integration.
+- The physical phone remains on 0.2.3 (13). Wireless ADB trust was verified and
+  the existing app was opened, but the keyguard prevented UI confirmation. Phone
+  acceptance awaits unlock; no account content was saved or displayed.

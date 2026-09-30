@@ -952,6 +952,7 @@ mod tests {
                     "{}.lock",
                     target.file_name().unwrap().to_string_lossy()
                 ));
+                let _ = std::fs::remove_file(target);
                 let _ = std::fs::remove_file(lock);
             }
         }
