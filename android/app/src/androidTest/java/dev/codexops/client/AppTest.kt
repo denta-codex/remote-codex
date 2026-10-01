@@ -1319,6 +1319,31 @@ class AppTest {
     }
 
     @Test
+    fun visualizationLoadsFromHistoryExpandsAndShowsMissingFileRecovery() {
+        val path = "/fixture/chart.html"
+        remoteFiles[path] = Base64.getEncoder().encodeToString("<div id=\"chart\">Fixture visualization</div>".toByteArray())
+        historyOverride = obj("data" to JsonArray(listOf(obj(
+            "id" to s("visual-turn"), "status" to s("completed"),
+            "items" to JsonArray(listOf(obj("id" to s("visual-reply"), "type" to s("agentMessage"),
+                "text" to s("Before the chart.\n\nvisualize{\"path\":\"$path\",\"title\":\"Fixture chart\",\"mode\":\"wide\"}\n\nAfter the chart."))))
+        ))))
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(15000) { compose.onAllNodesWithTag("visualization-webview").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Before the chart.").assertExists()
+        compose.onNodeWithText("After the chart.").assertExists()
+        compose.onNodeWithTag("expand-visualization").performClick()
+        compose.onNodeWithTag("visualization-fullscreen").assertIsDisplayed()
+        compose.onNodeWithTag("close-visualization").performClick()
+        compose.onNodeWithTag("visualization-fullscreen").assertDoesNotExist()
+        compose.runOnUiThread { model.home() }
+        remoteFiles.remove(path)
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { compose.onAllNodesWithTag("visualization-error").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Retry").assertExists()
+        assertEquals(0, sent.get())
+    }
+
+    @Test
     fun remoteTextFileUsesMetadataAndOpensAReadablePreview() {
         compose.runOnUiThread { model.openTask("task-test") }
         compose.waitUntil(10000) {

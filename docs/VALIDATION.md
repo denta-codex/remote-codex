@@ -589,3 +589,25 @@ gesture are still pending user-authorized live deployment and delivery.
   verified and the existing app was opened, but the keyguard prevented initial
   UI confirmation. On October 1 the user confirmed the app works on the phone,
   completing physical-device acceptance. No account content was saved or displayed.
+
+## October 1, 2026 — inline visualizations
+
+- Added the visualize marker parser, bounded stock-RPC HTML reader, bundled runtime,
+  isolated WebView renderer, full-screen expansion, local widget state, and confirmed
+  follow-up drafting. No forwarder or stock Codex changes are required.
+- Five parser/policy/size/state unit tests cover code examples, malformed and streaming
+  markers, multiple visuals, invalid UTF-8, oversized files, and CDN URL validation.
+  All 27 app unit tests and Android lint passed after the final source changes.
+- The focused managed Android 16 tests passed:
+  `VisualizationTest#sandboxRendersInteractsRestoresStateAndBlocksEscapes` and
+  `AppTest#visualizationLoadsFromHistoryExpandsAndShowsMissingFileRecovery`.
+  They exercise real WebView JavaScript and touch input, restored interaction state,
+  follow-up messages, opaque-origin isolation, blocked file/network access, history
+  rendering, full-screen expansion, and explicit missing-file recovery.
+- Testing exposed and fixed interception of the viewer's own document, native message
+  initialization, and compositor synchronization in the touch fixture. The renderer
+  serves its shell locally at a dedicated HTTPS origin; the test waits for WebView's
+  visual-state callback before tapping a recreated view.
+- State remains Android-local, and desktop annotation controls are not advertised.
+  CDN-backed content still requires connectivity. This change has not been published,
+  installed on the phone, or validated against live account content.
