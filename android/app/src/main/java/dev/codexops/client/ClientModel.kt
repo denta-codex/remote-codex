@@ -893,6 +893,23 @@ constructor(
     override suspend fun loadMedia(media: MediaRef): ByteArray =
         mediaRepository.load(media) { rpc.readFile(it) }
 
+    override suspend fun loadVisualization(reference: VisualizationRef): String =
+        withContext(Dispatchers.IO) { readVisualization(reference, rpc::getMetadata, rpc::readFile) }
+
+    override suspend fun visualizationState(key: String): String =
+        local.get("visualization/$key").takeIf(::validWidgetState) ?: "null"
+
+    override suspend fun saveVisualizationState(key: String, value: String) {
+        require(validWidgetState(value))
+        local.put("visualization/$key", value)
+    }
+
+    override fun stageVisualizationFollowUp(prompt: String) {
+        if (prompt.isBlank() || prompt.length > 16_384) return
+        val current = _state.value.draft
+        draft(if (current.isBlank()) prompt else "$current\n\n$prompt")
+    }
+
     override fun inspectFile(file: FileRef) {
         val before = _state.value
         val resolved =

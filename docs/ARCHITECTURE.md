@@ -123,7 +123,29 @@ references and file-change paths are validated with stock `fs/getMetadata`, then
 after an explicit tap. Android previews bounded UTF-8 text and images, exposes other types through
 `FileProvider`, and offers Open, Share, and `CreateDocument` save actions. Remote files remain
 limited to 20 MiB; the private preview cache is bounded and expires unretained files after seven
-days. Interactive HTML rendering remains a separate feature.
+days. Ordinary HTML file links remain text previews.
+
+Completed assistant messages recognize standalone `visualize{"path":"/absolute/file.html"}`
+references, with optional `title` and `mode: "wide"`. Code examples and malformed references
+remain Markdown. The viewer reads the fragment using stock `fs/getMetadata` and `fs/readFile`
+over WSS, checks both reported and actual sizes against 1 MB, and requires valid UTF-8.
+It supports responsive inline rendering and a full-screen view on either phone display.
+
+Each viewer uses a WebView shell and an opaque-origin `sandbox="allow-scripts"` iframe.
+The skill's versioned runtime assets supply styles, tabs, tooltips, calendars, carousels,
+and optional mockup helpers. The native message port belongs only to the trusted shell;
+there is no JavaScript Android interface. File/content access, API connections, nested frames,
+forms, popups, permissions, and downloads are disabled. Only HTTPS resources from the skill's
+seven CDN hosts can load; the bounded resource loader checks every redirect and supplies no
+application credentials or WebView cookies. Operational logs contain no HTML or messages.
+
+Widget state is limited to 16 KiB and stored locally under a hash of host, chat, message,
+reference position, and path. It survives view recreation and reopening the chat; it is not
+synced to desktop or injected into model context. `sendFollowUpMessage` requests require a
+touch gesture and native confirmation, then append to the existing composer without sending.
+External HTTPS links also require confirmation. Desktop annotation/Tweak controls are not
+advertised; guarded mockups retain their normal rendering and local interactions. CDN-backed
+charts/icons require connectivity. Missing files offer an explicit read-only Retry action.
 
 Plan mode is exposed only when the stock `collaborationMode/list` capability
 advertises it. The selected stock collaboration setting is sent with `turn/start`;

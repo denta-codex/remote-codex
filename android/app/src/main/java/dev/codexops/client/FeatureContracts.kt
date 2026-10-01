@@ -204,6 +204,14 @@ interface ConversationActions {
 
     suspend fun loadMedia(media: MediaRef): ByteArray
 
+    suspend fun loadVisualization(reference: VisualizationRef): String
+
+    suspend fun visualizationState(key: String): String
+
+    suspend fun saveVisualizationState(key: String, value: String)
+
+    fun stageVisualizationFollowUp(prompt: String)
+
     fun inspectFile(file: dev.codexops.core.FileRef)
 
     fun dismissFile()
