@@ -30,6 +30,10 @@ Record Android version, APK version/code, signer fingerprint, Codex version and 
 - [ ] Restore Tailscale; reconnect and inspect uncertain operation before unlocking composer.
 - [ ] Higher-version same-signer APK preserves credential/drafts/assistant selection.
 - [ ] Scheduled host restart: user service and persistent Serve route return.
+- [ ] Take a system screenshot on both Razr displays: one "Screenshot taken ·
+      Report bug" snackbar appears and does not hide the system preview's
+      actions. Tapping it attaches the app window as it was when the screenshot
+      was taken. Ignoring it opens nothing. Confirm the Settings toggle persists.
 - [ ] With the bug-report build installed, deliberately shake on both Razr displays:
       one report opens, the screenshot precedes the sheet, and repeated shakes
       respect the cooldown. Ordinary handling and the phone's other gestures do

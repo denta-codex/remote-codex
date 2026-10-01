@@ -8,12 +8,15 @@ messages appear above the composer; tap **Steer now** to use one in the active
 turn, or **Remove** to cancel it. An idle, interrupted queue offers **Send now**.
 Queue actions preserve anything you are currently drafting.
 
-Shake the phone while the app is open, or use **⋮ → Report a bug**, to save a
+Take a screenshot while the app is open and tap **Report bug** in the snackbar
+(Android 14+), or use **⋮ → Report a bug**, to save a
 report with a screenshot, recent app logs, available process-exit diagnostics,
 and frozen conversation/task context. Describe the problem, review or remove
 artifacts, and choose **Start fix task**. The report creates an isolated
 remote-codex worktree, runs its environment setup, and starts an ordinary fix task
-on Grace. Settings includes a **Shake to report a bug** toggle.
+on Grace. Settings includes an **Offer a bug report after screenshots** toggle
+(on by default) and an opt-in **Shake to report a bug** toggle, which is off by
+default because shaking can trigger Motorola's flashlight gesture.
 
 Reports remain on the phone while offline and across restarts. Reopening a saved
 report preserves its original evidence. Screenshots are omitted on the Settings

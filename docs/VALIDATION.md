@@ -18,6 +18,23 @@
 - Build log: `/home/agent/workspaces/remote-codex/artifacts/releases/run-20261001T194602Z-EN6SJI.log.build.log`.
 - Installation remains user initiated. No forwarder deployment or phone installation was performed.
 
+## 2026-10-01 — Screenshot-to-report prompt
+
+- On Android 14+, the app registers an `Activity.ScreenCaptureCallback` while it
+  is visible (`DETECT_SCREEN_CAPTURE`, a normal permission). Each screenshot
+  copies only the app window right away and shows a Material 3 snackbar,
+  "Screenshot taken · Report bug". Tapping it opens the existing report flow
+  with that copy. A newer screenshot replaces a pending prompt. The app never
+  reads the saved system screenshot.
+- Shake-to-report is now opt-in, and the existing `bug-report/shake` key is
+  honored only when it is `true`. The new screenshot preference is stored as
+  `bug-report/screenshot`.
+- App unit tests (including the new screenshot-prompt gate), debug lint (no new
+  warnings), and androidTest assembly passed. Three focused managed Android 16
+  tests passed: a real `KEYCODE_SYSRQ` system screenshot that offers the
+  snackbar and captures the window, Settings exclusion with the shake default
+  off, and menu capture with fix-task submission.
+
 ## 2026-10-01 — Shake-to-report with Android diagnostics
 
 - Android debug and instrumentation assembly, all 37 app unit tests, and debug

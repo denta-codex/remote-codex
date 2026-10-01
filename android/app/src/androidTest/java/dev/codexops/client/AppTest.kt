@@ -599,6 +599,7 @@ class AppTest {
                     "journal/project-task",
                     "attachments/project-task",
                     "bug-report/shake",
+                    "bug-report/screenshot",
                     "bug-report/last-task",
                 )
                 .forEach { local.remove(it) }
@@ -1615,6 +1616,24 @@ class AppTest {
     }
 
     @Test
+    fun systemScreenshotOffersReportWithTheCapturedWindow() {
+        compose.waitUntil(5000) { model.reports.state.value.loaded }
+        compose.runOnUiThread { model.newChat() }
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
+        compose.onNodeWithTag("composer").performTextInput("Screenshot this draft")
+        shell("input keyevent KEYCODE_SYSRQ")
+        compose.waitUntil(10000) { compose.onAllNodesWithText("Report bug").fetchSemanticsNodes().isNotEmpty() }
+        assertFalse(model.reports.state.value.visible)
+        compose.onNodeWithText("Report bug").performClick()
+        compose.waitUntil(10000) { model.reports.state.value.visible && !model.reports.state.value.capturing }
+        val draft = requireNotNull(model.reports.state.value.draft)
+        assertEquals("Screenshot this draft", draft.context.str("draft"))
+        assertEquals("captured", draft.diagnostics.map("screenshot").str("status"))
+        val screenshot = draft.attachments.single { it.id == "screenshot.png" }
+        assertNotNull(android.graphics.BitmapFactory.decodeFile(screenshot.localPath))
+    }
+
+    @Test
     fun bugReportScreenshotSurvivesOfflineRecreationAndCanBeRemoved() {
         compose.runOnUiThread {
             model.reports.open {
@@ -1657,6 +1676,7 @@ class AppTest {
 
     @Test
     fun bugReportSettingsExcludesScreenshotAndPersistsShakePreference() {
+        assertFalse(model.reports.state.value.shakeEnabled)
         compose.runOnUiThread { model.settings(); model.reports.shakeEnabled(false) }
         compose.onNodeWithTag("app-menu").performClick()
         compose.onNodeWithTag("report-bug").performClick()

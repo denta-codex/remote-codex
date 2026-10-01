@@ -6,8 +6,10 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.graphics.Bitmap
 import android.hardware.SensorManager
+import android.os.Build
 import android.os.SystemClock
 import android.widget.Toast
+import androidx.annotation.RequiresApi
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -39,7 +41,10 @@ import com.squareup.seismic.ShakeDetector
 import dev.codexops.core.*
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 
 internal class ReportShakeGate {
     private var last: Long? = null
@@ -47,6 +52,30 @@ internal class ReportShakeGate {
         if (!resumed || !enabled || reportOpen || last?.let { now - it < 3000 } == true) return false
         last = now
         return true
+    }
+}
+
+/** Android 14+ reports this app's screenshots without granting access to the saved image. */
+internal fun screenshotPromptAllowed(sdk: Int, started: Boolean, state: BugReportState): Boolean =
+    sdk >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && started && state.loaded && state.screenshotEnabled &&
+        !state.visible && !state.capturing && !state.busy
+
+@RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+private fun watchScreenshots(activity: Activity, owner: androidx.lifecycle.LifecycleOwner, onScreenshot: () -> Unit): () -> Unit {
+    val callback = Activity.ScreenCaptureCallback { onScreenshot() }
+    var registered = false
+    fun update() {
+        // The platform delivers callbacks only while the activity is visible; follow that window.
+        val visible = owner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        if (visible && !registered) { activity.registerScreenCaptureCallback(activity.mainExecutor, callback); registered = true }
+        else if (!visible && registered) { activity.unregisterScreenCaptureCallback(callback); registered = false }
+    }
+    val observer = LifecycleEventObserver { _, _ -> update() }
+    owner.lifecycle.addObserver(observer)
+    update()
+    return {
+        owner.lifecycle.removeObserver(observer)
+        if (registered) activity.unregisterScreenCaptureCallback(callback)
     }
 }
 
@@ -83,12 +112,34 @@ internal fun BugReportMenu(model: ClientModel) {
 }
 
 @Composable
-internal fun BugReportHost(model: ClientModel, screen: ScreenState) {
+internal fun BugReportHost(model: ClientModel, screen: ScreenState, snackbar: SnackbarHostState) {
     val report by model.reports.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val current by rememberUpdatedState(report)
     val gate = remember { ReportShakeGate() }
+    val scope = rememberCoroutineScope()
+    var prompt by remember { mutableStateOf<Job?>(null) }
+    DisposableEffect(owner, report.screenshotEnabled, report.loaded) {
+        val activity = context.activity()
+        val stop = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && activity != null &&
+            report.loaded && report.screenshotEnabled) watchScreenshots(activity, owner) {
+            if (!screenshotPromptAllowed(Build.VERSION.SDK_INT, owner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED), current))
+                return@watchScreenshots
+            prompt?.cancel() // A newer screenshot replaces the pending prompt and its copy.
+            prompt = scope.launch {
+                // Copy the app window now so the report matches the screenshot, not the screen at tap time.
+                val copy = runCatching { withTimeout(1500) { captureBugReportScreenshot(activity) } }.getOrNull()
+                val result = snackbar.showSnackbar("Screenshot taken", actionLabel = "Report bug", duration = SnackbarDuration.Long)
+                if (result == SnackbarResult.ActionPerformed)
+                    model.reports.open(copy?.let { bytes -> { bytes } } ?: {
+                        awaitReportFrame()
+                        captureBugReportScreenshot(activity)
+                    })
+            }
+        } else null
+        onDispose { stop?.invoke(); prompt?.cancel() }
+    }
     DisposableEffect(owner, report.shakeEnabled, report.loaded) {
         val sensors = context.getSystemService(SensorManager::class.java)
         val detector = ShakeDetector {

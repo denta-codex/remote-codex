@@ -97,6 +97,19 @@ class BugReportTest {
         assertTrue(gate.accept(3000, true, true, false))
     }
 
+    @Test fun screenshotPromptRequiresAndroid14VisibilityPreferenceAndNoOpenReport() {
+        val ready = BugReportState(loaded = true)
+        assertTrue(screenshotPromptAllowed(34, true, ready))
+        assertFalse(screenshotPromptAllowed(33, true, ready))
+        assertFalse(screenshotPromptAllowed(34, false, ready))
+        assertFalse(screenshotPromptAllowed(34, true, ready.copy(loaded = false)))
+        assertFalse(screenshotPromptAllowed(34, true, ready.copy(screenshotEnabled = false)))
+        assertFalse(screenshotPromptAllowed(34, true, ready.copy(visible = true)))
+        assertFalse(screenshotPromptAllowed(34, true, ready.copy(capturing = true)))
+        assertFalse(screenshotPromptAllowed(34, true, ready.copy(busy = true)))
+        assertFalse(ready.shakeEnabled)
+    }
+
     @Test fun aNativeCollectorThatIgnoresInterruptsCannotBlockTheDeadline() = runBlocking {
         val started = java.util.concurrent.CountDownLatch(1)
         val release = java.util.concurrent.CountDownLatch(1)

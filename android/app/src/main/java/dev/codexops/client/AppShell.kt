@@ -11,6 +11,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -64,9 +65,11 @@ internal fun App(model: ClientModel) {
     val st by model.state.collectAsStateWithLifecycle()
     val report by model.reports.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val snackbar = remember { SnackbarHostState() }
     BackHandler(st.page != "home") { model.home() }
     AdaptiveWindow {
         Scaffold(
+            snackbarHost = { SnackbarHost(snackbar) },
             topBar = {
                 TopAppBar(
                     title = {
@@ -148,13 +151,14 @@ internal fun App(model: ClientModel) {
                         }
                     }
                 when (st.page) {
-                    "settings" -> SettingsScreen(st, model, report.shakeEnabled, model.reports::shakeEnabled)
+                    "settings" -> SettingsScreen(st, model, report.shakeEnabled, model.reports::shakeEnabled,
+                        report.screenshotEnabled, model.reports::screenshotEnabled)
                     "chat" -> key(st.thread) { ConversationScreen(st, model) }
                     else -> HomeScreen(st, model)
                 }
             }
         }
-        BugReportHost(model, st)
+        BugReportHost(model, st, snackbar)
     }
 }
 
