@@ -1008,8 +1008,25 @@ class AppTest {
 
     private fun enqueueFixture(text: String = "Do this next") {
         compose.onNodeWithTag("composer").performTextInput(text)
+        demoPause()
+        assertComposerActionFullyVisible(compose.onNodeWithContentDescription("Queue message"))
+        assertComposerActionFullyVisible(compose.onNodeWithContentDescription("Stop"))
         compose.onNodeWithContentDescription("Queue message").performClick()
         compose.waitUntil(10000) { !model.state.value.busy && model.state.value.queuedMessages.any { it.text == text } }
+        demoPause()
+    }
+
+    // Compose test clicks reach nodes that a Row pushed past its clipped edge, so check the
+    // unclipped bounds against the action row the user can actually see.
+    private fun assertComposerActionFullyVisible(action: SemanticsNodeInteraction) {
+        val row = compose.onNodeWithTag("composer-actions").fetchSemanticsNode()
+        val node = action.assertIsDisplayed().fetchSemanticsNode()
+        val rowRight = row.positionInRoot.x + row.size.width
+        val nodeRight = node.positionInRoot.x + node.size.width
+        assertTrue(
+            "Composer action ends at $nodeRight px beyond the action row edge at $rowRight px",
+            nodeRight <= rowRight + 0.5f,
+        )
     }
 
     @Test
@@ -1021,13 +1038,17 @@ class AppTest {
         assertTrue(steerRequests.isEmpty())
         assertEquals(listOf("Do this next", "Then review it"), model.state.value.queuedMessages.map { it.text })
         compose.onNodeWithTag("composer").performTextInput("An unfinished thought")
-        if (coverScreen) {
+        // The cover composer collapses the queue behind this shortcut only while a soft keyboard
+        // is open; the managed device may not show one.
+        if (coverScreen && compose.onAllNodesWithTag("show-queue").fetchSemanticsNodes().isNotEmpty()) {
             compose.onNodeWithTag("show-queue").assertIsDisplayed().performClick()
             compose.waitUntil(5000) { compose.onAllNodesWithTag("message-queue").fetchSemanticsNodes().isNotEmpty() }
         }
         val queued = queueItems.first()
+        demoPause(2500)
         compose.onNodeWithTag("send-queued-queue-1").performScrollTo().performClick()
         compose.waitUntil(10000) { !model.state.value.busy && model.state.value.queuedMessages.size == 1 }
+        demoPause()
         assertEquals(1, steerRequests.size)
         assertEquals(queued["input"], steerRequests.single()["input"])
         assertEquals(queued["clientUserMessageId"], steerRequests.single()["clientUserMessageId"])
@@ -1037,6 +1058,7 @@ class AppTest {
         assertNull(model.state.value.journal)
         compose.onNodeWithTag("remove-queued-queue-2").performClick()
         compose.waitUntil(10000) { !model.state.value.busy && model.state.value.queuedMessages.isEmpty() }
+        demoPause(2000)
         assertEquals(1, steerRequests.size)
         compose.onNodeWithTag("composer").assertTextContains("An unfinished thought")
     }
