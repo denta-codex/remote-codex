@@ -1,3 +1,1 @@
-- Offer bug reports after screenshots; make shake opt-in
-- Keep queue controls visible on portrait and cover screens
-- Merge portrait and cover-screen queue control fix
+Rebuild of source b9caccb01793.
