@@ -62,6 +62,7 @@ internal fun Glyph(
 @Composable
 internal fun App(model: ClientModel) {
     val st by model.state.collectAsStateWithLifecycle()
+    val report by model.reports.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     BackHandler(st.page != "home") { model.home() }
     AdaptiveWindow {
@@ -117,6 +118,7 @@ internal fun App(model: ClientModel) {
                             IconButton(onClick = model::settings) {
                                 Glyph(R.drawable.ic_settings, "Settings")
                             }
+                        BugReportMenu(model)
                     },
                 )
             },
@@ -146,12 +148,13 @@ internal fun App(model: ClientModel) {
                         }
                     }
                 when (st.page) {
-                    "settings" -> SettingsScreen(st, model)
+                    "settings" -> SettingsScreen(st, model, report.shakeEnabled, model.reports::shakeEnabled)
                     "chat" -> key(st.thread) { ConversationScreen(st, model) }
                     else -> HomeScreen(st, model)
                 }
             }
         }
+        BugReportHost(model, st)
     }
 }
 

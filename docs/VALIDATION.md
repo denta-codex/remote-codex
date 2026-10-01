@@ -1,5 +1,32 @@
 # Validation
 
+## 2026-10-01 — Shake-to-report with Android diagnostics
+
+- Android debug and instrumentation assembly, all 37 app unit tests, and debug
+  lint passed (zero lint errors). Fifteen unit tests cover report snapshots,
+  credential redaction, bounded logs/action history, persistent artifacts,
+  Seismic sampling and invocation gates, blocked native collectors, destination
+  validation, and journal recovery.
+- Lost acknowledgements were simulated after directory creation, worktree
+  creation, environment setup, evidence-directory creation, upload, task
+  creation, naming, and initial submission. Recovery confirmed each authoritative
+  result without repeating the mutation; missing/conflicting evidence stayed
+  pending.
+- Four focused managed Android 16 report tests passed on the final implementation:
+  actual screenshot capture and isolated fix-task submission, offline report and
+  screenshot persistence across model recreation, Settings screenshot exclusion,
+  and successful cover-layout submission despite capture failure.
+- A separate focused cover-viewport run passed real screenshot/task submission
+  and navigation reachability. The earlier menu-capture failure exposed a Compose
+  frame-clock assumption in a model coroutine; the corrected Android frame
+  callback passed subsequent runs.
+- Fixture results are retained under `artifacts/validation/bug-report/`:
+  `final-report-tests.xml`, `cover-tests.xml`, and the earlier diagnostic runs.
+- No live fix task was created, and no forwarder deployment, update publication,
+  or phone installation was performed. Physical Razr gesture sensitivity,
+  interaction with its other gestures, real-device diagnostics, and live Grace
+  task acceptance remain unchecked in `docs/DEVICE-ACCEPTANCE.md`.
+
 ## 2026-09-30 — Android 0.2.6 (16)
 
 - Source revision: `e03e256c89b77d64b6a6b73738ff0a19b86abfe4`.
