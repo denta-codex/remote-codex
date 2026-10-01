@@ -147,8 +147,46 @@ Existing projects can be selected but not created, deleted, reordered, or edited
 and only the first project root is offered. New worktrees require a locally
 resolvable `origin/HEAD` and
 do not include uncommitted checkout changes. Worktrees are deliberately retained;
-cleanup, branch/ref selection, setup environments, and general Git management are
-outside this feature.
+cleanup, branch/ref selection, and general Git management are outside this feature.
+Environment execution is a shared workspace-adapter operation with an explicit
+execution deadline and a durable success receipt. Bug reports currently invoke
+the repository's setup script; normal new-task UI does not yet expose environment
+selection. Long commands use operation-specific RPC deadlines rather than the
+ordinary request default.
+
+## User-authored bug reports
+
+Android owns the report UI, collectors, draft persistence, and orchestration; the
+forwarder and stock app-server protocol are unchanged. The menu and a foreground
+Seismic shake detector invoke the same capture flow. The copied Apache-2.0
+detector's license ships in `assets/licenses/seismic.txt`. Registration uses
+`SENSOR_DELAY_GAME`, stops when the activity pauses, and has a three-second
+invocation cooldown.
+
+The phone stores one pending report and its artifacts under app-private
+`files/bug-reports/<UUID>`, with an atomically replaced draft index. The frozen
+context is an explicit field selection, not a raw RPC/state dump. It includes
+loaded visible conversation content and marks unloaded history. Recent action
+metadata is bounded to 100 entries / five minutes. Known pairing credentials are
+redacted from text evidence; the Settings screen is excluded from screenshots.
+PixelCopy captures the focused app window on Android 14+, and the activity window
+on earlier releases (unsupported dialog capture is recorded as unavailable).
+Collectors record their own timestamps and failures; app logcat is bounded to
+five minutes, 2,000 lines, and 512 KiB. Android 11+ supplies abnormal process-exit
+metadata within 24 hours and an available trace up to 2 MiB. Diagnostics are
+report artifacts, never operational log output.
+
+Report submission has its own persisted journal, independent of the original
+conversation journal. It resolves the configured remote-codex project, verifies
+the repository origin, uses the existing detached-worktree adapter, and executes
+`scripts/setup-worktree` with a two-minute process deadline plus transport grace.
+The setup command atomically writes an operation/revision receipt after success.
+Evidence resides beside the worktree checkout. The first turn uses server-default
+model settings, a human-authored description, artifact references, and explicit
+implementation instructions. Every mutation is journaled before dispatch;
+recovery compares authoritative receipts, uploaded bytes, and task/message IDs.
+Missing or conflicting evidence leaves the operation pending instead of replaying
+it. Accepted reports retain the task reference and remove local artifacts.
 
 Limits: no push notifications, directory attachments, terminal emulator, or interactive
 command previews. Activity text is bounded for phone rendering; full output

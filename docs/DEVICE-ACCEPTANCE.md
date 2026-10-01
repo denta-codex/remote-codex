@@ -30,6 +30,16 @@ Record Android version, APK version/code, signer fingerprint, Codex version and 
 - [ ] Restore Tailscale; reconnect and inspect uncertain operation before unlocking composer.
 - [ ] Higher-version same-signer APK preserves credential/drafts/assistant selection.
 - [ ] Scheduled host restart: user service and persistent Serve route return.
+- [ ] With the bug-report build installed, deliberately shake on both Razr displays:
+      one report opens, the screenshot precedes the sheet, and repeated shakes
+      respect the cooldown. Ordinary handling and the phone's other gestures do
+      not open unwanted reports. Confirm disabling the Settings toggle persists.
+- [ ] Save a report offline, reopen after a process restart, and verify the
+      original screenshot, human description, and diagnostic timestamps remain.
+- [ ] Submit the report to Grace and confirm one remote-codex worktree, successful
+      environment setup, attached evidence, and a running fix task on desktop.
+- [ ] Confirm real-device app logcat and available historical crash/ANR evidence;
+      unavailable diagnostics are identified without blocking the report.
 
 Phone installation, assistant selection and physical gesture require the user.
 A successful Taildrop transfer is not proof of installation. Do not check these

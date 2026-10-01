@@ -19,7 +19,7 @@ import androidx.compose.ui.unit.sp
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 
 @Composable
-internal fun SettingsScreen(st: ScreenState, actions: SettingsActions) {
+internal fun SettingsScreen(st: ScreenState, actions: SettingsActions, shakeEnabled: Boolean = true, onShakeChanged: (Boolean) -> Unit = {}) {
     var credential by remember { mutableStateOf("") }
     var scanError by remember { mutableStateOf<String?>(null) }
     val context = LocalContext.current
@@ -103,6 +103,12 @@ internal fun SettingsScreen(st: ScreenState, actions: SettingsActions) {
             Spacer(Modifier.width(8.dp))
             Text("Save and connect")
         }
+        HorizontalDivider()
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Shake to report a bug", Modifier.weight(1f))
+            Switch(checked = shakeEnabled, onCheckedChange = onShakeChanged)
+        }
+        Text("Shake while the app is open to save a screenshot and diagnostics. You can also use Report a bug in the menu.", fontSize = 13.sp)
         HorizontalDivider()
         Text("Assistant shortcut", fontWeight = FontWeight.SemiBold)
         OutlinedButton(

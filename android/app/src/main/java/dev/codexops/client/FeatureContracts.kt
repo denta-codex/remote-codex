@@ -15,6 +15,7 @@ data class HostIdentity(
     val displayName: String,
     val endpoint: String,
     val expectedCodexHome: String,
+    val bugReportRepository: String = "/home/agent/workspaces/remote-codex",
 )
 
 val GraceHost =
