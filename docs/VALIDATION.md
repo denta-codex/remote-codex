@@ -1,5 +1,14 @@
 # Validation
 
+## 2026-10-01 — Android 0.2.7 (17)
+
+- Source revision: `946ad4ddde110953687d061cb9c18bb9c8b80d8a`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `19eb13912e5098877d696a5ddb7cd4db6b7b7fcec2d0a757e94c37a36adfe3fe`.
+- Outcome: Built and signed locally; not published.
+- Build log: `/home/agent/workspaces/remote-codex/artifacts/releases/run-20261001T194602Z-EN6SJI.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
 ## 2026-10-01 — Shake-to-report with Android diagnostics
 
 - Android debug and instrumentation assembly, all 37 app unit tests, and debug

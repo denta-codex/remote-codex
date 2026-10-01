@@ -1,1 +1,6 @@
-Rebuild of source e03e256c89b7.
+- Bound isolated probe lifetime and record connection restoration
+- Record confirmed phone acceptance and upgrade-gate integration
+- Add in-app bug reports that start a fix task
+- Render visualize skill output inline in Android
+- Merge bug reports
+- Merge inline visualizations
