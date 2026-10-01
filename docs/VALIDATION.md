@@ -1,5 +1,14 @@
 # Validation
 
+## 2026-10-01 — Android 0.2.9 (19)
+
+- Source revision: `c23d2eb6f75c6a0fcc0a1a83f448c0ecd1ab9f71`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `12c1806c860646aceb95d93b255b3e641f22c18f7c9ed4e6643c429b18db5513`.
+- Outcome: Built and signed locally; not published.
+- Build log: `/home/agent/workspaces/remote-codex/artifacts/releases/run-20261001T231240Z-XWDCjW.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
 ## 2026-10-01 — Android 0.2.8 (18)
 
 - Source revision: `332c158378ffc231fe6174aa981a715c90289ab6`.
