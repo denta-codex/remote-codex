@@ -554,10 +554,11 @@ gesture are still pending user-authorized live deployment and delivery.
   Codex's live service start time remained September 30 at 16:39:32 EDT; only the
   forwarder restarted, at 18:15:48 EDT.
 - Upgrade gates are committed in LiteLLM branch `codex/remote-connection-gates`
-  (`94ff3bb`) and its utilities are installed. Merging that branch into `main`
-  awaits explicit approval after automatic approval review rejected the merge.
-  Temporary worktree `/tmp/remote-codex-litellm-connection-gates` is retained for
-  that review and should be removed after integration.
-- The physical phone remains on 0.2.3 (13). Wireless ADB trust was verified and
-  the existing app was opened, but the keyguard prevented UI confirmation. Phone
-  acceptance awaits unlock; no account content was saved or displayed.
+  (`94ff3bb`) and its utilities are installed. Automatic approval review initially
+  rejected the merge; the user explicitly approved integration on October 1.
+  The branch is now merged into LiteLLM `main`, and its temporary review worktree
+  was removed after integration.
+- At deployment, the physical phone was on 0.2.3 (13). Wireless ADB trust was
+  verified and the existing app was opened, but the keyguard prevented initial
+  UI confirmation. On October 1 the user confirmed the app works on the phone,
+  completing physical-device acceptance. No account content was saved or displayed.
