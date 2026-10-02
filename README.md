@@ -1,5 +1,8 @@
 # Remote Codex
 
+> **Personal project:** This is my personal setup. I'm sharing the source in the
+> hope that it benefits others. I am not accepting outside pull requests at this time.
+
 Codex on a remote host. Native Android text client for Grace's existing stock
 Codex app server, over WSS and Tailscale.
 
