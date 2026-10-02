@@ -64,9 +64,16 @@ internal class ScreenshotCollector(private val excluded: Boolean, private val ca
 
 @OptIn(ExperimentalCoroutinesApi::class)
 internal suspend fun captureBugReportScreenshot(activity: Activity): ByteArray {
+    check(activity.window.attributes.flags and android.view.WindowManager.LayoutParams.FLAG_SECURE == 0) {
+        "Protected window cannot be captured."
+    }
     // The capture targets this app's activity window, never other apps or system windows.
     val view = WindowInspector.getGlobalWindowViews().lastOrNull { it.isShown && it.hasWindowFocus() }
         ?: activity.window.decorView
+    val flags = (view.layoutParams as? android.view.WindowManager.LayoutParams)?.flags ?: 0
+    check(flags and android.view.WindowManager.LayoutParams.FLAG_SECURE == 0) {
+        "Protected window cannot be captured."
+    }
     check(view.isAttachedToWindow && view.width > 0 && view.height > 0)
     val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
     val captured = suspendCancellableCoroutine<Bitmap> { continuation ->
