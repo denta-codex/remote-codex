@@ -35,12 +35,7 @@ constructor(
     private val remoteFileRepository = RemoteFileRepository(app)
     private val _state = MutableStateFlow(ScreenState(host = host))
     val state = _state.asStateFlow()
-    internal val reports = BugReportController(app, viewModelScope, local, rpc, host, { _state.value }) { id ->
-        viewModelScope.launch {
-            state.first { !it.busy && it.ready }
-            openTask(id)
-        }
-    }
+    internal val reports = BugReportController(app, viewModelScope, local, rpc, host, { _state.value })
     private var connectionJob: Job? = null
     private var updateJob: Job? = null
     private var foreground = false

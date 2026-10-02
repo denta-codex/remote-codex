@@ -1786,6 +1786,14 @@ class AppTest {
         assertTrue(acceptedText.contains("The queue button lost my message"))
         assertEquals("Keep my original draft", runBlocking { LocalStore(app).get("draft/new") })
         assertFalse(File(screenshot.localPath).exists())
+        compose.waitUntil(5000) { !model.reports.state.value.busy && !model.reports.state.value.visible }
+        compose.waitForIdle()
+        assertEquals("chat", model.state.value.page)
+        assertNull(model.state.value.thread)
+        compose.onNodeWithTag("composer").assertTextContains("Keep my original draft")
+        // Opening the fix task remains an explicit action.
+        compose.onNodeWithTag("app-menu").performClick()
+        compose.onNodeWithText("Last bug report").performClick()
         compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy }
     }
 
