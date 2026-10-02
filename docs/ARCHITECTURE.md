@@ -123,7 +123,29 @@ references and file-change paths are validated with stock `fs/getMetadata`, then
 after an explicit tap. Android previews bounded UTF-8 text and images, exposes other types through
 `FileProvider`, and offers Open, Share, and `CreateDocument` save actions. Remote files remain
 limited to 20 MiB; the private preview cache is bounded and expires unretained files after seven
-days. Interactive HTML rendering remains a separate feature.
+days. Ordinary HTML file links remain text previews.
+
+Completed assistant messages recognize standalone `visualize{"path":"/absolute/file.html"}`
+references, with optional `title` and `mode: "wide"`. Code examples and malformed references
+remain Markdown. The viewer reads the fragment using stock `fs/getMetadata` and `fs/readFile`
+over WSS, checks both reported and actual sizes against 1 MB, and requires valid UTF-8.
+It supports responsive inline rendering and a full-screen view on either phone display.
+
+Each viewer uses a WebView shell and an opaque-origin `sandbox="allow-scripts"` iframe.
+The skill's versioned runtime assets supply styles, tabs, tooltips, calendars, carousels,
+and optional mockup helpers. The native message port belongs only to the trusted shell;
+there is no JavaScript Android interface. File/content access, API connections, nested frames,
+forms, popups, permissions, and downloads are disabled. Only HTTPS resources from the skill's
+seven CDN hosts can load; the bounded resource loader checks every redirect and supplies no
+application credentials or WebView cookies. Operational logs contain no HTML or messages.
+
+Widget state is limited to 16 KiB and stored locally under a hash of host, chat, message,
+reference position, and path. It survives view recreation and reopening the chat; it is not
+synced to desktop or injected into model context. `sendFollowUpMessage` requests require a
+touch gesture and native confirmation, then append to the existing composer without sending.
+External HTTPS links also require confirmation. Desktop annotation/Tweak controls are not
+advertised; guarded mockups retain their normal rendering and local interactions. CDN-backed
+charts/icons require connectivity. Missing files offer an explicit read-only Retry action.
 
 Plan mode is exposed only when the stock `collaborationMode/list` capability
 advertises it. The selected stock collaboration setting is sent with `turn/start`;
@@ -147,8 +169,46 @@ Existing projects can be selected but not created, deleted, reordered, or edited
 and only the first project root is offered. New worktrees require a locally
 resolvable `origin/HEAD` and
 do not include uncommitted checkout changes. Worktrees are deliberately retained;
-cleanup, branch/ref selection, setup environments, and general Git management are
-outside this feature.
+cleanup, branch/ref selection, and general Git management are outside this feature.
+Environment execution is a shared workspace-adapter operation with an explicit
+execution deadline and a durable success receipt. Bug reports currently invoke
+the repository's setup script; normal new-task UI does not yet expose environment
+selection. Long commands use operation-specific RPC deadlines rather than the
+ordinary request default.
+
+## User-authored bug reports
+
+Android owns the report UI, collectors, draft persistence, and orchestration; the
+forwarder and stock app-server protocol are unchanged. The menu and a foreground
+Seismic shake detector invoke the same capture flow. The copied Apache-2.0
+detector's license ships in `assets/licenses/seismic.txt`. Registration uses
+`SENSOR_DELAY_GAME`, stops when the activity pauses, and has a three-second
+invocation cooldown.
+
+The phone stores one pending report and its artifacts under app-private
+`files/bug-reports/<UUID>`, with an atomically replaced draft index. The frozen
+context is an explicit field selection, not a raw RPC/state dump. It includes
+loaded visible conversation content and marks unloaded history. Recent action
+metadata is bounded to 100 entries / five minutes. Known pairing credentials are
+redacted from text evidence; the Settings screen is excluded from screenshots.
+PixelCopy captures the focused app window on Android 14+, and the activity window
+on earlier releases (unsupported dialog capture is recorded as unavailable).
+Collectors record their own timestamps and failures; app logcat is bounded to
+five minutes, 2,000 lines, and 512 KiB. Android 11+ supplies abnormal process-exit
+metadata within 24 hours and an available trace up to 2 MiB. Diagnostics are
+report artifacts, never operational log output.
+
+Report submission has its own persisted journal, independent of the original
+conversation journal. It resolves the configured remote-codex project, verifies
+the repository origin, uses the existing detached-worktree adapter, and executes
+`scripts/setup-worktree` with a two-minute process deadline plus transport grace.
+The setup command atomically writes an operation/revision receipt after success.
+Evidence resides beside the worktree checkout. The first turn uses server-default
+model settings, a human-authored description, artifact references, and explicit
+implementation instructions. Every mutation is journaled before dispatch;
+recovery compares authoritative receipts, uploaded bytes, and task/message IDs.
+Missing or conflicting evidence leaves the operation pending instead of replaying
+it. Accepted reports retain the task reference and remove local artifacts.
 
 Limits: no push notifications, directory attachments, terminal emulator, or interactive
 command previews. Activity text is bounded for phone rendering; full output

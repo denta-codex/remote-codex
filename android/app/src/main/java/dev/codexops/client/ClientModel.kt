@@ -21,9 +21,10 @@ constructor(
     private val endpoint: String = GraceHost.endpoint,
     private val expectedHome: String = GraceHost.expectedCodexHome,
     allowLoopbackTest: Boolean = false,
+    bugReportRepository: String = GraceHost.bugReportRepository,
 ) : AndroidViewModel(app), ClientActions {
     private val host =
-        GraceHost.copy(endpoint = endpoint, expectedCodexHome = expectedHome)
+        GraceHost.copy(endpoint = endpoint, expectedCodexHome = expectedHome, bugReportRepository = bugReportRepository)
     private val local: ClientStore = LocalStore(app)
     private val rpc: RemoteSession = StockRemoteSession(allowLoopbackTest)
     private val updater = AppUpdater(app, endpoint, allowLoopbackTest)
@@ -34,6 +35,12 @@ constructor(
     private val remoteFileRepository = RemoteFileRepository(app)
     private val _state = MutableStateFlow(ScreenState(host = host))
     val state = _state.asStateFlow()
+    internal val reports = BugReportController(app, viewModelScope, local, rpc, host, { _state.value }) { id ->
+        viewModelScope.launch {
+            state.first { !it.busy && it.ready }
+            openTask(id)
+        }
+    }
     private var connectionJob: Job? = null
     private var updateJob: Job? = null
     private var foreground = false
@@ -56,6 +63,13 @@ constructor(
     init {
         network.registerDefaultNetworkCallback(callback)
         viewModelScope.launch {
+            state.map { listOf(it.page, it.connection, it.thread, it.activeTurn, it.journal?.str("stage"),
+                it.queueReady.toString(), it.queuedMessages.size.toString(), it.error?.let { "error" }) }
+                .distinctUntilChanged().collect { signals ->
+                    reports.actions.add("appState", signals[2], signals.filterNotNull().joinToString(" / "))
+                }
+        }
+        viewModelScope.launch {
             _state.update {
                 it.copy(configured = runCatching { local.token().isNotEmpty() }.getOrDefault(false))
             }
@@ -73,6 +87,7 @@ constructor(
     }
 
     override fun connect() {
+        reports.actions.add("connect")
         if (connectionJob?.isActive == true || _state.value.busy) return
         connectionJob =
             viewModelScope.launch {
@@ -320,10 +335,12 @@ constructor(
     }
 
     override fun settings() {
+        reports.actions.add("settings")
         _state.update { it.copy(page = "settings", error = null) }
     }
 
     override fun home() {
+        reports.actions.add("home")
         if (_state.value.busy) return
         selection++
         _state.update { it.copy(page = "home", error = null) }
@@ -475,6 +492,7 @@ constructor(
     }
 
     override fun newChat() {
+        reports.actions.add("newChat")
         if (_state.value.busy) return
         viewModelScope.launch {
             selection++
@@ -515,6 +533,7 @@ constructor(
     }
 
     override fun openTask(id: String) {
+        reports.actions.add("openTask", id)
         if (_state.value.busy) return
         viewModelScope.launch { guarded { loadTask(id) } }
     }
@@ -646,6 +665,7 @@ constructor(
     }
 
     override fun updateNewTaskOptions(options: NewTaskOptions) {
+        reports.actions.add("taskOptions", options.projectId, options.executionTarget.name)
         val normalized =
             when {
                 options.projectId == null ->
@@ -893,6 +913,23 @@ constructor(
     override suspend fun loadMedia(media: MediaRef): ByteArray =
         mediaRepository.load(media) { rpc.readFile(it) }
 
+    override suspend fun loadVisualization(reference: VisualizationRef): String =
+        withContext(Dispatchers.IO) { readVisualization(reference, rpc::getMetadata, rpc::readFile) }
+
+    override suspend fun visualizationState(key: String): String =
+        local.get("visualization/$key").takeIf(::validWidgetState) ?: "null"
+
+    override suspend fun saveVisualizationState(key: String, value: String) {
+        require(validWidgetState(value))
+        local.put("visualization/$key", value)
+    }
+
+    override fun stageVisualizationFollowUp(prompt: String) {
+        if (prompt.isBlank() || prompt.length > 16_384) return
+        val current = _state.value.draft
+        draft(if (current.isBlank()) prompt else "$current\n\n$prompt")
+    }
+
     override fun inspectFile(file: FileRef) {
         val before = _state.value
         val resolved =
@@ -958,6 +995,7 @@ constructor(
     }
 
     override fun send() {
+        reports.actions.add("send", _state.value.thread)
         val before = _state.value
         submit(before.draft, before.newTaskOptions.collaborationMode, clearDraft = true)
     }
@@ -1001,9 +1039,15 @@ constructor(
         }
     }
 
-    override fun sendQueuedNow(id: String) = mutateQueued(id, sendNow = true)
+    override fun sendQueuedNow(id: String) {
+        reports.actions.add("sendQueuedNow", id)
+        mutateQueued(id, sendNow = true)
+    }
 
-    override fun removeQueued(id: String) = mutateQueued(id, sendNow = false)
+    override fun removeQueued(id: String) {
+        reports.actions.add("removeQueued", id)
+        mutateQueued(id, sendNow = false)
+    }
 
     private fun mutateQueued(id: String, sendNow: Boolean) {
         val before = _state.value
@@ -1704,6 +1748,7 @@ constructor(
     }
 
     override fun recoverPreparation() {
+        reports.actions.add("recoverPreparation", _state.value.thread)
         val before = _state.value
         if (!before.ready || before.busy || before.journal == null) return
         if (before.thread != null) {
@@ -1739,6 +1784,7 @@ constructor(
     }
 
     override fun stop() {
+        reports.actions.add("stop", _state.value.thread)
         viewModelScope.launch {
             guarded {
                 val st = _state.value
@@ -1749,6 +1795,7 @@ constructor(
     }
 
     override fun answer(decision: Decision, result: JsonObject) {
+        reports.actions.add("answer", decision.key, decision.method)
         viewModelScope.launch {
             guarded {
                 if (requests[decision.key] != decision || !_state.value.ready)

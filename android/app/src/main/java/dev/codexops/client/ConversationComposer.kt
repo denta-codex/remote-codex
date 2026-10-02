@@ -6,6 +6,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyColumn
@@ -261,82 +262,91 @@ internal fun ConversationComposer(
                     .testTag("composer-actions"),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (compact)
-                    Box {
-                        TextButton(
-                            onClick = { addMenu = true },
-                            enabled = !state.busy && state.journal == null,
-                            modifier = Modifier.testTag("add-menu"),
-                        ) { Text("Add") }
-                        DropdownMenu(addMenu, { addMenu = false }) {
-                            DropdownMenuItem(
-                                text = { Text("Photos") },
-                                onClick = {
-                                    addMenu = false
-                                    picker.launch(
-                                        PickVisualMediaRequest(
-                                            ActivityResultContracts.PickVisualMedia.ImageOnly
+                // The trailing Stop and Send/Queue buttons are measured first; the leading
+                // attachment actions take only the remaining width and scroll if it is too
+                // narrow, so the primary actions stay reachable at any width or font scale.
+                Row(
+                    Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (compact)
+                        Box {
+                            TextButton(
+                                onClick = { addMenu = true },
+                                enabled = !state.busy && state.journal == null,
+                                modifier = Modifier.testTag("add-menu"),
+                            ) { Text("Add") }
+                            DropdownMenu(addMenu, { addMenu = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("Photos") },
+                                    onClick = {
+                                        addMenu = false
+                                        picker.launch(
+                                            PickVisualMediaRequest(
+                                                ActivityResultContracts.PickVisualMedia.ImageOnly
+                                            )
                                         )
-                                    )
-                                },
-                                modifier = Modifier.testTag("add-photos"),
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Files") },
-                                onClick = {
-                                    addMenu = false
-                                    filePicker.launch(arrayOf("*/*"))
-                                },
-                                modifier = Modifier.testTag("add-files"),
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Camera") },
-                                onClick = {
-                                    addMenu = false
-                                    actions.prepareCamera()?.let(camera::launch)
-                                },
-                                modifier = Modifier.testTag("add-camera"),
-                            )
-                        }
-                    }
-                else {
-                    TextButton(
-                        onClick = {
-                            picker.launch(
-                                PickVisualMediaRequest(
-                                    ActivityResultContracts.PickVisualMedia.ImageOnly
+                                    },
+                                    modifier = Modifier.testTag("add-photos"),
                                 )
-                            )
-                        },
-                        enabled = !state.busy && state.journal == null,
-                        modifier = Modifier.testTag("add-photos"),
-                    ) { Text("Photos") }
-                    TextButton(
-                        onClick = { filePicker.launch(arrayOf("*/*")) },
-                        enabled = !state.busy && state.journal == null,
-                        modifier = Modifier.testTag("add-files"),
-                    ) { Text("Files") }
-                    TextButton(
-                        onClick = { actions.prepareCamera()?.let(camera::launch) },
-                        enabled = !state.busy && state.journal == null,
-                        modifier = Modifier.testTag("add-camera"),
-                    ) { Text("Camera") }
+                                DropdownMenuItem(
+                                    text = { Text("Files") },
+                                    onClick = {
+                                        addMenu = false
+                                        filePicker.launch(arrayOf("*/*"))
+                                    },
+                                    modifier = Modifier.testTag("add-files"),
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Camera") },
+                                    onClick = {
+                                        addMenu = false
+                                        actions.prepareCamera()?.let(camera::launch)
+                                    },
+                                    modifier = Modifier.testTag("add-camera"),
+                                )
+                            }
+                        }
+                    else {
+                        TextButton(
+                            onClick = {
+                                picker.launch(
+                                    PickVisualMediaRequest(
+                                        ActivityResultContracts.PickVisualMedia.ImageOnly
+                                    )
+                                )
+                            },
+                            enabled = !state.busy && state.journal == null,
+                            modifier = Modifier.testTag("add-photos"),
+                        ) { Text("Photos") }
+                        TextButton(
+                            onClick = { filePicker.launch(arrayOf("*/*")) },
+                            enabled = !state.busy && state.journal == null,
+                            modifier = Modifier.testTag("add-files"),
+                        ) { Text("Files") }
+                        TextButton(
+                            onClick = { actions.prepareCamera()?.let(camera::launch) },
+                            enabled = !state.busy && state.journal == null,
+                            modifier = Modifier.testTag("add-camera"),
+                        ) { Text("Camera") }
+                    }
+                    if (landscape)
+                        TextButton(
+                            onClick = {
+                                keyboard?.hide()
+                                optionsOpen = true
+                            },
+                            modifier = Modifier.testTag("composer-options"),
+                        ) { Text("Options") }
+                    if (compactTyping && (state.queuedMessages.isNotEmpty() || state.queueError != null))
+                        TextButton(
+                            onClick = { keyboard?.hide() },
+                            modifier = Modifier.testTag("show-queue"),
+                        ) { Text("Queued (${state.queuedMessages.size})", maxLines = 1) }
                 }
-                if (landscape)
-                    TextButton(
-                        onClick = {
-                            keyboard?.hide()
-                            optionsOpen = true
-                        },
-                        modifier = Modifier.testTag("composer-options"),
-                    ) { Text("Options") }
-                if (compactTyping && (state.queuedMessages.isNotEmpty() || state.queueError != null))
-                    TextButton(
-                        onClick = { keyboard?.hide() },
-                        modifier = Modifier.testTag("show-queue"),
-                    ) { Text("Queued (${state.queuedMessages.size})", maxLines = 1) }
-                Spacer(Modifier.weight(1f))
-                if (modes.isNotEmpty() && !(compact && state.willQueueMessage()))
+                // Mode changes are unavailable while a message would queue, so hide the selector
+                // instead of letting a disabled control crowd out Stop and Queue.
+                if (modes.isNotEmpty() && !state.willQueueMessage())
                     Box {
                         TextButton(
                             onClick = { modeMenu = true },
