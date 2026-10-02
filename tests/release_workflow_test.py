@@ -44,6 +44,24 @@ spec.loader.exec_module(version_filter)
 class VersionTests(unittest.TestCase):
     gradle = '        versionCode = 13\n        versionName = "0.2.3"\n'
 
+    def test_prerelease_precedence_and_roundtrip(self):
+        names = ["0.2.10", "0.2.11-1", "0.2.11-alpha", "0.2.11-autofill.1",
+                 "0.2.11-autofill.2", "0.2.11-autofill.10", "0.2.11-autofill.beta", "0.2.11"]
+        parsed = [version_filter.parse_version(name) for name in names]
+        self.assertEqual(sorted(parsed), parsed)
+        self.assertEqual([version_filter.format_version(v) for v in parsed], names)
+        for value in ("0.2.010", "0.2.11-autofill.01", "0.2.11-", "0.2.11-a..b",
+                      "0.2.11+build", "0.2.11-a_b", "0.2.11-a\n", "0.2.11-" + "a" * 64):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                version_filter.parse_version(value)
+
+    def test_automatic_promotes_prerelease_and_preserves_build_order(self):
+        manifests = [{"versionName": "0.2.11-autofill.10", "versionCode": 21}]
+        self.assertEqual(version_filter.select_version(self.gradle, manifests, ["30"]),
+                         {"versionName": "0.2.11", "versionCode": 31})
+        with self.assertRaises(ValueError):
+            version_filter.select_version(self.gradle, manifests, [], "0.2.11-autofill.2")
+
     def test_automatic_uses_all_versions_and_occupied_codes(self):
         actual = version_filter.select_version(
             self.gradle, [{"versionName": "0.3.9", "versionCode": 20}], ["99", "18"]
@@ -225,6 +243,14 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(self.prepared()["versionName"], "1.0.0")
         self.assertEqual(self.prepared()["releaseNotes"], "Curated release notes.\n")
         self.assertEqual(self.checks(), 1)
+
+    def test_prerelease_publication_then_normal_release(self):
+        with self.endpoint() as endpoints:
+            self.run_action("release", extra={**endpoints, "remote_codex_version": "0.2.11-autofill.1"})
+            self.assertEqual(self.prepared()["versionName"], "0.2.11-autofill.1")
+            self.run_action("release", extra=endpoints)
+            self.assertEqual(self.prepared()["versionName"], "0.2.11")
+            self.assertEqual(self.prepared()["versionCode"], 15)
 
     def test_separate_checkouts_share_version_reservations(self):
         other = self.base / 'other-checkout'
