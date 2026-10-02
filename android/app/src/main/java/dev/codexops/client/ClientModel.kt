@@ -1115,6 +1115,7 @@ constructor(
         if (
             !before.ready ||
                 before.busy ||
+                queue && selectedMode != null ||
                 (text.isBlank() && before.attachments.isEmpty()) ||
                 before.journal != null ||
                 before.thread != null && !before.queueReady ||

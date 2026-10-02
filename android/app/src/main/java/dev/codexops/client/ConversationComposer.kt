@@ -57,6 +57,8 @@ internal fun ConversationComposer(
     val selectedMode = modes.firstOrNull { it.mode == state.newTaskOptions.collaborationMode }
     val composerStatus =
         when {
+            state.waitingToSendMode() ->
+                "${selectedMode?.name ?: "Mode"} selected · send when the task is idle"
             state.activeTurn != null -> "Sends after this turn · uses task settings"
             state.queuedMessages.isNotEmpty() -> "Queue paused · tap Send now to continue"
             state.thread == null && !projectAvailable ->
@@ -224,9 +226,9 @@ internal fun ConversationComposer(
                         disabledIndicatorColor = Color.Transparent,
                     ),
             )
-            if (!cover || !state.willQueueMessage()) ModelControls(state, actions, cover)
+            if (!state.willQueueMessage() && !compactTyping) ModelControls(state, actions, cover)
             val showStatus =
-                !compactTyping && (!cover ||
+                (!compactTyping || state.waitingToSendMode()) && (
                     state.willQueueMessage() ||
                     !projectAvailable ||
                     state.newTaskOptions.model != null ||
@@ -237,7 +239,7 @@ internal fun ConversationComposer(
                     Modifier.fillMaxWidth()
                         .padding(horizontal = 12.dp, vertical = 2.dp)
                         .testTag("composer-status"),
-                    maxLines = if (cover) 1 else 2,
+                    maxLines = if (cover && !state.waitingToSendMode()) 1 else 2,
                     overflow = TextOverflow.Ellipsis,
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -247,74 +249,49 @@ internal fun ConversationComposer(
                     .testTag("composer-actions"),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (cover)
-                    Box {
-                        TextButton(
-                            onClick = { addMenu = true },
-                            enabled = !state.busy && state.journal == null,
-                            modifier = Modifier.testTag("add-menu"),
-                        ) { Text("Add") }
-                        DropdownMenu(addMenu, { addMenu = false }) {
-                            DropdownMenuItem(
-                                text = { Text("Photos") },
-                                onClick = {
-                                    addMenu = false
-                                    picker.launch(
-                                        PickVisualMediaRequest(
-                                            ActivityResultContracts.PickVisualMedia.ImageOnly
-                                        )
+                Box {
+                    TextButton(
+                        onClick = { addMenu = true },
+                        enabled = !state.busy && state.journal == null,
+                        modifier = Modifier.testTag("add-menu"),
+                    ) { Text("Add") }
+                    DropdownMenu(addMenu, { addMenu = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Photos") },
+                            onClick = {
+                                addMenu = false
+                                picker.launch(
+                                    PickVisualMediaRequest(
+                                        ActivityResultContracts.PickVisualMedia.ImageOnly
                                     )
-                                },
-                                modifier = Modifier.testTag("add-photos"),
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Files") },
-                                onClick = {
-                                    addMenu = false
-                                    filePicker.launch(arrayOf("*/*"))
-                                },
-                                modifier = Modifier.testTag("add-files"),
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Camera") },
-                                onClick = {
-                                    addMenu = false
-                                    actions.prepareCamera()?.let(camera::launch)
-                                },
-                                modifier = Modifier.testTag("add-camera"),
-                            )
-                        }
-                    }
-                else {
-                    TextButton(
-                        onClick = {
-                            picker.launch(
-                                PickVisualMediaRequest(
-                                    ActivityResultContracts.PickVisualMedia.ImageOnly
                                 )
-                            )
-                        },
-                        enabled = !state.busy && state.journal == null,
-                        modifier = Modifier.testTag("add-photos"),
-                    ) { Text("Photos") }
-                    TextButton(
-                        onClick = { filePicker.launch(arrayOf("*/*")) },
-                        enabled = !state.busy && state.journal == null,
-                        modifier = Modifier.testTag("add-files"),
-                    ) { Text("Files") }
-                    TextButton(
-                        onClick = { actions.prepareCamera()?.let(camera::launch) },
-                        enabled = !state.busy && state.journal == null,
-                        modifier = Modifier.testTag("add-camera"),
-                    ) { Text("Camera") }
+                            },
+                            modifier = Modifier.testTag("add-photos"),
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Files") },
+                            onClick = {
+                                addMenu = false
+                                filePicker.launch(arrayOf("*/*"))
+                            },
+                            modifier = Modifier.testTag("add-files"),
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Camera") },
+                            onClick = {
+                                addMenu = false
+                                actions.prepareCamera()?.let(camera::launch)
+                            },
+                            modifier = Modifier.testTag("add-camera"),
+                        )
+                    }
                 }
                 if (compactTyping && (state.queuedMessages.isNotEmpty() || state.queueError != null))
                     TextButton(
                         onClick = { keyboard?.hide() },
                         modifier = Modifier.testTag("show-queue"),
                     ) { Text("Queued (${state.queuedMessages.size})", maxLines = 1) }
-                Spacer(Modifier.weight(1f))
-                if (modes.isNotEmpty() && !(cover && state.willQueueMessage()))
+                if (modes.isNotEmpty())
                     Box {
                         TextButton(
                             onClick = { modeMenu = true },
@@ -322,10 +299,9 @@ internal fun ConversationComposer(
                             enabled =
                                 state.ready &&
                                     !state.busy &&
-                                    !state.willQueueMessage() &&
                                     state.journal == null,
                         ) {
-                            Text(selectedMode?.name ?: "Server default", fontSize = 12.sp)
+                            Text(selectedMode?.name ?: "Mode", fontSize = 12.sp)
                         }
                         DropdownMenu(
                             expanded = modeMenu,
@@ -357,6 +333,7 @@ internal fun ConversationComposer(
                             }
                         }
                     }
+                Spacer(Modifier.weight(1f))
                 if (state.activeTurn != null)
                     IconButton(actions::stop, enabled = state.ready) {
                         Glyph(R.drawable.ic_stop, "Stop")
@@ -371,6 +348,7 @@ internal fun ConversationComposer(
                     enabled =
                         state.ready &&
                             !state.busy &&
+                            !state.waitingToSendMode() &&
                             (state.draft.isNotBlank() || state.attachments.isNotEmpty()) &&
                             state.journal == null &&
                             (state.thread == null || state.queueReady) &&

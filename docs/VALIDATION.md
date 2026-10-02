@@ -1,5 +1,32 @@
 # Validation
 
+## 2026-10-02 — Plan mode composer report a9ba2621
+
+- The frozen report shows a connected task with an active turn. Reproduced the
+  disabled mode selector with `AppTest#planModeCanBeSelectedWhileWorkingAndSentWhenIdle`:
+  the original composer failed `assertIsEnabled` on `mode-selector`.
+- The composer now exposes mode selection while working, groups attachments in
+  Add, and hides unusable model controls while queueing. Explicit mode drafts wait
+  for an idle task and empty queue before the user sends; the client also rejects
+  attempts to queue them, since queue requests cannot carry collaboration settings.
+- Four focused Android 16 fixture tests passed through `scripts/emulator-test
+  --tests`: selecting Plan during a turn and sending it once idle; waiting behind
+  a paused queue and returning to task settings; normal queue/steer behavior; and
+  the existing Plan-to-implementation flow. The first also checks the Add menu.
+  Results: `artifacts/validation/plan-composer/phone-tests.xml`.
+- Two focused cover-viewport cases initially timed out trying to send with the
+  keyboard open. Hiding model controls during compact typing fixed the layout;
+  both Plan selection/submission and normal queue/steer then passed with zero
+  failures or skips. These used the same `--tests` entry point with
+  `ORG_GRADLE_PROJECT_android.testInstrumentationRunnerArguments.coverScreen=true`.
+  Results: `artifacts/validation/plan-composer/cover-initial-tests.xml` and
+  `artifacts/validation/plan-composer/cover-tests.xml`.
+- Initial validation startup required access to the managed Gradle cache outside
+  the sandbox. A test-only Espresso reference then failed compilation and was
+  replaced with the existing instrumentation API before the passing test run.
+- Validation uses synthetic fixture content, not the live source task or physical
+  Razr. No release, publication, deployment, or phone installation was performed.
+
 ## 2026-09-30 — Android 0.2.6 (16)
 
 - Source revision: `e03e256c89b77d64b6a6b73738ff0a19b86abfe4`.

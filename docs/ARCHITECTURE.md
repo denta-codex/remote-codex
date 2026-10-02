@@ -127,7 +127,14 @@ days. Interactive HTML rendering remains a separate feature.
 
 Plan mode is exposed only when the stock `collaborationMode/list` capability
 advertises it. The selected stock collaboration setting is sent with `turn/start`;
-completed plans render in a dedicated card and full-screen viewer. Implementing a
+the mode selector remains available during a running turn. Selecting an explicit
+mode keeps the draft unsent until both the active turn and server queue are clear,
+because queue submissions cannot carry that setting. The composer explains the
+wait; sending remains an explicit user action. Selecting Server default restores
+normal queueing. Attachments share an Add menu, and model controls are hidden while
+queueing because queued submissions use task settings. On cover screens they also
+hide while typing to keep the mode and send actions reachable above the keyboard.
+Completed plans render in a dedicated card and full-screen viewer. Implementing a
 completed plan starts a new turn in the advertised default mode and is never
 simulated when the server capability is absent.
 

@@ -1013,6 +1013,60 @@ class AppTest {
     }
 
     @Test
+    fun planModeCanBeSelectedWhileWorkingAndSentWhenIdle() {
+        openRunningQueueFixture()
+        compose.onNodeWithTag("model-selector").assertDoesNotExist()
+        compose.onNodeWithTag("add-menu").assertIsDisplayed().performClick()
+        compose.onNodeWithTag("add-photos").assertIsDisplayed()
+        compose.onNodeWithTag("add-files").assertIsDisplayed()
+        compose.onNodeWithTag("add-camera").assertIsDisplayed()
+        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        compose.onNodeWithTag("mode-selector").assertIsDisplayed().assertIsEnabled().performClick()
+        compose.onNodeWithTag("mode-plan").performClick()
+        compose.onNodeWithTag("mode-selector").assertTextContains("Plan")
+        compose.onNodeWithTag("composer").performTextInput("Plan the next change")
+        compose.onNodeWithTag("send").assertIsNotEnabled()
+        compose.onNodeWithTag("composer-status")
+            .assertTextContains("Plan selected · send when the task is idle")
+        // The model must also reject a queue submission that would lose the mode.
+        compose.runOnUiThread { model.send() }
+        compose.waitForIdle()
+        assertTrue(queueMutations.isEmpty())
+        assertEquals("Plan the next change", model.state.value.draft)
+        holdTurnOpen = false
+        emit(peer!!, "turn/completed", obj("turn" to obj("id" to s("turn-test"), "status" to s("completed"))))
+        compose.waitUntil(5000) { model.state.value.activeTurn == null }
+        assertEquals(1, turnRequests.size)
+        compose.onNodeWithTag("send").assertIsDisplayed().assertIsEnabled().performClick()
+        compose.waitUntil(10000) { turnRequests.size == 2 && !model.state.value.busy }
+        assertEquals("plan", turnRequests.last().map("collaborationMode").str("mode"))
+        assertEquals("Plan the next change", turnRequests.last().list("input").single().str("text"))
+        assertTrue(queueMutations.isEmpty())
+    }
+
+    @Test
+    fun planDraftWaitsForExistingQueueAndCanReturnToTaskSettings() {
+        openRunningQueueFixture()
+        enqueueFixture()
+        holdTurnOpen = false
+        emit(peer!!, "turn/completed", obj("turn" to obj("id" to s("turn-test"), "status" to s("interrupted"))))
+        compose.waitUntil(5000) { model.state.value.activeTurn == null }
+        compose.onNodeWithTag("mode-selector").performClick()
+        compose.onNodeWithTag("mode-plan").performClick()
+        compose.onNodeWithTag("composer").performTextInput("Plan after the queue")
+        compose.onNodeWithTag("send").assertIsNotEnabled()
+        compose.runOnUiThread { model.send() }
+        compose.waitForIdle()
+        assertEquals(1, queueMutations.size)
+        compose.onNodeWithTag("mode-selector").performClick()
+        compose.onNodeWithTag("mode-server-default").performClick()
+        compose.onNodeWithTag("send").assertIsEnabled().performClick()
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.queuedMessages.size == 2 }
+        assertEquals(1, turnRequests.size)
+        assertEquals(listOf("thread/queue/add", "thread/queue/add"), queueMutations.map { it.str("method") })
+    }
+
+    @Test
     fun normalSendQueuesAndCanSteerWithoutChangingNewDraft() {
         openRunningQueueFixture()
         enqueueFixture()
@@ -1753,7 +1807,7 @@ class AppTest {
         compose.waitUntil(5000) {
             model.state.value.page == "chat" && model.state.value.collaborationModes.size == 2
         }
-        compose.onNodeWithTag("mode-selector").assertTextContains("Server default").performClick()
+        compose.onNodeWithTag("mode-selector").assertTextContains("Mode").performClick()
         compose.onNodeWithTag("mode-plan").performClick()
         compose.onNodeWithTag("mode-selector").assertTextContains("Plan")
         compose.onNodeWithTag("composer").performTextInput("Propose a safe change")

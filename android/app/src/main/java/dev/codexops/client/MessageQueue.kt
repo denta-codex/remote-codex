@@ -41,6 +41,11 @@ data class QueuedMessage(
 
 internal fun ScreenState.willQueueMessage() = activeTurn != null || queuedMessages.isNotEmpty()
 
+// Queue submissions cannot carry collaboration settings. Keep an explicit mode
+// in the draft until it can be sent with turn/start, without silently dropping it.
+internal fun ScreenState.waitingToSendMode() =
+    willQueueMessage() && newTaskOptions.collaborationMode != null
+
 internal fun queueItemParams(threadId: String, queuedSubmissionId: String) = obj(
     "threadId" to s(threadId),
     "queuedSubmissionId" to s(queuedSubmissionId),
