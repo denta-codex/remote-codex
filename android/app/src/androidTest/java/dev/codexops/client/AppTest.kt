@@ -26,10 +26,14 @@ import kotlinx.serialization.json.*
 import okhttp3.*
 import okhttp3.mockwebserver.*
 import org.junit.*
+import org.junit.rules.TestName
 import org.junit.Assert.*
 
 class AppTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+    @get:Rule val testName = TestName()
+    private val landscapeScreen
+        get() = testName.methodName == "landscapeConversationLeavesRoomForMessagesAndDraft"
     private lateinit var server: MockWebServer
     private lateinit var model: ClientModel
     private val store = ViewModelStore()
@@ -94,9 +98,9 @@ class AppTest {
 
     @Before
     fun setup() {
-        if (coverScreen) {
-            shell("wm size 1080x1272")
-            shell("wm density 420")
+        if (coverScreen || landscapeScreen) {
+            shell(if (landscapeScreen) "wm size 2992x1224" else "wm size 1080x1272")
+            shell(if (landscapeScreen) "wm density 480" else "wm density 420")
             SystemClock.sleep(500)
             compose.activityRule.scenario.recreate()
             compose.waitForIdle()
@@ -883,7 +887,7 @@ class AppTest {
         }
         runBlocking { LocalStore(app).saveToken("") }
         server.shutdown()
-        if (coverScreen) {
+        if (coverScreen || landscapeScreen) {
             shell("wm size reset")
             shell("wm density reset")
         }
@@ -932,6 +936,52 @@ class AppTest {
         assertTrue("Composer actions are $composerHeight dp high", composerHeight <= 56f)
         compose.onNodeWithTag("send").assertIsDisplayed()
         demoPause(3000)
+    }
+
+    @Test
+    fun landscapeConversationLeavesRoomForMessagesAndDraft() {
+        // Match the reported Razr window; setup installs the mock after resizing.
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) {
+            model.state.value.thread == "task-test" && !model.state.value.busy
+        }
+        compose.waitForIdle()
+        val configuration = compose.activity.resources.configuration
+        assertTrue(configuration.screenWidthDp > 900)
+        assertTrue(configuration.screenHeightDp < 480)
+        val timeline = compose.onNodeWithTag("timeline").getUnclippedBoundsInRoot()
+        val height = timeline.bottom - timeline.top
+        assertTrue("Landscape timeline is only $height", height >= 160.dp)
+        compose.onNodeWithTag("composer").assertIsDisplayed()
+        compose.onNodeWithTag("send").assertIsDisplayed()
+        compose.onNodeWithTag("composer-options").performClick()
+        compose.onNodeWithTag("model-selector").performClick()
+        compose.onNodeWithText("Fixture Fast").performClick()
+        compose.onNodeWithTag("reasoning-selector").performClick()
+        compose.onNodeWithText("medium").performClick()
+        compose.onNodeWithText("Done").performClick()
+        assertEquals("gpt-fixture-fast", model.state.value.newTaskOptions.model)
+        assertEquals("medium", model.state.value.newTaskOptions.reasoningEffort)
+        compose.onNodeWithTag("add-menu").performClick()
+        compose.onNodeWithText("Photos").assertIsDisplayed()
+        compose.onNodeWithText("Files").assertIsDisplayed()
+        compose.onNodeWithText("Camera").assertIsDisplayed()
+        shell("input keyevent KEYCODE_BACK")
+        compose.onNodeWithTag("composer").performTextInput("A landscape draft\nwith several\nlines of text")
+        compose.onNodeWithTag("send").assertIsDisplayed().assertIsEnabled()
+        assertEquals("A landscape draft\nwith several\nlines of text", model.state.value.draft)
+        compose.runOnUiThread { model.newChat() }
+        compose.waitUntil(5000) {
+            model.state.value.thread == null && !model.state.value.busy
+        }
+        compose.onNodeWithTag("composer-options").performClick()
+        compose.onNodeWithTag("project-selector").performClick()
+        compose.onNodeWithText("Remote Codex").performClick()
+        compose.onNodeWithTag("workspace-new-worktree").performScrollTo().performClick()
+        assertEquals(ExecutionTarget.NewWorktree, model.state.value.newTaskOptions.executionTarget)
+        compose.onNodeWithText("Done").performClick()
+        compose.onNodeWithTag("composer").assertIsDisplayed()
+        compose.onNodeWithTag("send").assertIsDisplayed()
     }
 
     @Test
