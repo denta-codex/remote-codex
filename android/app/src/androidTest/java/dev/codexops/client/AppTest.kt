@@ -7,6 +7,12 @@ import android.net.Uri
 import android.os.SystemClock
 import android.os.ParcelFileDescriptor
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -809,6 +815,55 @@ class AppTest {
     }
 
     private fun latestReply() = compose.onNodeWithText("Latest reply — ready for review.", substring = true)
+
+    @Test
+    fun markdownTableWrapsCompleteCellsAndScrollsToLastColumn() {
+        val coverage = "\$0 delivery fees and reduced service fees at participating merchants, subject to order minimums"
+        val timing = "Starts when you activate. Activate now and it runs through December 31, 2029."
+        val longHeader = "When you get it and when the benefit expires"
+        val markdown = """
+            | What you get | What it covers | $longHeader |
+            |---|---|---|
+            | **Free DashPass** | $coverage | Starts when you activate. Activate now and it runs through **December 31, 2029**. |
+            | **One ${'$'}15 promo monthly** | One qualifying DoorDash order—including restaurants or groceries | Each calendar month after activation |
+            | **Two ${'$'}10 promos monthly** | Qualifying **non-restaurant** orders: groceries, convenience items, retail, etc. Each ${'$'}10 requires a separate order. | Both available each calendar month |
+        """.trimIndent()
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                RemoteTheme {
+                    Column(
+                        Modifier.width(368.dp).verticalScroll(rememberScrollState())
+                    ) {
+                        SelectionContainer {
+                            FileAwareMarkdown(markdown, model)
+                        }
+                    }
+                }
+            }
+        }
+        compose.waitUntil(5000) {
+            compose.onAllNodesWithText(coverage, substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        fun assertCompleteWrappedText(text: String) {
+            val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+            compose.onNodeWithText(text, substring = true).performSemanticsAction(
+                androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult
+            ) { it(layouts) }
+            assertTrue("Expected wrapped text: $text", layouts.single().lineCount > 1)
+            assertFalse("Text must not overflow: $text", layouts.single().hasVisualOverflow)
+            val layout = layouts.single()
+            assertEquals(layout.layoutInput.text.length, layout.getLineEnd(layout.lineCount - 1))
+        }
+        assertCompleteWrappedText(coverage)
+        val horizontalTable = compose.onNode(
+            SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange)
+        )
+        horizontalTable.performTouchInput { swipeLeft() }
+        compose.onNodeWithText(longHeader, substring = true).assertIsDisplayed()
+        compose.onNodeWithText(timing, substring = true).assertIsDisplayed()
+        assertCompleteWrappedText(longHeader)
+        assertCompleteWrappedText(timing)
+    }
 
     @Test
     fun polishedConversationOpensAtLatestAndKeepsReadingPosition() {

@@ -19,11 +19,16 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.compose.components.markdownComponents
+import com.mikepenz.markdown.compose.elements.MarkdownTable
+import com.mikepenz.markdown.compose.elements.MarkdownTableHeader
+import com.mikepenz.markdown.compose.elements.MarkdownTableRow
 import dev.codexops.core.FileRef
 import java.io.File
 import java.net.URI
@@ -41,7 +46,38 @@ internal fun FileAwareMarkdown(text: String, actions: ConversationActions) {
                 }
             }
         }
-    CompositionLocalProvider(LocalUriHandler provides handler) { Markdown(text) }
+    CompositionLocalProvider(LocalUriHandler provides handler) {
+        Markdown(
+            text,
+            components = markdownComponents(
+                table = { table ->
+                    // The library defaults to one-line, ellipsized cells. Scrolling
+                    // exposes more columns but cannot reveal that discarded text.
+                    MarkdownTable(
+                        table.content,
+                        table.node,
+                        style = table.typography.table,
+                        headerBlock = { content, node, width, style ->
+                            MarkdownTableHeader(
+                                content, node, width, style,
+                                verticalAlignment = Alignment.Top,
+                                maxLines = Int.MAX_VALUE,
+                                overflow = TextOverflow.Clip,
+                            )
+                        },
+                        rowBlock = { content, node, width, style ->
+                            MarkdownTableRow(
+                                content, node, width, style,
+                                verticalAlignment = Alignment.Top,
+                                maxLines = Int.MAX_VALUE,
+                                overflow = TextOverflow.Clip,
+                            )
+                        },
+                    )
+                }
+            ),
+        )
+    }
 }
 
 internal fun fileReference(uri: String): FileRef? {
