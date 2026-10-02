@@ -15,6 +15,9 @@ interface RemoteSession {
 
     suspend fun call(method: String, params: JsonObject): JsonObject
 
+    suspend fun callWithTimeout(method: String, params: JsonObject, timeoutMillis: Long): JsonObject =
+        call(method, params)
+
     suspend fun createDirectory(path: String) {
         call(
             "fs/createDirectory",
@@ -54,6 +57,9 @@ class StockRemoteSession(allowLoopbackTest: Boolean = false) : RemoteSession {
     override suspend fun connect(url: String, token: String) = rpc.connect(url, token)
 
     override suspend fun call(method: String, params: JsonObject) = rpc.call(method, params)
+
+    override suspend fun callWithTimeout(method: String, params: JsonObject, timeoutMillis: Long) =
+        rpc.call(method, params, timeoutMillis)
 
     override suspend fun createDirectory(path: String) = rpc.createDirectory(path)
 

@@ -8,6 +8,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import androidx.compose.ui.platform.testTag
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -19,7 +20,14 @@ import androidx.compose.ui.unit.sp
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 
 @Composable
-internal fun SettingsScreen(st: ScreenState, actions: SettingsActions) {
+internal fun SettingsScreen(
+    st: ScreenState,
+    actions: SettingsActions,
+    shakeEnabled: Boolean = false,
+    onShakeChanged: (Boolean) -> Unit = {},
+    screenshotEnabled: Boolean = true,
+    onScreenshotChanged: (Boolean) -> Unit = {},
+) {
     var credential by remember { mutableStateOf("") }
     var scanError by remember { mutableStateOf<String?>(null) }
     val context = LocalContext.current
@@ -103,6 +111,20 @@ internal fun SettingsScreen(st: ScreenState, actions: SettingsActions) {
             Spacer(Modifier.width(8.dp))
             Text("Save and connect")
         }
+        HorizontalDivider()
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Offer a bug report after screenshots", Modifier.weight(1f))
+                Switch(checked = screenshotEnabled, onCheckedChange = onScreenshotChanged,
+                    modifier = Modifier.testTag("screenshot-report-toggle"))
+            }
+            Text("Take a screenshot while the app is open, then tap Report bug to save it with diagnostics.", fontSize = 13.sp)
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Shake to report a bug", Modifier.weight(1f))
+            Switch(checked = shakeEnabled, onCheckedChange = onShakeChanged, modifier = Modifier.testTag("shake-report-toggle"))
+        }
+        Text("Off by default because it can trigger the phone's flashlight gesture. You can always use Report a bug in the menu.", fontSize = 13.sp)
         HorizontalDivider()
         Text("Assistant shortcut", fontWeight = FontWeight.SemiBold)
         OutlinedButton(

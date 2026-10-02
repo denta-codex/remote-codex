@@ -59,6 +59,8 @@ class AppTest {
     @Volatile private var lastThreadStart: JsonObject? = null
     private val worktreeAdds = AtomicInteger()
     private val threadStarts = AtomicInteger()
+    private val environmentSetups = AtomicInteger()
+    private var reportCoverOverride = false
     @Volatile private var dropWorktreeReply = false
     @Volatile private var dropThreadStartReply = false
     @Volatile private var rejectWorkspaceMetadata = false
@@ -280,6 +282,12 @@ class AppTest {
                                             }
                                             "command/exec" -> {
                                                 when {
+                                                    "get-url" in command -> obj("exitCode" to JsonPrimitive(0), "stdout" to s("git@github.com:denta-codex/remote-codex.git\n"))
+                                                    "remote-codex-environment" in command -> {
+                                                        environmentSetups.incrementAndGet()
+                                                        remoteFiles[command[5]] = Base64.getEncoder().encodeToString("${command[6]}\n${command[7]}\n".toByteArray())
+                                                        obj("exitCode" to JsonPrimitive(0))
+                                                    }
                                                     command.firstOrNull() == "test" -> {
                                                         invalidDirectoryProbes.incrementAndGet()
                                                         obj("exitCode" to JsonPrimitive(2))
@@ -582,6 +590,7 @@ class AppTest {
                         )
             }
         server.start()
+        File(app.filesDir, "bug-reports").deleteRecursively()
         runBlocking {
             val local = LocalStore(app)
             listOf(
@@ -595,17 +604,20 @@ class AppTest {
                     "draft/project-task",
                     "journal/project-task",
                     "attachments/project-task",
+                    "bug-report/shake",
+                    "bug-report/screenshot",
+                    "bug-report/last-task",
                 )
                 .forEach { local.remove(it) }
         }
         compose.runOnUiThread {
-            model = ClientModel(app, "ws://127.0.0.1:${server.port}/rpc", "/fixture", true)
+            model = ClientModel(app, "ws://127.0.0.1:${server.port}/rpc", "/fixture", true, "/fixture/remote-codex")
             store.put("fixture", model)
             compose.activity.setContent { RemoteTheme { App(model) } }
             model.saveCredential("fixture-credential-0000000000000000000000000000000000000")
         }
         compose.waitUntil(15000) {
-            model.state.value.ready &&
+            model.reports.state.value.loaded && model.state.value.ready &&
                 model.state.value.projects.size == 2 &&
                 model.state.value.tasks.isNotEmpty() &&
                 model.state.value.modelCatalogStatus == ModelCatalogStatus.Ready
@@ -938,7 +950,7 @@ class AppTest {
         }
         runBlocking { LocalStore(app).saveToken("") }
         server.shutdown()
-        if (coverScreen) {
+        if (coverScreen || reportCoverOverride) {
             shell("wm size reset")
             shell("wm density reset")
         }
@@ -1063,8 +1075,25 @@ class AppTest {
 
     private fun enqueueFixture(text: String = "Do this next") {
         compose.onNodeWithTag("composer").performTextInput(text)
+        demoPause()
+        assertComposerActionFullyVisible(compose.onNodeWithContentDescription("Queue message"))
+        assertComposerActionFullyVisible(compose.onNodeWithContentDescription("Stop"))
         compose.onNodeWithContentDescription("Queue message").performClick()
         compose.waitUntil(10000) { !model.state.value.busy && model.state.value.queuedMessages.any { it.text == text } }
+        demoPause()
+    }
+
+    // Compose test clicks reach nodes that a Row pushed past its clipped edge, so check the
+    // unclipped bounds against the action row the user can actually see.
+    private fun assertComposerActionFullyVisible(action: SemanticsNodeInteraction) {
+        val row = compose.onNodeWithTag("composer-actions").fetchSemanticsNode()
+        val node = action.assertIsDisplayed().fetchSemanticsNode()
+        val rowRight = row.positionInRoot.x + row.size.width
+        val nodeRight = node.positionInRoot.x + node.size.width
+        assertTrue(
+            "Composer action ends at $nodeRight px beyond the action row edge at $rowRight px",
+            nodeRight <= rowRight + 0.5f,
+        )
     }
 
     @Test
@@ -1076,13 +1105,17 @@ class AppTest {
         assertTrue(steerRequests.isEmpty())
         assertEquals(listOf("Do this next", "Then review it"), model.state.value.queuedMessages.map { it.text })
         compose.onNodeWithTag("composer").performTextInput("An unfinished thought")
-        if (coverScreen) {
+        // The cover composer collapses the queue behind this shortcut only while a soft keyboard
+        // is open; the managed device may not show one.
+        if (coverScreen && compose.onAllNodesWithTag("show-queue").fetchSemanticsNodes().isNotEmpty()) {
             compose.onNodeWithTag("show-queue").assertIsDisplayed().performClick()
             compose.waitUntil(5000) { compose.onAllNodesWithTag("message-queue").fetchSemanticsNodes().isNotEmpty() }
         }
         val queued = queueItems.first()
+        demoPause(2500)
         compose.onNodeWithTag("send-queued-queue-1").performScrollTo().performClick()
         compose.waitUntil(10000) { !model.state.value.busy && model.state.value.queuedMessages.size == 1 }
+        demoPause()
         assertEquals(1, steerRequests.size)
         assertEquals(queued["input"], steerRequests.single()["input"])
         assertEquals(queued["clientUserMessageId"], steerRequests.single()["clientUserMessageId"])
@@ -1092,6 +1125,7 @@ class AppTest {
         assertNull(model.state.value.journal)
         compose.onNodeWithTag("remove-queued-queue-2").performClick()
         compose.waitUntil(10000) { !model.state.value.busy && model.state.value.queuedMessages.isEmpty() }
+        demoPause(2000)
         assertEquals(1, steerRequests.size)
         compose.onNodeWithTag("composer").assertTextContains("An unfinished thought")
     }
@@ -1363,6 +1397,31 @@ class AppTest {
     }
 
     @Test
+    fun visualizationLoadsFromHistoryExpandsAndShowsMissingFileRecovery() {
+        val path = "/fixture/chart.html"
+        remoteFiles[path] = Base64.getEncoder().encodeToString("<div id=\"chart\">Fixture visualization</div>".toByteArray())
+        historyOverride = obj("data" to JsonArray(listOf(obj(
+            "id" to s("visual-turn"), "status" to s("completed"),
+            "items" to JsonArray(listOf(obj("id" to s("visual-reply"), "type" to s("agentMessage"),
+                "text" to s("Before the chart.\n\nvisualize{\"path\":\"$path\",\"title\":\"Fixture chart\",\"mode\":\"wide\"}\n\nAfter the chart."))))
+        ))))
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(15000) { compose.onAllNodesWithTag("visualization-webview").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Before the chart.").assertExists()
+        compose.onNodeWithText("After the chart.").assertExists()
+        compose.onNodeWithTag("expand-visualization").performClick()
+        compose.onNodeWithTag("visualization-fullscreen").assertIsDisplayed()
+        compose.onNodeWithTag("close-visualization").performClick()
+        compose.onNodeWithTag("visualization-fullscreen").assertDoesNotExist()
+        compose.runOnUiThread { model.home() }
+        remoteFiles.remove(path)
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { compose.onAllNodesWithTag("visualization-error").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Retry").assertExists()
+        assertEquals(0, sent.get())
+    }
+
+    @Test
     fun remoteTextFileUsesMetadataAndOpensAReadablePreview() {
         compose.runOnUiThread { model.openTask("task-test") }
         compose.waitUntil(10000) {
@@ -1603,6 +1662,124 @@ class AppTest {
         compose.onNodeWithTag("composer").assertTextContains("Keep this idea")
         compose.onNodeWithTag("draft-attachment").assertIsDisplayed()
         demoPause(3500)
+    }
+
+    @Test
+    fun bugReportCapturesScreenAndStartsIsolatedFixTask() {
+        compose.runOnUiThread { model.newChat() }
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
+        compose.onNodeWithTag("composer").performTextInput("Keep my original draft")
+        compose.onNodeWithTag("app-menu").performClick()
+        compose.onNodeWithTag("report-bug").performClick()
+        compose.waitUntil(10000) { model.reports.state.value.visible && !model.reports.state.value.capturing }
+        val draft = requireNotNull(model.reports.state.value.draft)
+        assertEquals("chat", draft.context.str("screen"))
+        assertEquals("Keep my original draft", draft.context.str("draft"))
+        assertEquals("captured", draft.diagnostics.map("screenshot").str("status"))
+        val screenshot = draft.attachments.single { it.id == "screenshot.png" }
+        assertNotNull(android.graphics.BitmapFactory.decodeFile(screenshot.localPath))
+        compose.onNodeWithTag("bug-description").performTextInput("The queue button lost my message")
+        compose.onNodeWithTag("submit-bug-report").performClick()
+        compose.waitUntil(20000) { model.reports.state.value.lastTask == "task-test" && model.reports.state.value.draft == null }
+        assertEquals(1, environmentSetups.get())
+        assertEquals(1, worktreeAdds.get())
+        assertEquals(1, threadStarts.get())
+        assertEquals("project-remote", threadStartParams!!.str("projectId"))
+        assertTrue(remoteFiles.keys.any { it.contains("/report/") && it.contains("screenshot") })
+        assertTrue(acceptedText.contains("The queue button lost my message"))
+        assertEquals("Keep my original draft", runBlocking { LocalStore(app).get("draft/new") })
+        assertFalse(File(screenshot.localPath).exists())
+        compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy }
+    }
+
+    @Test
+    fun systemScreenshotOffersReportWithTheCapturedWindow() {
+        compose.waitUntil(5000) { model.reports.state.value.loaded }
+        compose.runOnUiThread { model.newChat() }
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
+        compose.onNodeWithTag("composer").performTextInput("Screenshot this draft")
+        shell("input keyevent KEYCODE_SYSRQ")
+        compose.waitUntil(10000) { compose.onAllNodesWithText("Report bug").fetchSemanticsNodes().isNotEmpty() }
+        assertFalse(model.reports.state.value.visible)
+        compose.onNodeWithText("Report bug").performClick()
+        compose.waitUntil(10000) { model.reports.state.value.visible && !model.reports.state.value.capturing }
+        val draft = requireNotNull(model.reports.state.value.draft)
+        assertEquals("Screenshot this draft", draft.context.str("draft"))
+        assertEquals("captured", draft.diagnostics.map("screenshot").str("status"))
+        val screenshot = draft.attachments.single { it.id == "screenshot.png" }
+        assertNotNull(android.graphics.BitmapFactory.decodeFile(screenshot.localPath))
+    }
+
+    @Test
+    fun bugReportScreenshotSurvivesOfflineRecreationAndCanBeRemoved() {
+        compose.runOnUiThread {
+            model.reports.open {
+                assertFalse(model.reports.state.value.visible)
+                assertTrue(model.reports.state.value.capturing)
+                captureBugReportScreenshot(compose.activity)
+            }
+        }
+        compose.waitUntil(10000) { model.reports.state.value.visible && !model.reports.state.value.capturing }
+        val original = requireNotNull(model.reports.state.value.draft)
+        val screenshot = original.attachments.single { it.id == "screenshot.png" }
+        val originalBytes = File(screenshot.localPath).readBytes()
+        compose.onNodeWithTag("bug-description").performTextInput("Remember this offline")
+        compose.waitUntil(5000) { BugReportStore(File(app.filesDir, "bug-reports")).load()?.description == "Remember this offline" }
+        compose.runOnUiThread {
+            store.clear()
+            model = ClientModel(app, "ws://127.0.0.1:${server.port}/rpc", "/fixture", true, "/fixture/remote-codex")
+            store.put("fixture", model)
+            compose.activity.setContent { RemoteTheme { App(model) } }
+        }
+        compose.waitUntil(5000) { model.reports.state.value.loaded }
+        var recaptured = false
+        compose.runOnUiThread { model.reports.open { recaptured = true; byteArrayOf() } }
+        compose.onNodeWithTag("bug-description").assertTextContains("Remember this offline")
+        assertFalse(recaptured)
+        assertEquals(original.capturedAt, model.reports.state.value.draft!!.capturedAt)
+        assertArrayEquals(originalBytes, File(screenshot.localPath).readBytes())
+        compose.onNodeWithTag("submit-bug-report").assertTextContains("Save report")
+        compose.onNodeWithTag("submit-bug-report").performClick()
+        compose.waitUntil(5000) { !model.reports.state.value.visible }
+        assertEquals(0, threadStarts.get())
+        compose.runOnUiThread { model.reports.open() }
+        compose.runOnUiThread { model.reports.removeAttachment("screenshot.png") }
+        compose.waitUntil(5000) { model.reports.state.value.draft!!.attachments.none { it.id == "screenshot.png" } }
+        assertFalse(File(screenshot.localPath).exists())
+        compose.onNodeWithTag("discard-bug-report").performClick()
+        compose.waitUntil(5000) { model.reports.state.value.draft == null }
+        assertFalse(File(app.filesDir, "bug-reports/${original.id}").exists())
+    }
+
+    @Test
+    fun bugReportSettingsExcludesScreenshotAndPersistsShakePreference() {
+        assertFalse(model.reports.state.value.shakeEnabled)
+        compose.runOnUiThread { model.settings(); model.reports.shakeEnabled(false) }
+        compose.onNodeWithTag("app-menu").performClick()
+        compose.onNodeWithTag("report-bug").performClick()
+        compose.waitUntil(10000) { model.reports.state.value.visible && !model.reports.state.value.capturing }
+        val report = requireNotNull(model.reports.state.value.draft)
+        assertEquals("omitted", report.diagnostics.map("screenshot").str("status"))
+        assertTrue(report.attachments.none { it.id == "screenshot.png" })
+        assertFalse(report.context.toString().contains("fixture-credential"))
+        assertEquals("false", runBlocking { LocalStore(app).get("bug-report/shake") })
+        compose.onNodeWithTag("close-bug-report").performClick()
+        assertEquals(report.id, model.reports.state.value.draft!!.id)
+    }
+
+    @Test
+    fun bugReportCaptureFailureStillAllowsSubmissionOnCoverDisplay() {
+        reportCoverOverride = true
+        shell("wm size 1080x1272")
+        shell("wm density 420")
+        compose.waitForIdle()
+        compose.runOnUiThread { model.reports.open { error("Fixture capture failure") } }
+        compose.waitUntil(10000) { model.reports.state.value.visible && !model.reports.state.value.capturing }
+        assertEquals("unavailable", model.reports.state.value.draft!!.diagnostics.map("screenshot").str("status"))
+        compose.onNodeWithTag("bug-description").performTextInput("A cover-screen bug")
+        compose.onNodeWithTag("submit-bug-report").assertIsDisplayed().performClick()
+        compose.waitUntil(20000) { model.reports.state.value.lastTask == "task-test" }
+        assertEquals(1, sent.get())
     }
 
     @Test
