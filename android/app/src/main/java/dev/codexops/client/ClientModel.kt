@@ -440,22 +440,8 @@ constructor(
                 "archived" to JsonPrimitive(before.archived),
                 "modelProviders" to if (before.query.isBlank()) JsonArray(emptyList()) else null,
                 "sortKey" to s("updated_at"),
-                "sourceKinds" to
-                    JsonArray(
-                        listOf(
-                                "cli",
-                                "vscode",
-                                "exec",
-                                "appServer",
-                                "subAgent",
-                                "subAgentReview",
-                                "subAgentCompact",
-                                "subAgentThreadSpawn",
-                                "subAgentOther",
-                                "unknown",
-                            )
-                            .map(::s)
-                    ),
+                // Omit sourceKinds so list and search use the server's interactive-source
+                // default. Internal subagents (including Guardian reviewers) are not chats.
                 "cursor" to if (more) before.listCursor?.let(::s) else null,
                 "searchTerm" to before.query.takeIf { it.isNotBlank() }?.let(::s),
                 "projectId" to

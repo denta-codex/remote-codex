@@ -46,6 +46,7 @@ class AppTest {
     private val sent = AtomicInteger()
     private val prepared = AtomicInteger()
     private val modelLists = AtomicInteger()
+    private val browserRequests = CopyOnWriteArrayList<JsonObject>()
     private val workspaceMetadataReads = AtomicInteger()
     private val workspaceMetadataRejections = AtomicInteger()
     private val invalidDirectoryProbes = AtomicInteger()
@@ -142,6 +143,8 @@ class AppTest {
                                         return
                                     }
                                     if (method == "initialized") return
+                                    if (method == "thread/list" || method == "thread/search")
+                                        browserRequests.add(params)
                                     if (method.startsWith("thread/queue/") && method != "thread/queue/list")
                                         queueMutations.add(m)
                                     val result =
@@ -235,7 +238,7 @@ class AppTest {
                                                 obj(
                                                     "data" to
                                                         JsonArray(
-                                                            fixtureTasks(obj()).map { task ->
+                                                            fixtureTasks(params).map { task ->
                                                                 obj(
                                                                     "thread" to task,
                                                                     "snippet" to s("fixture match"),
@@ -678,7 +681,21 @@ class AppTest {
                             "status" to obj("type" to s("idle")),
                         ),
                     )
-        return tasks.filter { task ->
+        // Stock list/search default to interactive sources. Internal reviewers are only
+        // returned when the client explicitly includes their subagent source kind.
+        val internalTasks =
+            (params["sourceKinds"] as? JsonArray).orEmpty()
+                .map { it.jsonPrimitive.content }
+                .filter { it.startsWith("subAgent") }
+                .map { kind ->
+                    obj(
+                        "id" to s("internal-$kind"),
+                        "name" to s("Internal reviewer $kind"),
+                        "cwd" to s("/fixture"),
+                        "projectId" to JsonNull,
+                    )
+                }
+        return (tasks + internalTasks).filter { task ->
             val cwdMatches = params.str("cwd").let { it.isEmpty() || it == task.str("cwd") }
             val projectMatches =
                 if (!params.containsKey("projectId")) true
@@ -1525,6 +1542,36 @@ class AppTest {
         compose.waitUntil(15000) { model.state.value.ready && !model.state.value.busy }
         assertEquals(0, sent.get())
         compose.onNodeWithTag("send").assertIsNotEnabled()
+    }
+
+    @Test
+    fun taskBrowserExcludesInternalReviewers() {
+        fun assertInteractiveTasks() {
+            assertEquals(
+                listOf("task-test", "project-task"),
+                model.state.value.tasks.map { it.str("id") },
+            )
+            compose.onNodeWithText("Internal reviewer", substring = true).assertDoesNotExist()
+            compose.onNodeWithText(fixtureTitle).assertIsDisplayed()
+        }
+
+        assertInteractiveTasks()
+        for (search in listOf(false, true)) {
+            for (archived in listOf(false, true)) {
+                val count = browserRequests.size
+                compose.runOnUiThread {
+                    model.query(if (search) "fixture" else "")
+                    model.archived(archived)
+                }
+                compose.waitUntil(5000) { browserRequests.size > count }
+                compose.waitForIdle()
+                assertInteractiveTasks()
+                val request = browserRequests.last()
+                assertEquals(archived, request["archived"]?.jsonPrimitive?.boolean)
+                assertEquals(if (search) "fixture" else "", request.str("searchTerm"))
+                assertTrue((request["sourceKinds"] as? JsonArray).isNullOrEmpty())
+            }
+        }
     }
 
     @Test
