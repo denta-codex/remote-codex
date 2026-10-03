@@ -25,12 +25,14 @@ const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 const MAX_APK_BYTES: u64 = 256 * 1024 * 1024;
 const UPDATE_PREFIX: &str = "/remote-codex/v1/updates/releases/";
 const UPDATE_MANIFEST: &str = "/remote-codex/v1/updates/stable/latest.json";
+const APPROVAL_PATH: &str = "/remote-codex/v1/credentials";
 
 #[derive(Clone)]
 pub struct Config {
     socket: PathBuf,
     expected_authorization: [u8; 32],
     update_root: Option<PathBuf>,
+    approval_socket: Option<PathBuf>,
 }
 
 impl Config {
@@ -46,6 +48,7 @@ impl Config {
             socket: socket.into(),
             expected_authorization,
             update_root: None,
+            approval_socket: None,
         })
     }
 
@@ -58,6 +61,18 @@ impl Config {
             ));
         }
         self.update_root = Some(root);
+        Ok(self)
+    }
+
+    pub fn with_approval_socket(mut self, socket: impl Into<PathBuf>) -> io::Result<Self> {
+        let socket = socket.into();
+        if !socket.is_absolute() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "approval socket must be absolute",
+            ));
+        }
+        self.approval_socket = Some(socket);
         Ok(self)
     }
 }
@@ -172,6 +187,7 @@ where
 
 struct UpgradeRequest {
     websocket_key: String,
+    approval: bool,
 }
 
 async fn handle_client(
@@ -211,9 +227,32 @@ async fn handle_client(
         ValidatedRequest::WebSocket(request) => request,
     };
 
-    let socket = match check_socket(&config.socket) {
+    let target = if request.approval {
+        match config.approval_socket.as_ref() {
+            Some(socket) => socket,
+            None => {
+                write_rejection(
+                    &mut client,
+                    Rejection::new(503, "Service Unavailable", "No active approval session"),
+                )
+                .await?;
+                return Ok(());
+            }
+        }
+    } else {
+        &config.socket
+    };
+    let socket = match check_socket(target) {
         Ok(socket) => socket,
         Err(error) => {
+            if request.approval && error.kind() == io::ErrorKind::NotFound {
+                write_rejection(
+                    &mut client,
+                    Rejection::new(503, "Service Unavailable", "No active approval session"),
+                )
+                .await?;
+                return Ok(());
+            }
             write_bad_gateway(
                 &mut client,
                 if error.kind() == io::ErrorKind::NotFound {
@@ -229,6 +268,14 @@ async fn handle_client(
     let mut upstream = match timeout(CONNECT_TIMEOUT, UnixStream::connect(&socket)).await {
         Ok(Ok(stream)) => stream,
         Ok(Err(_)) => {
+            if request.approval {
+                write_rejection(
+                    &mut client,
+                    Rejection::new(503, "Service Unavailable", "Approval session unavailable"),
+                )
+                .await?;
+                return Ok(());
+            }
             write_bad_gateway(&mut client, GatewayFailure::SocketConnect).await?;
             return Ok(());
         }
@@ -312,7 +359,7 @@ fn validate_request(head: &[u8], config: &Config) -> Result<ValidatedRequest, Re
     }
     let path = request.path.unwrap_or_default();
     let update = parse_update_path(path);
-    if path != "/codex/rpc" && update.is_none() {
+    if path != "/codex/rpc" && path != APPROVAL_PATH && update.is_none() {
         return Err(Rejection::new(404, "Not Found", "Not Found"));
     }
     let authorization = unique_header(request.headers, "Authorization")
@@ -354,6 +401,7 @@ fn validate_request(head: &[u8], config: &Config) -> Result<ValidatedRequest, Re
         .ok_or_else(Rejection::bad_request)?;
     Ok(ValidatedRequest::WebSocket(UpgradeRequest {
         websocket_key: websocket_key.to_owned(),
+        approval: path == APPROVAL_PATH,
     }))
 }
 
@@ -739,6 +787,52 @@ mod tests {
         )
         .await;
         assert!(missing.starts_with("HTTP/1.1 404 Not Found"));
+    }
+
+    #[tokio::test]
+    async fn approval_route_requires_auth_and_does_not_start_a_session() {
+        let directory = tempdir().unwrap();
+        let socket = directory.path().join("absent.sock");
+        let config = Config::new("/absent-stock", TOKEN)
+            .unwrap()
+            .with_approval_socket(&socket)
+            .unwrap();
+        let request = valid_request().replace("/codex/rpc", APPROVAL_PATH);
+        let response = request_once_with_config(&request, config.clone()).await;
+        assert!(response.starts_with("HTTP/1.1 503"));
+        assert!(!socket.exists());
+        let response = request_once_with_config(&request.replace(TOKEN, "wrong"), config).await;
+        assert!(response.starts_with("HTTP/1.1 401"));
+    }
+
+    #[tokio::test]
+    async fn approval_route_forwards_only_to_approval_socket() {
+        let directory = tempdir().unwrap();
+        let socket = directory.path().join("approval.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let backend = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let (head, _) = read_head(&mut stream).await.unwrap();
+            assert!(head.starts_with(b"GET / HTTP/1.1"));
+            assert!(
+                !String::from_utf8(head)
+                    .unwrap()
+                    .to_lowercase()
+                    .contains("authorization")
+            );
+            stream.write_all(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: fixture\r\n\r\n").await.unwrap();
+        });
+        let config = Config::new("/stock-must-not-be-used", TOKEN)
+            .unwrap()
+            .with_approval_socket(socket)
+            .unwrap();
+        let response = request_once_with_config(
+            &valid_request().replace("/codex/rpc", APPROVAL_PATH),
+            config,
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 101"));
+        backend.await.unwrap();
     }
 
     #[tokio::test]

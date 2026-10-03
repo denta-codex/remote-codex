@@ -1,5 +1,71 @@
 # Validation
 
+## 2026-10-03 — Retired Autofill playground cleanup
+
+- Based on local main `c3ba403` (Android 0.3.1, build 28). Removed the experimental
+  Autofill activity, Settings entry, manifest registration, dedicated tests, and
+  experiment guide. Removed the obsolete playground availability statement.
+- Production Credential requests, approval transport, keyboard suppression,
+  protected-window screenshot checks, and prerelease version support remain intact.
+- Core/app unit tests, debug APK assembly, debug lint, and instrumentation APK
+  assembly passed using the existing managed JDK 17 and Android SDK.
+- All three selected Android 16 emulator tests passed with no skips or failures:
+  `CredentialRequestsTest#releaseUsesSeparateRouteClearsValueAndNeverReplays`,
+  `CredentialRequestsTest#pickerHandoffRecreationAndProtectedWindow`, and
+  `AppTest#bugReportSettingsExcludesScreenshotAndPersistsShakePreference`.
+- The merged debug manifest omits the experimental activity and retains the
+  non-exported production approval activity. Source/current-documentation searches
+  found no remaining playground references; historical validation and release
+  version fixtures are retained. `git diff --check` passed.
+- No live credentials were requested. No publication, deployment, or physical
+  phone installation was performed; new manual 1Password acceptance was not run.
+
+## 2026-10-03 — Android 0.3.1 (28)
+
+- Source revision: `f03ab1a47b4294658a09af732af2ea4e7a4005fc`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `8fd30df067902da46d6f12bf247a88eef9cac1d0a0aab0d19f43fd9e2e59e17a`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/home/agent/workspaces/remote-codex/artifacts/releases/run-20261003T145349Z-Z3DMhv.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
+## 2026-10-03 — Phone approval manual acceptance
+
+- On preview `0.3.1-phone.1 (27)`, the disposable Login fixture passed normal
+  and repeat reads, `read --no-newline`, and single-field `item get`. Caller-side
+  comparisons verified the expected fake value without displaying it.
+- Denial returned `denied` with no value. An unattended request ended with
+  `phone_session_ended_or_timed_out` and no value.
+- The user confirmed Back to requests cleared the field; selecting and filling
+  the request again delivered the expected value.
+- Vault/item listing, complete-item JSON, generated OTP, and item-create dry run
+  were rejected as `unsupported_operation` on the phone destination.
+- Manual post-approval screen reopen/reconnect testing was skipped at the user's
+  request. Automated no-replay coverage remains separate from this manual run.
+- Follow-up source change disables the credential field's automatic soft keyboard
+  while retaining focus, the password Autofill hint, and explicit Autofill requests.
+- Both focused `CredentialRequestsTest` emulator cases passed after integration
+  with main, covering focused Autofill delivery with soft-input-on-focus disabled,
+  picker handoff, recreation, capture protection, clearing, and lost-ack no replay.
+
+## 2026-10-03 — Android 0.3.1-phone.1 (27)
+
+- Source revision: `6113e5c6e9c1d67138c3f44aa69480e0c3a27234`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `78ffe28935b8fa8c3ee74bae91a1b9d27d8ea505411d26c978b03b7aca1be574`.
+- Outcome: Subsequently published to the private stable channel; authenticated
+  manifest and full APK verified by the publish workflow.
+- Build log: `/home/agent/.codex/worktrees/740e/remote-codex/artifacts/releases/run-20261003T141847Z-6Nzqep.log.build.log`.
+
+## 2026-10-03 — Android 0.3.0 (26)
+
+- Source revision: `770c8eeac43bd9c8a615ff1cee36e54b353933b2`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `b865e531198a8cb0cc60b45c43ee7c0fa29a31163dad36b62a465941f16a63bb`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/tmp/remote-codex-release-0.3.0/artifacts/releases/run-20261003T140323Z-eiOl6i.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
 ## 2026-10-03 — Intent-aware reports (unreleased)
 
 - Based on local main `6417fcb`. The report form now requires Investigate,
@@ -175,6 +241,34 @@
   `artifacts/validation/plan-composer/merge-phone-tests.xml`,
   `merge-compact-initial-tests.xml`, and `merge-cover-queue-tests.xml` in the same
   directory.
+
+## Phone approval preview — Android 0.2.11-phone.1 (22)
+
+- Published the previously built artifact; authenticated manifest and full APK verification passed.
+- Publication log: `artifacts/releases/run-20261003T021149Z-w8y2HN.log`.
+- Forwarder deployed through the existing workflow; stock Codex acceptance checks passed.
+- op-bridge phone.1 installed on Grace from integration commit `e8a80a2`; default route remains mac.
+- Fake-value end-to-end transport and natural idle expiry verified. Manual phone approval remains to be tested.
+- See `docs/PHONE-APPROVAL.md` for integration validation and rollout details.
+
+
+## 2026-10-03 — Android 0.2.11-phone.1 (22)
+
+- Source revision: `56c15d2535ad52e15468be28c865ee54a88e2abf`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `0f062304c2e9c024ca6bf33d7d557f601464faa4df8f48fe3de2719626476e48`.
+- Outcome: Built and signed locally; not published.
+- Build log: `/home/agent/.codex/worktrees/740e/remote-codex/artifacts/releases/run-20261003T020628Z-B9GgVQ.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
+## 2026-10-02 — Android 0.2.11-autofill.1 (21)
+
+- Source revision: `b1163c21ba557527ec6c46e1c9d88660126a8462`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `29968797286ceb65dd20a11599b5c25d3b9a95adf0ad9fa34f2560af3d668527`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/home/agent/.codex/worktrees/740e/remote-codex/artifacts/releases/run-20261002T191037Z-ktGkOk.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
 
 ## 2026-10-01 — Android 0.2.10 (20)
 

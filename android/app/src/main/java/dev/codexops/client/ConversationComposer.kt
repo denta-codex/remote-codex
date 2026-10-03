@@ -45,18 +45,20 @@ internal fun ConversationComposer(state: ScreenState, actions: ConversationActio
     var tray by rememberSaveable(state.thread) { mutableStateOf(false) }
     val window = LocalAppWindowClass.current
     val compact = window.coverScreen || window.compactHeight
-    val typing = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    val density = LocalDensity.current
+    val ime = WindowInsets.ime
+    val typing by remember(ime, density) { derivedStateOf { ime.getBottom(density) > 0 } }
     val settings = state.composerSettings()
     val project = state.projects.firstOrNull { it.id == state.newTaskOptions.projectId }
     val projectAvailable = state.newTaskOptions.projectId == null || project?.primaryRoot != null
-    val bottomActions: @Composable () -> Unit = {
+    val bottomActions: @Composable (Boolean) -> Unit = { cameraDock ->
         ComposerActions(state, actions, settings,
             onSettings = { focus.clearFocus(); keyboard?.hide(); tray = !tray },
             onPhotos = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
             onFiles = { filePicker.launch(arrayOf("*/*")) },
             onCamera = { actions.prepareCamera()?.let(camera::launch) },
             onSend = { tray = false; onSend(); keyboard?.hide(); actions.send() },
-            projectAvailable = projectAvailable)
+            projectAvailable = projectAvailable, cameraDock = cameraDock)
     }
     Surface(
         Modifier.padding(horizontal = if (compact) 8.dp else 12.dp, vertical = if (compact) 4.dp else 8.dp),
@@ -73,12 +75,21 @@ internal fun ConversationComposer(state: ScreenState, actions: ConversationActio
                     DraftAttachmentPreview(attachment) { actions.removeAttachment(attachment.id) }
                 }
             }
-            if (!tray && !state.willQueueMessage() && (!window.compactHeight && !typing || window.coverScreen && !typing))
+            if (!tray && !window.coverScreen && !state.willQueueMessage() && !window.compactHeight && !typing)
                 ProjectControl(state, actions, expanded = false)
             TextField(state.draft, actions::draft, Modifier.fillMaxWidth().testTag("composer"),
                 placeholder = { Text("Message ${state.host.displayName}…") },
+                trailingIcon = when {
+                    window.coverScreen && !tray && typing -> {
+                        { Box(Modifier.width(if (state.activeTurn != null) 208.dp else 156.dp)) { bottomActions(false) } }
+                    }
+                    window.coverScreen && !tray && state.activeTurn != null -> {
+                        { IconButton(actions::stop, enabled = state.ready) { Glyph(R.drawable.ic_stop, "Stop") } }
+                    }
+                    else -> null
+                },
                 minLines = if (compact || typing || state.willQueueMessage()) 1 else 2,
-                maxLines = if (window.compactHeight && !window.coverScreen) 2 else if (compact) 3 else 6, enabled = !state.busy,
+                maxLines = if (window.coverScreen && typing) 1 else if (window.compactHeight && !window.coverScreen) 2 else if (compact) 3 else 6, enabled = !state.busy,
                 colors = TextFieldDefaults.colors(
                     focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
                     disabledContainerColor = Color.Transparent, focusedIndicatorColor = Color.Transparent,
@@ -93,7 +104,7 @@ internal fun ConversationComposer(state: ScreenState, actions: ConversationActio
                 TextButton({ focus.clearFocus(); keyboard?.hide() }, Modifier.testTag("show-queue")) {
                     Text("Queued (${state.queuedMessages.size})")
                 }
-            if (!tray) bottomActions()
+            if (!tray && !(window.coverScreen && typing)) bottomActions(window.coverScreen)
         }
     }
     if (tray) ModalBottomSheet(
@@ -106,6 +117,8 @@ internal fun ConversationComposer(state: ScreenState, actions: ConversationActio
             .padding(horizontal = 16.dp).testTag("conversation-tray")) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("Conversation", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                if (window.coverScreen && state.activeTurn != null)
+                    IconButton(actions::stop, enabled = state.ready) { Glyph(R.drawable.ic_stop, "Stop") }
                 IconButton({ tray = false }) { Glyph(R.drawable.ic_close, "Close conversation settings") }
             }
             Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(vertical = 12.dp),
@@ -118,7 +131,7 @@ internal fun ConversationComposer(state: ScreenState, actions: ConversationActio
                 }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            bottomActions()
+            bottomActions(window.coverScreen)
             Spacer(Modifier.height(8.dp))
         }
     }
@@ -128,7 +141,7 @@ internal fun ConversationComposer(state: ScreenState, actions: ConversationActio
 private fun ComposerActions(
     state: ScreenState, actions: ConversationActions, settings: ComposerSettings,
     onSettings: () -> Unit, onPhotos: () -> Unit, onFiles: () -> Unit, onCamera: () -> Unit,
-    onSend: () -> Unit, projectAvailable: Boolean,
+    onSend: () -> Unit, projectAvailable: Boolean, cameraDock: Boolean,
 ) {
     var attachments by remember { mutableStateOf(false) }
     val shortWindow = LocalAppWindowClass.current.let { it.compactHeight && !it.coverScreen }
@@ -163,7 +176,7 @@ private fun ComposerActions(
         }
     }
     val sendControls: @Composable () -> Unit = {
-        if (state.activeTurn != null) IconButton(actions::stop, Modifier.size(48.dp), enabled = state.ready) {
+        if (state.activeTurn != null && !cameraDock) IconButton(actions::stop, Modifier.size(48.dp), enabled = state.ready) {
             Glyph(R.drawable.ic_stop, "Stop")
         }
         FilledIconButton(onSend, Modifier.testTag("send").size(48.dp), shape = CircleShape,
@@ -183,7 +196,23 @@ private fun ComposerActions(
         }    }
     BoxWithConstraints(Modifier.fillMaxWidth().padding(vertical = if (shortWindow) 2.dp else 6.dp).testTag("composer-actions")) {
         val stacked = maxWidth < 340.dp || LocalDensity.current.fontScale > 1.3f
-        if (stacked) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (LocalAppWindowClass.current.coverScreen) {
+            // The Razr's lenses and flash occupy the lower right. Keep the text field
+            // above that band and all three 48dp touch targets in its left-hand pocket.
+            // Only the IME lifts this row above the hardware; the settings sheet
+            // keeps the same camera clearance as the resting composer.
+            Row(Modifier.fillMaxWidth().heightIn(min = if (cameraDock) 80.dp else 48.dp)
+                .testTag(if (cameraDock) "cover-camera-dock" else "cover-composer-toolbar"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                sendControls()
+                attachmentControl()
+                OutlinedIconButton(onSettings, Modifier.size(48.dp).testTag("conversation-settings")
+                    .semantics { contentDescription = "Conversation settings, ${settings.model}, ${settings.effort}, ${settings.mode}" }) {
+                    Glyph(R.drawable.ic_sliders)
+                }
+            }
+        } else if (stacked) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             settingsControl(Modifier.fillMaxWidth())
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {

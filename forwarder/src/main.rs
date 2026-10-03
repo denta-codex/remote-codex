@@ -25,8 +25,11 @@ async fn main() -> io::Result<()> {
     let credential_directory = std::env::var("CREDENTIALS_DIRECTORY").unwrap_or_default();
     let update_root = std::env::var("REMOTE_CODEX_UPDATE_ROOT")
         .unwrap_or_else(|_| "/home/agent/.local/share/remote-codex/updates".to_owned());
-    let config: Config = load_config_from_credential(socket, Path::new(&credential_directory))?
+    let mut config: Config = load_config_from_credential(socket, Path::new(&credential_directory))?
         .with_update_root(update_root)?;
+    if let Ok(socket) = std::env::var("REMOTE_CODEX_APPROVAL_SOCKET") {
+        config = config.with_approval_socket(socket)?;
+    }
     let listener = TcpListener::bind(address).await?;
     eprintln!("Remote Codex forwarder listening on loopback");
     serve(listener, config, shutdown_signal()).await
