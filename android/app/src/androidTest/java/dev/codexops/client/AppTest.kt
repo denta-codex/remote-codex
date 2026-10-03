@@ -230,6 +230,7 @@ class AppTest {
     @Volatile private var createdTaskProject = ""
     @Volatile private var threadStartParams: JsonObject? = null
     @Volatile private var askPlanQuestion = false
+    @Volatile private var planText = "1. Inspect the code\n2. Make the change"
     private val turnRequests = CopyOnWriteArrayList<JsonObject>()
     private val queueItems = CopyOnWriteArrayList<JsonObject>()
     private val queueMutations = CopyOnWriteArrayList<JsonObject>()
@@ -749,7 +750,7 @@ class AppTest {
                                                             "id" to s("p"),
                                                             "type" to s("plan"),
                                                             "text" to
-                                                                s("1. Inspect the code\n2. Make the change"),
+                                                                s(planText),
                                                         ),
                                                 ),
                                             )
@@ -2804,6 +2805,49 @@ class AppTest {
         }
         assertEquals("An uncertain task mutation must not be replayed", 1, threadStarts.get())
         assertEquals("task-test", model.state.value.thread)
+    }
+
+    @Test
+    fun longPlanHeadingsStayReadableInlineAndFullscreen() {
+        val title = "Prevent socket fixes from being lost during deployments"
+        planText = "# $title\n\n## Summary\n\nKeep the actual clients working against the actual server.\n\n" +
+            "### Validation\n\n1. Inspect the code\n2. Verify the change with `checks`."
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil(5000) {
+            model.state.value.page == "chat" && model.state.value.collaborationModes.size == 2
+        }
+        compose.onNodeWithTag("mode-selector").performClick()
+        compose.onNodeWithTag("mode-plan").performClick()
+        compose.onNodeWithTag("composer").performTextInput("Propose a safe change")
+        compose.onNodeWithTag("send").performClick()
+        compose.waitUntil(10000) {
+            model.state.value.entries.any { it.kind == "plan" && it.completed }
+        }
+
+        fun assertCompactTitle(container: String) {
+            val inContainer = hasAnyAncestor(hasTestTag(container))
+            val titleMatcher = hasText(title) and inContainer
+            compose.waitUntil(5000) {
+                compose.onAllNodes(titleMatcher).fetchSemanticsNodes().isNotEmpty()
+            }
+            val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+            compose.onNode(titleMatcher).performSemanticsAction(
+                androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult
+            ) { it(layouts) }
+            assertTrue("Title should wrap naturally within three lines", layouts.single().lineCount <= 3)
+            assertTrue("Plan title must use reading typography", layouts.single().layoutInput.style.fontSize.value <= 24f)
+            compose.onNode(titleMatcher).assertIsDisplayed()
+            compose.onNode(hasText("Summary") and inContainer).assertIsDisplayed()
+        }
+
+        compose.onNodeWithTag("open-plan-fullscreen").performScrollTo()
+        assertCompactTitle("plan-card")
+        compose.onNodeWithTag("open-plan-fullscreen").performClick()
+        compose.onNodeWithTag("plan-fullscreen").assertIsDisplayed()
+        assertCompactTitle("plan-fullscreen")
+        compose.onNodeWithTag("implement-plan-fullscreen").assertIsDisplayed()
+        compose.onNodeWithTag("close-plan-fullscreen").performClick()
+        compose.onNodeWithTag("plan-fullscreen").assertDoesNotExist()
     }
 
     @Test
