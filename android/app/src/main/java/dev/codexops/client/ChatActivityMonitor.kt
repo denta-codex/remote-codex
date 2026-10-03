@@ -70,6 +70,17 @@ internal class ChatActivityMonitor(
         persist { lock.withLock { save(id, marker(id).seen(signature)) } }
     }
 
+    suspend fun markUnread(id: String) {
+        changed(id)
+        lock.withLock { save(id, marker(id).copy(manualUnread = true)) }
+    }
+
+    /** Opening clears a manual reminder; automatic unread still waits for the reply to be viewed. */
+    suspend fun opened(id: String) {
+        changed(id)
+        lock.withLock { save(id, marker(id).copy(manualUnread = false)) }
+    }
+
     private fun persist(block: suspend () -> Unit) {
         scope.launch {
             try { block() } catch (e: CancellationException) { throw e }
@@ -119,7 +130,7 @@ internal class ChatActivityMonitor(
             lock.withLock {
                 val old = marker(id)
                 // A new live turn is evidence of new work, including chats first seen in this session.
-                if (old.observed == null && old.read == null) save(id, ReplyReadState(read = ""))
+                if (old.observed == null && old.read == null) save(id, old.copy(read = ""))
             }
         }
         wake.value++
@@ -137,7 +148,7 @@ internal class ChatActivityMonitor(
         val active = runtime[id] in setOf(ChatIndicator.Working, ChatIndicator.Approval, ChatIndicator.Input)
         lock.withLock {
             val old = marker(id)
-            if (active && old.observed == null && old.read == null) save(id, ReplyReadState(read = "")) else emit(id)
+            if (active && old.observed == null && old.read == null) save(id, old.copy(read = "")) else emit(id)
         }
         if (active) return
         // The latest turn is enough to compare assistant output; title/project edits never create unread.

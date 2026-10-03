@@ -71,6 +71,14 @@ constructor(
             st.tasks, st.listCursor, st.listInitialized, st.listFailed, st.listIndex, st.listOffset)
     }
 
+    private fun invalidateArchiveSnapshots() {
+        // Preserve each tab's search and sort choices while forcing fresh server membership.
+        listSnapshots.replaceAll { _, saved ->
+            saved.copy(tasks = emptyList(), cursor = null, initialized = false, failed = false,
+                index = 0, offset = 0)
+        }
+    }
+
     private fun showList(archive: Boolean) {
         cancelList()
         saveList()
@@ -436,7 +444,12 @@ constructor(
         launchList(more = true)
     }
 
-    override fun retryList() { launchList(more = _state.value.listInitialized && _state.value.listCursor != null) }
+    override fun retryList() {
+        if (_state.value.uncertainTaskActions.isNotEmpty()) {
+            cancelList()
+            launchList()
+        } else launchList(more = _state.value.listInitialized && _state.value.listCursor != null)
+    }
 
     override fun listPosition(index: Int, offset: Int) {
         _state.update { it.copy(listIndex = index, listOffset = offset) }
@@ -448,59 +461,79 @@ constructor(
             listFailed = false, listIndex = 0, listOffset = 0) }
     }
 
-    override fun restoreChat(id: String) {
-        if (!_state.value.ready || id in _state.value.restoring) return
-        val reconcileOnly = id in _state.value.uncertainRestores
-        _state.update { it.copy(restoring = it.restoring + id, error = null) }
+    override fun markTaskUnread(id: String) {
+        if (_state.value.tasks.none { it.str("id") == id }) return
         viewModelScope.launch {
             try {
-                if (!reconcileOnly) {
-                    try {
-                        rpc.call("thread/unarchive", obj("threadId" to s(id)))
-                        restored(id)
-                        return@launch
-                    } catch (e: CancellationException) { throw e
-                    } catch (_: Exception) {
-                        _state.update { it.copy(uncertainRestores = it.uncertainRestores + id) }
-                    }
-                }
-                // A failed write may have succeeded. Reconcile before enabling another write.
-                var cursor: String? = null
-                val seen = mutableSetOf<String>()
-                do {
-                    val response = rpc.call("thread/list", obj("archived" to JsonPrimitive(true),
-                        "limit" to JsonPrimitive(30), "cursor" to cursor?.let(::s),
-                        "modelProviders" to JsonArray(emptyList())))
-                    if (response.list("data").any { it.str("id") == id }) {
-                        _state.update { it.copy(uncertainRestores = it.uncertainRestores - id,
-                            error = "Chat is still archived. You can try Restore again.") }
-                        return@launch
-                    }
-                    cursor = response.cursor()
-                    check(cursor == null || seen.add(cursor)) { "Archive cursor repeated" }
-                } while (cursor != null)
-                restored(id)
-            } catch (e: CancellationException) { throw e
-            } catch (_: Exception) {
-                _state.update { it.copy(error = "Restore could not be verified. Use Check status before trying again.",
-                    uncertainRestores = it.uncertainRestores + id) }
-            } finally {
-                _state.update { it.copy(restoring = it.restoring - id) }
+                activityMonitor.markUnread(id)
+                _state.update { it.copy(taskNotice = TaskNotice(UUID.randomUUID().toString(), "Marked unread")) }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                _state.update { it.copy(error = "Could not save the unread reminder.") }
             }
         }
     }
 
-    private fun restored(id: String) {
-        // An older in-flight archive page must not put the restored row back.
-        if (_state.value.archived) cancelList()
-        val archived = listSnapshots[true]
-        if (archived != null) listSnapshots[true] = archived.copy(tasks = archived.tasks.filterNot { it.str("id") == id })
-        // Reload the inbox when it is next visited so the restored chat can appear in server order.
-        listSnapshots.remove(false)
-        _state.update { st -> st.copy(
-            tasks = if (st.archived) st.tasks.filterNot { it.str("id") == id } else st.tasks,
-            uncertainRestores = st.uncertainRestores - id,
-            listInitialized = if (st.archived) st.listInitialized else false) }
+    override fun dismissTaskNotice(noticeId: String) {
+        _state.update { if (it.taskNotice?.id == noticeId) it.copy(taskNotice = null) else it }
+    }
+
+    override fun undoTaskAction(noticeId: String) {
+        val notice = _state.value.taskNotice?.takeIf { it.id == noticeId } ?: return
+        val id = notice.threadId ?: return
+        val archived = notice.undoArchived ?: return
+        dismissTaskNotice(noticeId)
+        changeTaskArchive(id, archived)
+    }
+
+    override fun archiveTask(id: String, archived: Boolean) {
+        val before = _state.value
+        if (before.listLoading || before.archived == archived || before.tasks.none { it.str("id") == id }) return
+        changeTaskArchive(id, archived)
+    }
+
+    private fun changeTaskArchive(id: String, archived: Boolean) {
+        val before = _state.value
+        if (id in before.pendingTaskActions || id in before.uncertainTaskActions) return
+        if (!before.ready) {
+            _state.update { it.copy(error = "Reconnect before changing archived tasks.") }
+            return
+        }
+        // Reserve synchronously so repeated releases/accessibility actions cannot double-send.
+        _state.update { it.copy(pendingTaskActions = it.pendingTaskActions + id, error = null) }
+        viewModelScope.launch {
+            try {
+                rpc.call(if (archived) "thread/archive" else "thread/unarchive", obj("threadId" to s(id)))
+            } catch (e: Exception) {
+                if (e is CancellationException && e !is TimeoutCancellationException) throw e
+                // Reads started before the failed request cannot reconcile its outcome.
+                cancelList()
+                invalidateArchiveSnapshots()
+                _state.update {
+                    it.copy(
+                        listLoading = false,
+                        listInitialized = false,
+                        uncertainTaskActions = if (e is RpcRejected) it.uncertainTaskActions else it.uncertainTaskActions + id,
+                        error = if (e is RpcRejected) "The server rejected the archive change."
+                            else "Archive outcome unknown. Reconnect or refresh the task list before trying again. No retry was sent.",
+                    )
+                }
+                return@launch
+            } finally {
+                _state.update { it.copy(pendingTaskActions = it.pendingTaskActions - id) }
+            }
+            // Only an acknowledged mutation removes a row or offers its inverse as Undo.
+            cancelList()
+            invalidateArchiveSnapshots()
+            _state.update {
+                it.copy(
+                    tasks = if (it.archived != archived) it.tasks.filterNot { row -> row.str("id") == id } else it.tasks,
+                    listInitialized = false,
+                    taskNotice = TaskNotice(UUID.randomUUID().toString(), if (archived) "Task archived" else "Task unarchived", id, !archived),
+                )
+            }
+            if (_state.value.page in listOf("home", "archives")) launchList()
+        }
     }
 
     private suspend fun refreshProjects() {
@@ -596,7 +629,11 @@ constructor(
                         is TaskProjectFilter.Project -> row.str("projectId") == filter.id
                     } }.forEach { row -> if (row.str("id").isNotBlank()) rows[row.str("id")] = row }
                 cursor = next
-                _state.update { it.copy(tasks = rows.values.toList(), listCursor = cursor, listInitialized = true) }
+                val confirmedIds = response.list("data").map {
+                    (if (before.query.isBlank()) it else it.map("thread")).str("id")
+                }.toSet()
+                _state.update { it.copy(tasks = rows.values.toList(), listCursor = cursor, listInitialized = true,
+                    uncertainTaskActions = it.uncertainTaskActions - confirmedIds) }
             } while (scopedSearch && rows.size < target && cursor != null)
         } catch (e: CancellationException) { throw e
         } catch (_: Exception) {
@@ -773,6 +810,7 @@ constructor(
                 )
             }
             readQueue(id)
+            if (n == selection) activityMonitor.opened(id)
         } finally {
             if (n == selection) {
                 hydrating = false
@@ -1952,6 +1990,13 @@ constructor(
                     }
                 }
             }
+            return
+        }
+        if (event.str("method") in setOf("thread/archived", "thread/unarchived")) {
+            invalidateArchiveSnapshots()
+            cancelList()
+            if (_state.value.page in listOf("home", "archives")) launchList()
+            else _state.update { it.copy(listInitialized = false) }
             return
         }
         activityMonitor.event(event)

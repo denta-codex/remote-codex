@@ -138,12 +138,13 @@ data class ScreenState(
     val listFailed: Boolean = false,
     val query: String = "",
     val archived: Boolean = false,
+    val pendingTaskActions: Set<String> = emptySet(),
+    val uncertainTaskActions: Set<String> = emptySet(),
+    val taskNotice: TaskNotice? = null,
     val chatSort: ChatSort = ChatSort.Recent,
     val listInitialized: Boolean = false,
     val listIndex: Int = 0,
     val listOffset: Int = 0,
-    val restoring: Set<String> = emptySet(),
-    val uncertainRestores: Set<String> = emptySet(),
     val thread: String? = null,
     val threadCwd: String? = null,
     val title: String = "New chat",
@@ -171,6 +172,13 @@ data class ScreenState(
     val filePreview: FilePreviewState? = null,
 )
 
+data class TaskNotice(
+    val id: String,
+    val message: String,
+    val threadId: String? = null,
+    val undoArchived: Boolean? = null,
+)
+
 fun ScreenState.collaborationModel(): String? =
     newTaskOptions.model ?: threadModel ?: models.firstOrNull(ServerModelOption::isDefault)?.id
 
@@ -189,7 +197,6 @@ interface HomeActions {
     fun applyListOptions(project: TaskProjectFilter, sort: ChatSort)
     fun retryList()
     fun listPosition(index: Int, offset: Int)
-    fun restoreChat(id: String)
 
     fun query(value: String)
 
@@ -198,6 +205,14 @@ interface HomeActions {
     fun newChat()
 
     fun openTask(id: String)
+
+    fun archiveTask(id: String, archived: Boolean)
+
+    fun markTaskUnread(id: String)
+
+    fun undoTaskAction(noticeId: String)
+
+    fun dismissTaskNotice(noticeId: String)
 }
 
 interface SettingsActions {

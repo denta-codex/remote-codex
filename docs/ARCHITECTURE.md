@@ -59,6 +59,25 @@ deterministic path under `CODEX_HOME/worktrees/remote-codex-<operation>/workspac
 Project identity remains the selected stock `projectId`; it is not inferred from
 or replaced by the worktree path.
 
+Task rows use physical left swipe to archive (unarchive in Archived), right swipe
+to mark unread, and long press to copy the existing `codex://threads/<id>` deep
+link. TalkBack custom actions provide the same operations. A deliberate distance
+threshold arms the action; release commits it, while cancellation or a short drag
+returns the row without a mutation. Archive changes use stock `thread/archive`
+and `thread/unarchive`, reserve the task while pending, and offer Undo only after
+acknowledgement. Failed or disconnected requests are never automatically replayed.
+An uncertain row remains blocked until a fresh server list establishes its tab;
+reconnect only reads state. Archive notifications from other clients refresh the
+visible list.
+
+The pinned stock protocol has no unread-state API. Manual unread reminders extend
+the existing phone-local reply read markers, persisted by host in Room. Opening
+clears the manual reminder after successful hydration; automatic unread replies
+still require viewing their content. Repeated Mark unread gestures are idempotent;
+archive, filtering, reconnect, and app recreation preserve the reminder. Existing
+activity monitoring continues to flag new replies; read state does not synchronize
+with other clients.
+
 Worktree orchestration is a narrow client adapter over stock `project/read` and
 `command/exec`; there is no invented worktree RPC and no second project browser.
 The command shape and `dangerFullAccess` policy match the host-verified

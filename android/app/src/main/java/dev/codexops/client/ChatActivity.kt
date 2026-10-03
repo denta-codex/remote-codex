@@ -37,19 +37,25 @@ internal fun replySignature(turn: String, items: List<JsonObject>): String? {
 }
 
 /** First observation establishes a baseline, so upgrading does not mark old history unread. */
-internal data class ReplyReadState(val observed: String? = null, val read: String? = null) {
-    val unread get() = observed != null && observed != read
+internal data class ReplyReadState(
+    val observed: String? = null,
+    val read: String? = null,
+    val manualUnread: Boolean = false,
+) {
+    val unread get() = manualUnread || observed != null && observed != read
     fun observe(signature: String?): ReplyReadState = when {
         signature == null -> this
-        observed == null && read == null -> ReplyReadState(signature, signature)
+        observed == null && read == null -> copy(observed = signature, read = signature)
         else -> copy(observed = signature)
     }
     fun seen(signature: String) = ReplyReadState(signature, signature)
-    fun encode() = obj("observed" to observed?.let(::s), "read" to read?.let(::s)).toString()
+    fun encode() = obj("observed" to observed?.let(::s), "read" to read?.let(::s),
+        "manualUnread" to JsonPrimitive(manualUnread)).toString()
     companion object {
         fun decode(value: String): ReplyReadState = runCatching {
             val json = wire.parseToJsonElement(value).jsonObject
-            ReplyReadState(json.str("observed").ifBlank { null }, json.str("read").ifBlank { null })
+            ReplyReadState(json.str("observed").ifBlank { null }, json.str("read").ifBlank { null },
+                json["manualUnread"] == JsonPrimitive(true))
         }.getOrDefault(ReplyReadState())
     }
 }

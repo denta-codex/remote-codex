@@ -1,5 +1,39 @@
 # Validation
 
+## Task-row gestures — unreleased
+
+- Integrated with main `9a622a6`, retaining the compact inbox, server recency
+  ordering, independent archive/inbox filters, and automatic reply indicators.
+  Manual unread extends the existing host-scoped reply marker; it does not add
+  a second unread store. Opening clears the manual reminder while unseen new
+  replies remain unread until viewed. Archive snapshots refresh without losing
+  each tab's search/sort choices.
+- Integration validation: all six gesture tests below passed in two selected
+  runs, plus `AppTest#compactArchivesRestoreAndNavigation` and
+  `AppTest#readingEarlierParagraphKeepsNewReplyUnread`. All six
+  `ChatActivityTest` unit tests passed, including manual/automatic unread
+  interaction, persistence, and host isolation. Android lint passed.
+- Reproduced the missing right-swipe behavior with `AppTest#taskSwipeMarksUnread`:
+  the baseline failed because no unread indicator appeared after swiping.
+- Implemented left-swipe Archive/Unarchive, right-swipe Mark unread, long-press
+  deep-link copying, threshold haptics, cancellation, TalkBack actions, and
+  acknowledgement-only Undo. Unread reminders persist locally on the phone;
+  they do not synchronize with desktop unread state.
+- Passed six selected Android 16 managed-device tests using
+  `scripts/emulator-test --tests`:
+  `AppTest#taskSwipeMarksUnread`,
+  `AppTest#taskSwipesArchiveUndoAndUnarchive`,
+  `AppTest#taskLongPressCopiesLinkAndAccessibleActionsWork`,
+  `AppTest#uncertainArchiveDoesNotReplayOnReconnect`,
+  `AppTest#rejectedArchiveKeepsTaskAndOffersNoUndo`, and
+  `AppTest#taskGesturesOnCompactScreenRespectCancellationAndPhysicalDirection`.
+  Coverage includes app recreation, clearing unread after opening, repeat
+  swipes, short/cancelled gestures, a compact RTL layout, explicit rejection,
+  and a committed archive whose response is lost before reconnect.
+- `:app:lintDebug` and `git diff --check` passed. Tests use the local WebSocket
+  fixture; no live account mutations or physical-phone verification occurred.
+- No release, publication, forwarder deployment, or phone installation.
+
 ## 2026-10-03 — Android 0.2.13 (25)
 
 - Source revision: `a85c2a6bed72c9116353a5bc520ff7c9ff2e3d78`.

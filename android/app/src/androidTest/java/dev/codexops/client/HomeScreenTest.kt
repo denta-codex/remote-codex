@@ -35,7 +35,10 @@ class HomeScreenTest {
             state.value = state.value.copy(projectFilter = project, chatSort = sort)
         }
         override fun listPosition(index: Int, offset: Int) = Unit
-        override fun restoreChat(id: String) = Unit
+        override fun archiveTask(id: String, archived: Boolean) = Unit
+        override fun markTaskUnread(id: String) = Unit
+        override fun undoTaskAction(noticeId: String) = Unit
+        override fun dismissTaskNotice(noticeId: String) = Unit
         override fun retryList() { retries++ }
         override fun moreTasks() { moreRequests++; state.value = state.value.copy(listLoading = true) }
         override fun newChat() = Unit

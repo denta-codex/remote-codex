@@ -4,7 +4,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -17,6 +16,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
@@ -33,12 +33,25 @@ import java.time.format.DateTimeFormatter
 
 @Composable
 internal fun HomeScreen(st: ScreenState, actions: HomeActions) {
-    key(st.archived) { ChatBrowser(st, actions) }
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(st.taskNotice?.id) {
+        val notice = st.taskNotice ?: return@LaunchedEffect
+        val result = snackbar.showSnackbar(notice.message,
+            actionLabel = if (notice.undoArchived != null) "Undo" else null,
+            withDismissAction = true, duration = SnackbarDuration.Long)
+        if (result == SnackbarResult.ActionPerformed) actions.undoTaskAction(notice.id)
+        else actions.dismissTaskNotice(notice.id)
+    }
+    Box(Modifier.fillMaxSize()) {
+        key(st.archived) { ChatBrowser(st, actions) }
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(12.dp))
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ChatBrowser(st: ScreenState, actions: HomeActions) {
+    val context = LocalContext.current
     var sheet by remember { mutableStateOf(false) }
     val cover = LocalAppWindowClass.current.coverScreen
     val list = rememberLazyListState(st.listIndex, st.listOffset)
@@ -107,15 +120,26 @@ private fun ChatBrowser(st: ScreenState, actions: HomeActions) {
                 st.projects.firstOrNull { it.id == projectId }?.name ?: "Project"
             } ?: "No project"
             val date = chatTimestamp(task.str(if (st.chatSort == ChatSort.Recent) "recencyAt" else "createdAt"))
+            val activity = st.chatActivity[id] ?: ChatActivity(runtimeIndicator(task.map("status")))
+            val pending = id in st.pendingTaskActions
             Column(Modifier.fillMaxWidth()) {
-                Column(Modifier.fillMaxWidth().clickable { actions.openTask(id) }
+                TaskSwipeRow(
+                    id = id, archived = st.archived, unread = activity.unread, pending = pending,
+                    archiveEnabled = st.ready && !st.listLoading && !pending && id !in st.uncertainTaskActions,
+                    unreadEnabled = !st.listLoading && !pending,
+                    onOpen = { if (!pending && !st.listLoading) actions.openTask(id) },
+                    onCopy = { copyThreadDeeplink(context, id) },
+                    onArchive = { actions.archiveTask(id, !st.archived) },
+                    onUnread = { actions.markTaskUnread(id) },
+                ) {
+                Column(Modifier.fillMaxWidth()
                     .heightIn(min = 64.dp).padding(vertical = 14.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(task.str("name").ifBlank { task.str("preview").take(100).ifBlank { "Untitled chat" } },
                             modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium,
                             maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        val activity = st.chatActivity[id] ?: ChatActivity(runtimeIndicator(task.map("status")))
-                        ChatStatusIndicator(if (st.ready) activity.indicator
+                        if (pending) CircularProgressIndicator(Modifier.padding(start = 12.dp).size(18.dp), strokeWidth = 2.dp)
+                        else ChatStatusIndicator(if (st.ready) activity.indicator
                             else if (activity.unread) ChatIndicator.Unread else ChatIndicator.None)
                     }
                     Spacer(Modifier.height(5.dp))
@@ -123,11 +147,10 @@ private fun ChatBrowser(st: ScreenState, actions: HomeActions) {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                if (st.archived) TextButton(onClick = { actions.restoreChat(id) },
-                    enabled = id !in st.restoring) {
-                    Text(when { id in st.restoring -> "Checking…"
-                        id in st.uncertainRestores -> "Check status"
-                        else -> "Restore" })
+                }
+                if (id in st.uncertainTaskActions) TextButton(onClick = actions::retryList,
+                    enabled = st.ready && !st.listLoading) {
+                    Text("Check status")
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             }

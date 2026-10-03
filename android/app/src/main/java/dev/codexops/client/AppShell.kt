@@ -188,9 +188,9 @@ internal fun App(model: ClientModel) {
 internal fun threadDeeplink(threadId: String): String =
     Uri.Builder().scheme("codex").authority("threads").appendPath(threadId).build().toString()
 
-private fun copyThreadDeeplink(context: Context, threadId: String) {
+internal fun copyThreadDeeplink(context: Context, threadId: String) {
     context
         .getSystemService(ClipboardManager::class.java)
         .setPrimaryClip(ClipData.newPlainText("Codex thread deeplink", threadDeeplink(threadId)))
-    Toast.makeText(context, "Deeplink copied", Toast.LENGTH_SHORT).show()
+    Toast.makeText(context, "Link copied", Toast.LENGTH_SHORT).show()
 }

@@ -8,6 +8,35 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ChatActivityTest {
+    @Test fun manualUnreadSharesExistingMarkersAndPreservesAutomaticUnread() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val store = MemoryStore()
+            val rpc = Session()
+            var output = ChatActivity()
+            fun monitor() = ChatActivityMonitor(scope, store, rpc, "host") { _, state -> output = state }
+            val first = monitor()
+            first.markUnread("chat")
+            first.refresh("chat")
+            assertTrue(output.unread)
+            first.markUnread("chat")
+            val restarted = monitor()
+            restarted.refresh("chat")
+            assertTrue(output.unread)
+            restarted.opened("chat")
+            assertFalse(output.unread)
+            rpc.text = "Another reply"
+            restarted.refresh("chat")
+            assertTrue(output.unread)
+            restarted.markUnread("chat")
+            restarted.opened("chat")
+            assertTrue("Opening must not clear an unseen automatic reply", output.unread)
+            restarted.read("chat", replySignature("turn", listOf(reply(rpc.text)))!!)
+            assertFalse(output.unread)
+            assertTrue(rpc.calls.all { it.first in setOf("thread/read", "thread/turns/list") })
+        } finally { scope.cancel() }
+    }
+
     private fun status(type: String, vararg flags: String) = obj("type" to s(type), "activeFlags" to JsonArray(flags.map(::s)))
     private fun reply(text: String) = obj("id" to s("reply"), "type" to s("agentMessage"), "text" to s(text))
 
