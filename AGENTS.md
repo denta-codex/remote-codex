@@ -37,7 +37,15 @@ For automated Android instrumentation, use `scripts/emulator-test --tests` with
 the smallest relevant set. Use `--full` only for concrete cross-cutting or
 test-infrastructure risk; release preparation alone is not a reason. Tests run
 through AndroidX Test Orchestrator on a Gradle-managed device and have bounded
-timeouts; never retry a failed or timed-out run automatically.
+timeouts.
+
+Run relevant emulator validation as part of implementation without asking.
+After a failure or timeout, inspect the results, address the cause, and rerun
+the affected tests. Avoid repeatedly rerunning an unchanged failure. If the
+cause cannot be resolved, report the remaining validation limitation. This
+permission covers fixture-backed tests on disposable emulators; it does not
+authorize replaying uncertain live mutations, publishing releases, or installing
+on the user's phone.
 
 Use `scripts/emulator-start`, `scripts/emulator-record`, and
 `scripts/emulator-stop` only for interactive inspection and fixture-backed
