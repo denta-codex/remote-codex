@@ -1,9 +1,9 @@
-Autofill test spike
+Phone credential approval preview
 
-Open Settings → Autofill test · experimental to try 1Password with secret-only, Login, and no-explicit-hint control forms.
+Open Settings → Credential requests to answer a waiting op-bridge single-secret request. Select the requested item through 1Password Autofill, then tap Release once or Deny. There are no notifications or background phone service.
 
-Use harmless test items. The screen reports framework events and whether fields are filled, with a Copy diagnostic report button that excludes credential values. Inputs are cleared on reset, form changes, exit, and recreation; screenshots and bug-report capture are blocked.
+Values are sent only to the waiting caller. The screen blocks screenshots, clears submitted values, and never resends an uncertain approval. Refresh checks request status only.
 
-Try normal Login items, tokens stored as passwords, API Credential items, and custom fields. Repeat after Always Allow and after reopening the screen. Compatibility is experimental; no credentials are sent to a server.
+The execution host starts a temporary op-bridge session only when a caller requests a secret. The Rust forwarder authenticates and relays this separate connection; stock Codex never receives credential traffic.
 
-This prerelease is distributed through the existing private update channel. Install manually from Settings → Check for updates.
+This preview keeps your desktop destination as the default. Use --desktop phone for a harmless end-to-end test before changing the default. The existing Autofill test screen remains available.
