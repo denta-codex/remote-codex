@@ -1,5 +1,14 @@
 # Validation
 
+## 2026-10-03 — Android 0.3.0 (26)
+
+- Source revision: `770c8eeac43bd9c8a615ff1cee36e54b353933b2`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `b865e531198a8cb0cc60b45c43ee7c0fa29a31163dad36b62a465941f16a63bb`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/tmp/remote-codex-release-0.3.0/artifacts/releases/run-20261003T140323Z-eiOl6i.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
 ## 2026-10-03 — Intent-aware reports (unreleased)
 
 - Based on local main `6417fcb`. The report form now requires Investigate,

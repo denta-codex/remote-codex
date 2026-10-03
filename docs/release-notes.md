@@ -1,2 +1,18 @@
-- Use server recency for recent chat ordering
-- Integrate recency fix with current inbox and correct displayed ages
+- Remove manual model catalog refresh from composer
+- Merge branch 'main' into fix/remove-model-refresh
+- Validate catalog reconciliation using saved new-chat preferences
+- Add task swipe actions and long-press deep links
+- Merge main and integrate task gestures with compact inbox state
+- Fix image viewing with fullscreen zoom and pan
+- Use compact reading typography for conversation Markdown
+- Merge image viewer zoom and pan fix
+- Add pull-to-refresh to the task list
+- Move screenshot report action to the left
+- Merge branch 'main' into fix/report-action-left
+- Integrate pull-to-refresh with current compact inbox
+- Merge branch 'main' into fix/pull-to-refresh
+- Merge main and preserve streaming and table rendering with compact typography
+- Merge compact plan Markdown typography
+- Merge branch 'main' into fix/pull-to-refresh
+- Add intent selection and exact request review to reports
+- Implement Android Command tray composer
