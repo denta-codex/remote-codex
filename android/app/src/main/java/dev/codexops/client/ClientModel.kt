@@ -705,6 +705,7 @@ constructor(
                     merge = GitMergeState(),
                     title = "New chat",
                     entries = emptyList(),
+                    turnStatuses = emptyMap(),
                     activeTurn = null,
                     queuedMessages = emptyList(),
                     queueReady = false,
@@ -770,6 +771,7 @@ constructor(
                 merge = if (it.thread == id) it.merge else GitMergeState(working = true),
                 title = "Conversation",
                 entries = emptyList(),
+                turnStatuses = emptyMap(),
                 activeTurn = null,
                 queuedMessages = emptyList(),
                 queueReady = false,
@@ -2215,6 +2217,7 @@ constructor(
         _state.update { st ->
             st.copy(
                 entries = timeline.values(),
+                turnStatuses = timeline.turnStatuses,
                 activeTurn = timeline.activeTurn,
                 decisions = requests.values.filter { it.thread == st.thread },
             )

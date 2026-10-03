@@ -152,6 +152,7 @@ data class ScreenState(
     val threadCwd: String? = null,
     val title: String = "New chat",
     val entries: List<Entry> = emptyList(),
+    val turnStatuses: Map<String, String> = emptyMap(),
     val historyCursor: String? = null,
     val draft: String = "",
     val attachments: List<DraftAttachment> = emptyList(),

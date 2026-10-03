@@ -1168,6 +1168,120 @@ class AppTest {
     private fun latestReply() = compose.onNodeWithText("Latest reply — ready for review.", substring = true)
 
     @Test
+    fun groupedToolActivityStreamsAndPreservesExpandedDetails() {
+        fun command(index: Int, status: String = "completed") = obj(
+            "id" to s("tool-$index"), "type" to s("commandExecution"),
+            "command" to s("echo fixture-$index"), "aggregatedOutput" to s("Fixture output $index"),
+            "status" to s(status), "exitCode" to if (status == "completed") JsonPrimitive(0) else JsonNull,
+        )
+        historyOverride = obj("data" to JsonArray(listOf(obj("id" to s("tools-turn"),
+            "status" to s("completed"), "items" to JsonArray((1..8).map { command(it) })))))
+        compose.runOnUiThread { model.foreground(true); model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.entries.size == 8 && !model.state.value.busy }
+        val groupKey = "tools/tools-turn/tool-1"
+        val toggle = "tool-activity-toggle-$groupKey"
+        compose.onNodeWithText("8 commands").assertIsDisplayed()
+        captureComposer("tool-activity-collapsed.png")
+        compose.onNodeWithTag(toggle).assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed"))
+        compose.onNodeWithTag("tool-call-toggle-tools-turn/tool-8").assertDoesNotExist()
+        compose.onNodeWithTag(toggle).performClick()
+        compose.onNodeWithTag("tool-call-toggle-tools-turn/tool-8").performScrollTo().performClick()
+        compose.onNodeWithText("Fixture output 8").assertExists()
+        emit(peer!!, "turn/started", obj("turn" to obj("id" to s("tools-turn"), "status" to s("inProgress"))))
+        emit(peer!!, "item/started", obj("turnId" to s("tools-turn"), "item" to command(9, "inProgress")))
+        compose.waitUntil(5000) { model.state.value.entries.size == 9 && model.state.value.activeTurn == "tools-turn" }
+        compose.onNodeWithTag("tool-activity-details-$groupKey").assertExists()
+        compose.onNodeWithTag("tool-call-details-tools-turn/tool-8").assertExists()
+        compose.onNodeWithText("Fixture output 8").assertExists()
+        compose.onNodeWithTag("tool-call-toggle-tools-turn/tool-9").assertExists()
+        compose.onNodeWithTag(toggle).assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "In progress · Expanded"))
+        compose.onNodeWithText("Working on Grace").assertDoesNotExist()
+        compose.onNodeWithTag(toggle).performScrollTo().performClick()
+        compose.onNodeWithText("Running commands").assertIsDisplayed()
+        if (android.animation.ValueAnimator.areAnimatorsEnabled())
+            compose.onNodeWithTag("tool-activity-shimmer", useUnmergedTree = true).assertExists()
+        emit(peer!!, "item/completed", obj("turnId" to s("tools-turn"), "item" to command(9)))
+        emit(peer!!, "turn/completed", obj("turn" to obj("id" to s("tools-turn"), "status" to s("completed"))))
+        compose.waitUntil(5000) { model.state.value.activeTurn == null && model.state.value.entries.last().completed }
+        compose.onNodeWithText("9 commands").assertIsDisplayed()
+        compose.onNodeWithTag("tool-activity-shimmer", useUnmergedTree = true).assertDoesNotExist()
+        compose.onNodeWithTag(toggle).assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed"))
+    }
+
+    @Test
+    fun groupedWebActivityFormatsDetailsAndStopsOnInterruption() {
+        val call = obj("id" to s("search"), "type" to s("webSearch"), "query" to s("fixture median wages"),
+            "action" to obj("type" to s("search"), "queries" to JsonArray(listOf(s("fixture median wages")))),
+            "results" to JsonNull)
+        historyOverride = obj("data" to JsonArray(emptyList()))
+        compose.runOnUiThread { model.foreground(true); model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy }
+        emit(peer!!, "turn/started", obj("turn" to obj("id" to s("web-turn"), "status" to s("inProgress"))))
+        emit(peer!!, "item/started", obj("turnId" to s("web-turn"), "item" to call))
+        compose.waitUntil(5000) { model.state.value.entries.size == 1 }
+        compose.onNodeWithText("Searching the web").assertIsDisplayed()
+        if (android.animation.ValueAnimator.areAnimatorsEnabled())
+            compose.onNodeWithTag("tool-activity-shimmer", useUnmergedTree = true).assertExists()
+        compose.onNodeWithTag("tool-activity-toggle-tools/web-turn/search").performClick()
+        compose.onNodeWithTag("tool-call-toggle-web-turn/search").performClick()
+        compose.onNodeWithText("Queries").assertExists()
+        compose.onNodeWithText("fixture median wages").assertExists()
+        captureComposer("tool-activity-details.png")
+        compose.onNodeWithTag("tool-technical-details-web-turn/search").assertDoesNotExist()
+        compose.onNodeWithTag("tool-technical-toggle-web-turn/search").performClick()
+        val technical = compose.onNodeWithTag("tool-technical-details-web-turn/search").fetchSemanticsNode()
+            .config[SemanticsProperties.Text].joinToString { it.text }
+        assertFalse(technical.contains("_completed"))
+        emit(peer!!, "turn/completed", obj("turn" to obj("id" to s("web-turn"), "status" to s("interrupted"))))
+        compose.waitUntil(5000) { model.state.value.turnStatuses["web-turn"] == "interrupted" }
+        compose.onNodeWithText("Interrupted · 1 web search").assertExists()
+        compose.onNodeWithTag("tool-activity-shimmer", useUnmergedTree = true).assertDoesNotExist()
+        compose.onNodeWithTag("tool-call-toggle-web-turn/search").assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Interrupted · Expanded"))
+    }
+
+    @Test
+    fun groupedActivitySupportsCompactLargeTextAndReducedMotion() {
+        val entry = Entry("compact", obj("id" to s("tool"), "type" to s("futureTool"),
+            "_completed" to JsonPrimitive(false), "opaque" to obj("value" to s("Fixture detail"))))
+        val group = conversationRows(listOf(entry), "compact", true).single() as ConversationRow.Activity
+        val dark = androidx.compose.runtime.mutableStateOf(true)
+        val animate = androidx.compose.runtime.mutableStateOf(false)
+        val foreground = androidx.compose.runtime.mutableStateOf(true)
+        val density = compose.activity.resources.displayMetrics.density
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides
+                    androidx.compose.ui.unit.Density(density, 1.8f)) {
+                    RemoteTheme(darkTheme = dark.value) {
+                        Box(Modifier.size(240.dp, 440.dp)) {
+                            ToolActivityRow(group, "fixture", model, foreground = foreground.value, animationsEnabled = animate.value)
+                        }
+                    }
+                }
+            }
+        }
+        val toggle = compose.onNodeWithTag("tool-activity-toggle-tools/compact/tool")
+        toggle.assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp)
+        toggle.assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, androidx.compose.ui.semantics.Role.Button))
+        compose.onNodeWithTag("tool-activity-shimmer", useUnmergedTree = true).assertDoesNotExist()
+        toggle.performClick()
+        compose.onNodeWithTag("tool-call-toggle-compact/tool").performClick()
+        compose.onNodeWithText("Details unavailable").assertIsDisplayed()
+        compose.runOnUiThread { dark.value = false }
+        compose.onNodeWithTag("tool-call-details-compact/tool").assertIsDisplayed()
+        toggle.performClick()
+        compose.onNodeWithTag("tool-activity-details-tools/compact/tool").assertDoesNotExist()
+        compose.runOnUiThread { animate.value = true }
+        compose.onNodeWithTag("tool-activity-shimmer", useUnmergedTree = true).assertExists()
+        compose.runOnUiThread { foreground.value = false }
+        compose.onNodeWithTag("tool-activity-shimmer", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
     fun streamingTallReplyKeepsVisibleParagraphStillWhenReading() {
         openLongHistory(tallLastMessage = true)
         compose.onNodeWithTag("timeline").performTouchInput {
