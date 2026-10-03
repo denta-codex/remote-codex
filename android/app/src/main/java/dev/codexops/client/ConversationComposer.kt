@@ -158,10 +158,11 @@ private fun ComposerActions(
             }
         }
     }
+    val settingsDescription = listOfNotNull("Conversation settings", settings.model, settings.effort, settings.mode).joinToString(", ")
     val settingsControl: @Composable (Modifier) -> Unit = { modifier ->
         OutlinedButton(onSettings, modifier.heightIn(min = 48.dp).testTag("conversation-settings")
             .semantics {
-                contentDescription = listOfNotNull("Conversation settings", settings.model, settings.effort, settings.mode).joinToString(", ")
+                contentDescription = settingsDescription
             },
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = if (shortWindow) 4.dp else 8.dp), shape = RoundedCornerShape(28.dp),
             colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSecondaryContainer)) {
@@ -208,7 +209,7 @@ private fun ComposerActions(
                 sendControls()
                 attachmentControl()
                 OutlinedIconButton(onSettings, Modifier.size(48.dp).testTag("conversation-settings")
-                    .semantics { contentDescription = "Conversation settings, ${settings.model}, ${settings.effort}, ${settings.mode}" }) {
+                    .semantics { contentDescription = settingsDescription }) {
                     Glyph(R.drawable.ic_sliders)
                 }
             }

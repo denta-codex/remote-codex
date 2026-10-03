@@ -1938,6 +1938,7 @@ class AppTest {
         compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy && model.state.value.queueReady }
         compose.runOnUiThread { model.draft("Looks good, thanks!") }
         val dock = compose.onNodeWithTag("cover-camera-dock").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        compose.onNodeWithContentDescription("Conversation settings, Fixture Default, Low").assertExists()
         val field = compose.onNodeWithTag("composer").fetchSemanticsNode().boundsInRoot
         assertTrue("Message field must stay above the camera band", field.bottom <= dock.top)
         val buttons = listOf("send", "add-menu", "conversation-settings").map { tag ->
