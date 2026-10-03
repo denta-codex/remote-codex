@@ -61,6 +61,11 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
             uri?.let(actions::saveFile)
         }
     val messages = st.entries.filter { it.kind != "reasoning" }
+    val rows = remember(st.entries, st.activeTurn, st.ready, st.turnStatuses, st.decisions, st.attention) {
+        conversationRows(st.entries, st.activeTurn, st.ready, st.turnStatuses,
+            st.decisions.isNotEmpty() || st.attention)
+    }
+    val activityRepresentsTurn = rows.filterIsInstance<ConversationRow.Activity>().any { it.representsActiveTurn }
     val actionablePlan =
         messages.lastOrNull()?.takeIf {
             it.kind == "plan" &&
@@ -136,22 +141,27 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
                         Text("Load earlier messages")
                     }
                 }
-            items(messages, key = { it.key }) { entry ->
-                Message(
-                    entry = entry,
-                    actions = actions,
-                    visualizationScope = "${st.host.endpoint}/${st.thread}/${entry.key}",
-                    canImplement =
-                        entry.key == actionablePlan?.key &&
-                            st.ready &&
-                            !st.busy &&
-                            !st.merge.blocksTask &&
-                            st.activeTurn == null &&
-                            st.queuedMessages.isEmpty() &&
-                            st.queueReady &&
-                            st.journal == null,
-                    onImplement = { actions.implementPlan(entry.key) },
-                )
+            items(rows, key = { it.key }) { row ->
+                if (row is ConversationRow.Activity) ToolActivityRow(row,
+                    "${st.host.endpoint}/${st.thread}", actions, st.appForeground)
+                else if (row is ConversationRow.Message) {
+                    val entry = row.entry
+                    Message(
+                        entry = entry,
+                        actions = actions,
+                        visualizationScope = "${st.host.endpoint}/${st.thread}/${entry.key}",
+                        canImplement =
+                            entry.key == actionablePlan?.key &&
+                                st.ready &&
+                                !st.busy &&
+                                !st.merge.blocksTask &&
+                                st.activeTurn == null &&
+                                st.queuedMessages.isEmpty() &&
+                                st.queueReady &&
+                                st.journal == null,
+                        onImplement = { actions.implementPlan(entry.key) },
+                    )
+                }
             }
             items(st.decisions, key = { it.key }) { decision ->
                 DecisionCard(decision, st, actions)
@@ -212,7 +222,7 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
                     }
                 }
             }
-            if (st.busy || st.activeTurn != null)
+            if (st.busy || (st.activeTurn != null && !activityRepresentsTurn))
                 item(key = "activity") {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -322,7 +332,6 @@ private fun Message(
     canImplement: Boolean,
     onImplement: () -> Unit,
 ) {
-    var expanded by rememberSaveable(entry.key) { mutableStateOf(false) }
     var planFullscreen by rememberSaveable(entry.key) { mutableStateOf(false) }
     if (entry.kind == "userMessage")
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -400,52 +409,7 @@ private fun Message(
             MediaGallery(entry.media, actions)
             if (entry.text.isNotBlank()) Text(entry.text, fontSize = 13.sp)
         }
-    else
-        Surface(
-            shape = RoundedCornerShape(14.dp),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            color = MaterialTheme.colorScheme.surface,
-        ) {
-            Column {
-                MediaGallery(entry.media, actions)
-                FileReferenceList(entry.files, actions)
-                Row(
-                    Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Glyph(
-                        if (entry.kind == "commandExecution") R.drawable.ic_terminal
-                        else R.drawable.ic_file
-                    )
-                    Text(
-                        when (entry.kind) {
-                            "commandExecution" -> "Command"
-                            "fileChange" -> "File changes"
-                            else -> entry.kind
-                        },
-                        Modifier.weight(1f),
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                    )
-                    Glyph(
-                        if (expanded) R.drawable.ic_up else R.drawable.ic_down,
-                        if (expanded) "Collapse details" else "Expand details",
-                        Modifier.size(16.dp),
-                    )
-                }
-                if (expanded)
-                    SelectionContainer {
-                        Text(
-                            entry.text.take(60000),
-                            Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp,
-                            lineHeight = 18.sp,
-                        )
-                    }
-            }
-        }
+
 }
 
 @Composable
