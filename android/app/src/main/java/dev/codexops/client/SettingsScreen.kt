@@ -152,9 +152,6 @@ internal fun SettingsScreen(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         HorizontalDivider()
-        OutlinedButton(onClick = { context.startActivity(Intent(context, AutofillTestActivity::class.java)) }) {
-            Text("Autofill test · experimental")
-        }
         OutlinedButton(onClick = { context.startActivity(Intent(context, CredentialRequestsActivity::class.java)) }) {
             Text("Credential requests")
         }
