@@ -159,7 +159,7 @@ internal fun ScreenState.settingsCwd(): String? = when {
 
 internal data class ComposerSettings(
     val modelId: String?, val model: String, val modelSource: String,
-    val effort: String, val effortSource: String, val mode: String,
+    val effort: String, val effortSource: String, val mode: String?,
 )
 
 internal fun ScreenState.composerSettings(): ComposerSettings {
@@ -201,6 +201,6 @@ internal fun ScreenState.composerSettings(): ComposerSettings {
             else -> inherited?.effortSource ?: "From server"
         },
         preset?.name ?: threadMode?.replaceFirstChar { it.uppercase() }
-            ?: if (thread == null) "Default" else "Mode unavailable",
+            ?: if (thread == null) "Default" else null,
     )
 }

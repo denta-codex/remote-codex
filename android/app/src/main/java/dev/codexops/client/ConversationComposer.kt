@@ -147,14 +147,18 @@ private fun ComposerActions(
     }
     val settingsControl: @Composable (Modifier) -> Unit = { modifier ->
         OutlinedButton(onSettings, modifier.heightIn(min = 48.dp).testTag("conversation-settings")
-            .semantics { contentDescription = "Conversation settings, ${settings.model}, ${settings.effort}, ${settings.mode}" },
+            .semantics {
+                contentDescription = listOfNotNull("Conversation settings", settings.model, settings.effort, settings.mode).joinToString(", ")
+            },
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = if (shortWindow) 4.dp else 8.dp), shape = RoundedCornerShape(28.dp),
             colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSecondaryContainer)) {
             Glyph(R.drawable.ic_sliders, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f)) {
                 Text("${settings.model} · ${settings.effort}", style = MaterialTheme.typography.labelLarge)
-                Text(settings.mode, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                settings.mode?.let { mode ->
+                    Text(mode, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
     }

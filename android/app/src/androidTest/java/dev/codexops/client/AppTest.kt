@@ -1829,6 +1829,8 @@ class AppTest {
         compose.onNodeWithContentDescription("New chat").performClick()
         compose.waitUntil(5000) { model.state.value.inheritedSettings.status == ModelCatalogStatus.Ready && model.state.value.modelCatalogStatus == ModelCatalogStatus.Ready }
         compose.onNodeWithTag("conversation-settings").assertTextContains("Fixture Default · High", substring = true)
+        compose.onNodeWithTag("conversation-settings").assertTextContains("Default")
+        compose.onNodeWithContentDescription("Conversation settings, Fixture Default, High, Default").assertExists()
         compose.onNodeWithTag("send").assertIsNotEnabled()
         captureComposer("command-tray-resting.png")
         compose.onNodeWithTag("composer").performTextInput("Keep my draft")
@@ -1849,6 +1851,9 @@ class AppTest {
         assertNull(model.state.value.newTaskOptions.model)
         compose.onNodeWithTag("mode-plan").performScrollTo().performClick()
         compose.onNodeWithTag("reasoning-selector").performScrollTo().assertTextContains("From Plan mode")
+        closeConversationTray()
+        compose.onNodeWithTag("conversation-settings").assertTextContains("Plan")
+        openConversationTray()
         compose.onNodeWithTag("mode-server-default").performScrollTo().performClick()
         assertNull(model.state.value.newTaskOptions.collaborationMode)
         compose.onNodeWithTag("add-menu").performClick()
@@ -1864,6 +1869,13 @@ class AppTest {
         assertFalse(lastThreadStartParams!!.containsKey("model"))
         assertFalse(lastTurnStartParams!!.containsKey("model"))
         assertFalse(lastTurnStartParams!!.containsKey("effort"))
+
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy }
+        closeConversationTray()
+        compose.onNodeWithTag("conversation-settings").assertTextEquals("Fixture Default · Low")
+        compose.onNodeWithContentDescription("Conversation settings, Fixture Default, Low").assertExists()
+        compose.onNodeWithText("Mode unavailable").assertDoesNotExist()
     }
 
     @Test
