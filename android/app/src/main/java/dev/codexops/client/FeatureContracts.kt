@@ -158,6 +158,8 @@ data class ScreenState(
     val models: List<ServerModelOption> = emptyList(),
     val modelCatalogStatus: ModelCatalogStatus = ModelCatalogStatus.Unavailable,
     val modelCatalogMessage: String? = null,
+    val inheritedSettings: InheritedSettings = InheritedSettings(),
+    val threadMode: String? = null,
     val threadModel: String? = null,
     val threadReasoningEffort: String? = null,
     val activeTurn: String? = null,
@@ -181,7 +183,7 @@ data class TaskNotice(
 )
 
 fun ScreenState.collaborationModel(): String? =
-    newTaskOptions.model ?: threadModel ?: models.firstOrNull(ServerModelOption::isDefault)?.id
+    newTaskOptions.model ?: if (thread != null) threadModel else inheritedSettings.takeIf { it.cwd == settingsCwd() }?.model
 
 interface AppNavigation {
     fun connect()
@@ -234,6 +236,7 @@ interface SettingsActions {
 
 interface ConversationActions {
     fun viewedReply(thread: String, signature: String) {}
+    fun refreshModels() {}
     fun updateNewTaskOptions(options: NewTaskOptions)
 
 

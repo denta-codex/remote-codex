@@ -15,7 +15,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -25,9 +28,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -95,7 +100,7 @@ internal fun BugReportMenu(model: ClientModel) {
             Text("⋮", fontSize = 26.sp)
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            DropdownMenuItem(text = { Text(if (report.capturing) "Capturing report…" else "Report a bug") },
+            DropdownMenuItem(text = { Text(if (report.capturing) "Capturing report…" else "Report or request") },
                 enabled = report.loaded && !report.capturing && (!report.busy || report.draft != null),
                 modifier = Modifier.testTag("report-bug"), onClick = {
                     menu = false
@@ -105,7 +110,7 @@ internal fun BugReportMenu(model: ClientModel) {
                     }
                 })
             report.lastTask?.let { id ->
-                DropdownMenuItem(text = { Text("Last bug report") }, onClick = { menu = false; model.openTask(id) })
+                DropdownMenuItem(text = { Text("Last report task") }, onClick = { menu = false; model.openTask(id) })
             }
         }
     }
@@ -130,7 +135,7 @@ internal fun BugReportHost(model: ClientModel, screen: ScreenState, snackbar: Sn
             prompt = scope.launch {
                 // Copy the app window now so the report matches the screenshot, not the screen at tap time.
                 val copy = runCatching { withTimeout(1500) { captureBugReportScreenshot(activity) } }.getOrNull()
-                val result = snackbar.showSnackbar("Screenshot taken", actionLabel = "Report bug", duration = SnackbarDuration.Long)
+                val result = snackbar.showSnackbar("Screenshot taken", actionLabel = "Report or request", duration = SnackbarDuration.Long)
                 if (result == SnackbarResult.ActionPerformed)
                     model.reports.open(copy?.let { bytes -> { bytes } } ?: {
                         awaitReportFrame()
@@ -165,25 +170,43 @@ internal fun BugReportHost(model: ClientModel, screen: ScreenState, snackbar: Sn
 private fun BugReportDialog(state: BugReportState, connected: Boolean, actions: BugReportController) {
     val draft = state.draft
     val locked = state.busy || draft?.journal?.isNotEmpty() == true
+    val reviewing = draft?.review?.isNotEmpty() == true
+    val started = draft?.journal?.isNotEmpty() == true
+    val focus = LocalFocusManager.current
+    val listState = remember(reviewing) { LazyListState() }
     var preview by remember { mutableStateOf<DraftAttachment?>(null) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { actions.addFiles(it) }
     Dialog(onDismissRequest = actions::close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(Modifier.fillMaxWidth().widthIn(max = 640.dp).fillMaxHeight(.95f).imePadding().testTag("bug-report-sheet"), shape = MaterialTheme.shapes.large) {
+        Surface(Modifier.widthIn(max = 640.dp).fillMaxWidth().fillMaxHeight(.95f).imePadding().testTag("bug-report-sheet"), shape = MaterialTheme.shapes.large) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Report a bug", fontSize = 20.sp)
+                    Text(if (reviewing) "Review request" else "Report or request", fontSize = 20.sp, modifier = Modifier.weight(1f))
                     TextButton(onClick = actions::close, modifier = Modifier.testTag("close-bug-report")) { Text("Close") }
                 }
-                LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                LazyColumn(Modifier.weight(1f).testTag("report-content"), state = listState, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     state.error?.let { error -> item { Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("bug-report-error")) } }
                     if (draft != null) {
-                        item {
+                        if (!reviewing && !started) item {
+                            ReportIntentChoices(draft.intent, !locked, actions::chooseIntent)
+                        }
+                        if (reviewing) {
+                            item {
+                                Text(requireNotNull(draft.intent).scope, modifier = Modifier.testTag("report-scope"))
+                                OutlinedTextField(value = draft.title, onValueChange = actions::title, enabled = !locked,
+                                    label = { Text("Task title") }, modifier = Modifier.fillMaxWidth().testTag("report-title"))
+                            }
+                            item {
+                                Text("Destination: ${draft.review.str("projectName")} · New isolated workspace", fontSize = 13.sp)
+                                Text("Request sent to Codex", style = MaterialTheme.typography.titleSmall)
+                                SelectionContainer { Text(draft.review.str("prompt"), modifier = Modifier.testTag("report-prompt")) }
+                            }
+                        } else item {
                             OutlinedTextField(value = draft.description, onValueChange = actions::describe, enabled = !locked,
-                                label = { Text("What went wrong?") }, minLines = 3,
+                                label = { Text("What would you like Codex to do?") }, minLines = 3,
                                 modifier = Modifier.fillMaxWidth().testTag("bug-description"))
                         }
-                        item { Text("Saved on this phone. Review the captured evidence before starting a fix task.", fontSize = 12.sp) }
-                        if (state.busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()); Text(reportStage(draft.journal.str("stage"))) }
+                        item { Text("Saved on this phone. Included evidence:", fontSize = 12.sp) }
+                        if (state.busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()); Text(if (!started) "Preparing review…" else reportStage(draft.journal.str("stage"))) }
                         if (draft.journal.isNotEmpty()) item {
                             SelectionContainer { Text("Task: ${draft.journal.str("threadId").ifBlank { "Awaiting identity" }}\nWorkspace: ${draft.journal.str("cwd")}", fontSize = 12.sp) }
                         }
@@ -195,7 +218,7 @@ private fun BugReportDialog(state: BugReportState, connected: Boolean, actions: 
                                     Text(formatBytes(file.byteSize), fontSize = 12.sp)
                                     Row {
                                         TextButton(onClick = { preview = file }) { Text("Preview") }
-                                        TextButton(onClick = { actions.removeAttachment(file.id) }, enabled = !locked,
+                                        if (!reviewing) TextButton(onClick = { actions.removeAttachment(file.id) }, enabled = !locked,
                                             modifier = Modifier.testTag("remove-report-${file.id}")) { Text("Remove") }
                                     }
                                 }
@@ -206,17 +229,34 @@ private fun BugReportDialog(state: BugReportState, connected: Boolean, actions: 
                                 Text("$name: ${(value as? kotlinx.serialization.json.JsonObject)?.str("message").orEmpty()}", fontSize = 12.sp)
                             }
                         }
-                        item { OutlinedButton(onClick = { picker.launch(arrayOf("*/*")) }, enabled = !locked,
+                        if (!reviewing) item { OutlinedButton(onClick = { picker.launch(arrayOf("*/*")) }, enabled = !locked,
                             modifier = Modifier.fillMaxWidth()) { Text("Add images or files") } }
+                        if (!reviewing && !started) item {
+                            TextButton(onClick = actions::discard, enabled = !state.busy,
+                                modifier = Modifier.fillMaxWidth().testTag("discard-bug-report")) { Text("Discard report") }
+                        }
                     }
                 }
                 if (draft != null) {
-                    Button(onClick = actions::submit,
-                        enabled = !state.busy && draft.description.isNotBlank(), modifier = Modifier.fillMaxWidth().testTag("submit-bug-report")) {
-                        Text(if (!connected) "Save report" else if (draft.journal.isNotEmpty()) "Check and continue" else "Start fix task")
+                    Button(onClick = {
+                        focus.clearFocus()
+                        if (!connected || started || reviewing) actions.submit() else actions.review()
+                    },
+                        enabled = !state.busy && !state.capturing && when {
+                            !connected -> draft.description.isNotBlank()
+                            started -> true
+                            reviewing -> draft.canReview && draft.title.isNotBlank()
+                            else -> draft.canReview
+                        }, modifier = Modifier.fillMaxWidth().testTag("submit-bug-report")) {
+                        Text(when {
+                            !connected -> "Save report"
+                            started -> "Check and continue"
+                            reviewing -> requireNotNull(draft.intent).startLabel
+                            else -> "Review request"
+                        })
                     }
-                    if (draft.journal.isEmpty()) TextButton(onClick = actions::discard, enabled = !state.busy,
-                        modifier = Modifier.fillMaxWidth().testTag("discard-bug-report")) { Text("Discard report") }
+                    if (reviewing) TextButton(onClick = { focus.clearFocus(); actions.editRequest() }, enabled = !state.busy,
+                        modifier = Modifier.fillMaxWidth().testTag("edit-report-request")) { Text("Edit request") }
                 }
             }
         }
@@ -224,12 +264,45 @@ private fun BugReportDialog(state: BugReportState, connected: Boolean, actions: 
     preview?.let { ReportArtifactPreview(it) { preview = null } }
 }
 
+@Composable
+private fun ReportIntentChoices(selected: ReportIntent?, enabled: Boolean, choose: (ReportIntent) -> Unit) {
+    Text("What should Codex do?", style = MaterialTheme.typography.titleMedium)
+    Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        ReportIntent.entries.chunked(2).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                row.forEach { intent ->
+                    Surface(
+                        modifier = Modifier.weight(1f).testTag("report-intent-${intent.name}")
+                            .selectable(selected == intent, enabled = enabled, role = Role.RadioButton, onClick = { choose(intent) }),
+                        shape = MaterialTheme.shapes.medium,
+                        color = if (selected == intent) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+                    ) {
+                        Column(Modifier.padding(12.dp)) {
+                            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                RadioButton(selected = selected == intent, onClick = null, enabled = enabled)
+                                Spacer(Modifier.width(8.dp))
+                                Text(intent.name, style = MaterialTheme.typography.titleSmall)
+                            }
+                            Text(when (intent) {
+                                ReportIntent.Investigate -> "Diagnose a problem"
+                                ReportIntent.Research -> "Explore an idea"
+                                ReportIntent.Plan -> "Plan a change"
+                                ReportIntent.Implement -> "Make and validate changes"
+                            }, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 private fun reportStage(stage: String): String = when (stage) {
     "creatingRoot", "rootReady", "creatingWorktree" -> "Preparing worktree…"
     "workspaceReady", "settingUp" -> "Preparing environment…"
     "creatingEvidence", "evidenceReady", "uploading" -> "Attaching evidence…"
-    "creatingTask", "taskReady", "namingTask" -> "Creating fix task…"
-    "named", "sending" -> "Starting investigation…"
+    "creatingTask", "taskReady", "namingTask" -> "Creating task…"
+    "named", "sending" -> "Starting task…"
     else -> "Saving report…"
 }
 
