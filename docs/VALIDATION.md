@@ -1,5 +1,15 @@
 # Validation
 
+## Phone approval preview — Android 0.2.11-phone.1 (22)
+
+- Published the previously built artifact; authenticated manifest and full APK verification passed.
+- Publication log: `artifacts/releases/run-20261003T021149Z-w8y2HN.log`.
+- Forwarder deployed through the existing workflow; stock Codex acceptance checks passed.
+- op-bridge phone.1 installed on Grace from integration commit `e8a80a2`; default route remains mac.
+- Fake-value end-to-end transport and natural idle expiry verified. Manual phone approval remains to be tested.
+- See `docs/PHONE-APPROVAL.md` for integration validation and rollout details.
+
+
 ## 2026-10-03 — Android 0.2.11-phone.1 (22)
 
 - Source revision: `56c15d2535ad52e15468be28c865ee54a88e2abf`.

@@ -38,3 +38,31 @@ exit, recreation, and submission; temporary picker handoff preserves the field.
 Submitted operations never replay on reconnect. Read-only status checks can
 report completion, cancellation, or uncertainty while the original session lives.
 See `protocol/credential-approvals.md` for the versioned transport contract.
+
+## Published preview: 0.2.11-phone.1 (22)
+
+The preview APK was published through the existing private update channel and
+verified by the publication workflow. Grace has op-bridge `phone.1` installed
+from integration commit `e8a80a2`, plus the updated Rust forwarder. The default
+op-bridge route remains `mac`; use `--desktop phone` until manual phone validation.
+
+Validation completed:
+
+- Go tests, race detector, vet, package checks, and a macOS arm64 cross-build.
+- Focused Android approval tests, including lost acknowledgment/recreation,
+  no automatic replay, picker handoff, field clearing, and capture protection.
+- Required Remote Codex build checks, Rust route tests, core transport tests,
+  Android unit tests, lint, APK identity, and signing verification.
+- Post-install fake-value caller → fixture Rust forwarder → on-demand session
+  check: absent session returned 503, read started the session, output/newline
+  matched, caller receipt was acknowledged, duplicate release was rejected.
+- The live temporary session subsequently expired naturally: systemd reported
+  inactive and `op-bridge --desktop phone session status` reported stopped.
+- Forwarder deployment verified authenticated stock Codex initialization and
+  project/task listing. APK publication verified the manifest and full download.
+
+The first op-bridge deployment stopped before activation because a noninteractive
+shell lacked user-bus environment variables. It made no installation changes;
+explicit bus addressing was added, revalidated, and the corrected deployment
+succeeded. Its staging and recovery data were cleaned by the deployment workflow.
+Actual 1Password selection and approval on the phone remains a manual user test.
