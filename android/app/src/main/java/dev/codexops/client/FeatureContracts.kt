@@ -127,10 +127,12 @@ data class ScreenState(
     val host: HostIdentity = GraceHost,
     val connection: String = "Offline",
     val ready: Boolean = false,
+    val appForeground: Boolean = false,
     val configured: Boolean = false,
     val projects: List<CodexProject> = emptyList(),
     val projectFilter: TaskProjectFilter = TaskProjectFilter.All,
     val tasks: List<JsonObject> = emptyList(),
+    val chatActivity: Map<String, ChatActivity> = emptyMap(),
     val listCursor: String? = null,
     val listLoading: Boolean = false,
     val listFailed: Boolean = false,
@@ -183,6 +185,7 @@ interface AppNavigation {
 }
 
 interface HomeActions {
+    fun visibleChats(ids: Set<String>) {}
     fun applyListOptions(project: TaskProjectFilter, sort: ChatSort)
     fun retryList()
     fun listPosition(index: Int, offset: Int)
@@ -212,6 +215,7 @@ interface SettingsActions {
 }
 
 interface ConversationActions {
+    fun viewedReply(thread: String, signature: String) {}
     fun updateNewTaskOptions(options: NewTaskOptions)
 
     fun refreshModels()

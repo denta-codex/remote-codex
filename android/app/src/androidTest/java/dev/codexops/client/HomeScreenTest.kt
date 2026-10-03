@@ -50,9 +50,9 @@ class HomeScreenTest {
                 CompositionLocalProvider(LocalDensity provides Density(density.density, if (large) 1.5f else 1f)) {
                     if (cover) Box(Modifier.size(360.dp)) {
                         CompositionLocalProvider(LocalAppWindowClass provides classifyWindow(360.dp, 360.dp)) {
-                            HomeScreen(state.value, actions)
+                            androidx.compose.material3.Surface { HomeScreen(state.value, actions) }
                         }
-                    } else HomeScreen(state.value, actions)
+                    } else androidx.compose.material3.Surface { HomeScreen(state.value, actions) }
                 }
             }
         }
@@ -125,6 +125,31 @@ class HomeScreenTest {
         assertEquals("", state.value.query)
         compose.runOnUiThread { state.value = state.value.copy(listLoading = false) }
         compose.onNodeWithText("No matching chats").assertIsDisplayed()
+    }
+
+    @Test fun chatIndicatorsAndScreenshots() {
+        val indicators = listOf(ChatIndicator.Working, ChatIndicator.Unread, ChatIndicator.Error,
+            ChatIndicator.Approval, ChatIndicator.Input, ChatIndicator.None)
+        val titles = listOf("Printer connection", "Guardian review", "Linux printing setup",
+            "Merge the auth bridge", "Printer calibration", "Finished reading")
+        val fixture = ScreenState(ready = true, listInitialized = true,
+            tasks = indicators.mapIndexed { i, _ -> obj("id" to s("status-$i"), "name" to s(titles[i])) },
+            chatActivity = indicators.mapIndexed { i, indicator -> "status-$i" to ChatActivity(indicator) }.toMap())
+        show(fixture)
+        for (indicator in indicators.filter { it != ChatIndicator.None })
+            compose.onNodeWithContentDescription(indicator.label, useUnmergedTree = true).assertExists()
+        val output = InstrumentationRegistry.getArguments().getString("additionalTestOutputDir")
+            ?: InstrumentationRegistry.getInstrumentation().targetContext.getExternalFilesDir(null)!!.absolutePath
+        fun capture(name: String) {
+            compose.waitForIdle()
+            val bitmap = compose.onNodeWithTag("chat-list").captureToImage().asAndroidBitmap()
+            File(output, name).apply { parentFile?.mkdirs() }.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        }
+        capture("chat-status-light.png")
+        show(fixture, cover = true, dark = true, large = true)
+        compose.onNodeWithTag("chat-list").performScrollToNode(hasContentDescription("Approval needed", substring = true))
+        compose.onNodeWithContentDescription("Approval needed", useUnmergedTree = true).assertIsDisplayed()
+        capture("chat-status-cover-dark.png")
     }
 
     @Test fun captureCompactDesign() {

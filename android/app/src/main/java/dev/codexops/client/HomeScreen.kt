@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.codexops.core.str
+import dev.codexops.core.map
 import kotlinx.coroutines.flow.distinctUntilChanged
 import java.time.Instant
 import java.time.ZoneId
@@ -57,6 +58,12 @@ private fun ChatBrowser(st: ScreenState, actions: HomeActions) {
                     (layout.visibleItemsInfo.lastOrNull()?.index ?: -1) >= layout.totalItemsCount - 6
             }.distinctUntilChanged().collect { nearEnd -> if (nearEnd) actions.moreTasks() }
         }
+    }
+    DisposableEffect(Unit) { onDispose { actions.visibleChats(emptySet()) } }
+    LaunchedEffect(list, st.tasks) {
+        snapshotFlow { list.layoutInfo.visibleItemsInfo.mapNotNull {
+            (it.key as? String)?.takeIf { key -> key.startsWith("chat:") }?.removePrefix("chat:")
+        }.toSet() }.distinctUntilChanged().collect(actions::visibleChats)
     }
     LazyColumn(
         state = list,
@@ -103,8 +110,14 @@ private fun ChatBrowser(st: ScreenState, actions: HomeActions) {
             Column(Modifier.fillMaxWidth()) {
                 Column(Modifier.fillMaxWidth().clickable { actions.openTask(id) }
                     .heightIn(min = 64.dp).padding(vertical = 14.dp)) {
-                    Text(task.str("name").ifBlank { task.str("preview").take(100).ifBlank { "Untitled chat" } },
-                        fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(task.str("name").ifBlank { task.str("preview").take(100).ifBlank { "Untitled chat" } },
+                            modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium,
+                            maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        val activity = st.chatActivity[id] ?: ChatActivity(runtimeIndicator(task.map("status")))
+                        ChatStatusIndicator(if (st.ready) activity.indicator
+                            else if (activity.unread) ChatIndicator.Unread else ChatIndicator.None)
+                    }
                     Spacer(Modifier.height(5.dp))
                     Text(listOf(project, date).filter { it.isNotBlank() }.joinToString(" · "),
                         style = MaterialTheme.typography.bodySmall,

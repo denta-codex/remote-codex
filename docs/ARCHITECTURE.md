@@ -251,3 +251,31 @@ recovery state; rollback and Desktop Restart remain explicit. Forwarder deployme
 keeps narrow Ansible backups of the old binary and unit until live acceptance
 succeeds. If deployment fails, retain the reported backup paths for explicit
 recovery; remove them once recovery and verification are complete.
+
+## Inbox activity and phone-local unread
+
+Inbox/archive rows show one accessible indicator: a spinner for active work, a
+slow blue pulse for approval or input, a red warning for a task error, or a blue
+dot for unread assistant output. Quiet/read chats have no indicator. Runtime
+state masks unread without erasing it. System-disabled animations use static
+indicators. Pending requests resolve through server notifications or fresh status
+reads; network/read failures are not presented as task errors.
+
+The activity monitor consumes events before the selected-thread and hydration
+filters. While foregrounded, it refreshes only visible browser rows (or the open
+chat), serially, with a five-second pause between passes. Stock metadata-only
+`thread/read` supplies runtime status. Inactive chats also use a single latest
+full turn from `thread/turns/list` to identify failed turns and compare assistant
+output. It never resumes background threads. Selection/foreground changes cancel
+polling; connection generation and per-thread revisions reject stale results.
+
+Unread is Android-local: Room's existing key/value records hold SHA-256 digests
+of assistant/plan output, keyed by endpoint, Codex home, and thread ID. No transcript
+is stored for this feature and no schema migration is needed. The first observation
+of inactive history establishes a baseline; observed running chats become unread
+when new output is later discovered. Only a foreground conversation showing the
+end of its newest completed reply marks that output read. Scrolling older content,
+remembering a selection, renaming a chat, and changing its project do not mark new
+output read or create unread. Markers survive app restarts; desktop/mobile read
+receipts are not synchronized. Newly encountered inactive chats are baselined,
+so the feature deliberately does not classify all pre-existing history as unread.

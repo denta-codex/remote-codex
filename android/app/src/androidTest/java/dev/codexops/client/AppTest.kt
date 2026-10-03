@@ -1651,6 +1651,79 @@ class AppTest {
     }
 
     @Test
+    fun readingEarlierParagraphKeepsNewReplyUnread() {
+        browserResponse = { method, params -> if (method == "thread/read")
+            obj("thread" to obj("id" to params["threadId"], "status" to obj("type" to s("idle")))) else null }
+        compose.runOnUiThread { model.foreground(true) }
+        openLongHistory(tallLastMessage = true)
+        val id = model.state.value.thread!!
+        compose.waitUntil(5000) { model.state.value.chatActivity[id]?.unread == false }
+        compose.onNodeWithTag("timeline").performTouchInput {
+            swipe(center, center.copy(y = height * .85f), durationMillis = 1200)
+        }
+        compose.onNodeWithTag("jump-to-latest").assertExists()
+        val delta = "\n\nA new ending that has not been viewed."
+        val original = historyOverride!!
+        val turns = original.list("data").mapIndexed { i, turn -> if (i != 0) turn else
+            JsonObject(turn + ("items" to JsonArray(turn.list("items").map { item ->
+                if (item.str("id") != "reply-20") item else JsonObject(item + ("text" to s(item.str("text") + delta)))
+            }))) }
+        historyOverride = obj("data" to JsonArray(turns))
+        emit(peer!!, "item/agentMessage/delta", obj("threadId" to s(id), "turnId" to s("history-20"),
+            "itemId" to s("reply-20"), "delta" to s(delta)))
+        emit(peer!!, "thread/status/changed", obj("threadId" to s(id), "status" to obj("type" to s("idle"))))
+        compose.waitUntil(10000) { model.state.value.chatActivity[id]?.unread == true }
+        compose.onNodeWithTag("jump-to-latest").performClick()
+        compose.waitUntil(5000) { model.state.value.chatActivity[id]?.unread == false }
+        compose.onNodeWithText("A new ending that has not been viewed.").assertIsDisplayed()
+    }
+
+    @Test
+    fun inboxRuntimeAndUnreadFollowServerAndVisibleReply() {
+        val runtime = java.util.concurrent.atomic.AtomicReference(obj("type" to s("idle")))
+        val text = java.util.concurrent.atomic.AtomicReference("An old reply")
+        fun turn() = obj("id" to s("indicator-turn"), "status" to s("completed"), "items" to JsonArray(listOf(
+            obj("id" to s("indicator-reply"), "type" to s("agentMessage"), "text" to s(text.get())))))
+        browserResponse = { method, params -> when (method) {
+            "thread/read" -> obj("thread" to obj("id" to params["threadId"], "status" to runtime.get()))
+            "thread/turns/list" -> obj("data" to JsonArray(listOf(turn())))
+            else -> null
+        } }
+        val id = model.state.value.tasks.first().str("id")
+        compose.runOnUiThread { model.foreground(true); model.visibleChats(setOf(id)) }
+        compose.waitUntil(10000) { model.state.value.chatActivity[id] != null }
+        // Wait until the initial reply comparison has established its historical baseline.
+        SystemClock.sleep(700)
+        assertFalse(model.state.value.chatActivity.getValue(id).unread)
+        fun announce(value: JsonObject) {
+            runtime.set(value)
+            emit(peer!!, "thread/status/changed", obj("threadId" to s(id), "status" to value))
+        }
+        announce(obj("type" to s("active")))
+        compose.waitUntil(5000) { model.state.value.chatActivity[id]?.indicator == ChatIndicator.Working }
+        assertNull(model.state.value.thread)
+        announce(obj("type" to s("active"), "activeFlags" to JsonArray(listOf(s("waitingOnApproval")))))
+        compose.waitUntil(5000) { model.state.value.chatActivity[id]?.indicator == ChatIndicator.Approval }
+        announce(obj("type" to s("active"), "activeFlags" to JsonArray(listOf(s("waitingOnUserInput")))))
+        compose.waitUntil(5000) { model.state.value.chatActivity[id]?.indicator == ChatIndicator.Input }
+        text.set("A new reply to review")
+        announce(obj("type" to s("idle")))
+        compose.waitUntil(10000) { model.state.value.chatActivity[id]?.indicator == ChatIndicator.Unread }
+        // An old remembered selection or backgrounded app must not count as reading.
+        compose.runOnUiThread { model.viewedReply(id, replySignature("indicator-turn", turn().list("items"))!!) }
+        assertTrue(model.state.value.chatActivity.getValue(id).unread)
+        compose.runOnUiThread { model.openTask(id) }
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.entries.any { it.text == text.get() } }
+        compose.waitUntil(5000) { model.state.value.chatActivity[id]?.unread == false }
+        compose.runOnUiThread { model.home() }
+        compose.waitUntil(5000) { model.state.value.page == "home" }
+        announce(obj("type" to s("systemError")))
+        compose.waitUntil(5000) { model.state.value.chatActivity[id]?.indicator == ChatIndicator.Error }
+        announce(obj("type" to s("notLoaded")))
+        compose.waitUntil(5000) { model.state.value.chatActivity[id]?.indicator == ChatIndicator.None }
+    }
+
+    @Test
     fun compactInboxVisualAndTyping() {
         browserResponse = { method, _ -> if (method != "thread/list") null else obj("data" to JsonArray(
             listOf("Printer connection", "Guardian review", "Linux printing setup", "Merge the auth bridge", "Printer calibration").mapIndexed { index, title ->

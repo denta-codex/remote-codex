@@ -39,6 +39,17 @@ constructor(
     private var connectionJob: Job? = null
     private var updateJob: Job? = null
     private var foreground = false
+    private val visibleChatIds = MutableStateFlow(emptySet<String>())
+    private val activityMonitor = ChatActivityMonitor(viewModelScope, local, rpc, endpoint + "/" + expectedHome) { id, activity ->
+        _state.update { it.copy(chatActivity = it.chatActivity + (id to activity)) }
+    }
+
+    override fun visibleChats(ids: Set<String>) { visibleChatIds.value = ids }
+    override fun viewedReply(thread: String, signature: String) {
+        val st = _state.value
+        if (foreground && st.page == "chat" && st.thread == thread && !st.busy)
+            activityMonitor.read(thread, signature)
+    }
     private var selection = 0
     private var listSelection = 0
     private var listJob: Job? = null
@@ -94,6 +105,12 @@ constructor(
         }
 
     init {
+        viewModelScope.launch {
+            combine(state.map { Triple(it.page, it.ready && it.appForeground, it.thread) }.distinctUntilChanged(), visibleChatIds) { state, ids ->
+                val (page, active, thread) = state
+                (if (page in listOf("home", "archives")) ids else if (page == "chat" && thread != null) setOf(thread) else emptySet()) to active
+            }.distinctUntilChanged().collect { (ids, active) -> activityMonitor.watch(ids, active) }
+        }
         network.registerDefaultNetworkCallback(callback)
         viewModelScope.launch {
             state.map { listOf(it.page, it.connection, it.thread, it.activeTurn, it.journal?.str("stage"),
@@ -115,6 +132,7 @@ constructor(
 
     fun foreground(value: Boolean) {
         foreground = value
+        _state.update { it.copy(appForeground = value) }
         if (value) UpdateInstallResults.consume(getApplication())?.let(::applyInstallResult)
         if (value && !_state.value.ready) connect()
     }
@@ -1914,6 +1932,7 @@ constructor(
     private fun handle(event: JsonObject) {
         if (event.str("_epoch").toLongOrNull()?.let { it != rpc.generation } == true) return
         if (event.str("method") == "connection/lost") {
+            activityMonitor.disconnected()
             requests.clear()
             _state.update {
                 it.copy(
@@ -1941,6 +1960,7 @@ constructor(
             }
             return
         }
+        activityMonitor.event(event)
         if (hydrating) {
             buffered.add(event)
             return

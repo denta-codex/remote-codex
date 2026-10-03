@@ -91,6 +91,21 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
             }
         }
     }
+    val latestTurn = st.entries.lastOrNull()?.turn
+    val latestReply = st.entries.lastOrNull { it.turn == latestTurn && it.kind in setOf("agentMessage", "plan") }
+    val signature = remember(st.entries) { latestTurn?.let { turn -> replySignature(turn, st.entries.filter { it.turn == turn }.map { it.raw }) } }
+    LaunchedEffect(st.thread, signature, st.busy, st.activeTurn, st.appForeground, scroll) {
+        val thread = st.thread ?: return@LaunchedEffect
+        if (signature == null || st.busy || st.activeTurn != null || !st.appForeground) return@LaunchedEffect
+        // Allow the new reply to be measured before consulting its visible bounds.
+        withFrameNanos { }
+        withFrameNanos { }
+        snapshotFlow {
+            val layout = scroll.layoutInfo
+            val reply = layout.visibleItemsInfo.firstOrNull { it.key == latestReply?.key }
+            reply != null && reply.offset + reply.size <= layout.viewportEndOffset && !scroll.isScrollInProgress
+        }.collect { replyViewed -> if (replyViewed) actions.viewedReply(thread, signature) }
+    }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
     Box(Modifier.weight(1f).fillMaxWidth()) {
         LazyColumn(

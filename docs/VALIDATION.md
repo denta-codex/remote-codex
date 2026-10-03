@@ -708,3 +708,32 @@ gesture are still pending user-authorized live deployment and delivery.
 - State remains Android-local, and desktop annotation controls are not advertised.
   CDN-backed content still requires connectivity. This change has not been published,
   installed on the phone, or validated against live account content.
+
+## Compact inbox activity indicators
+
+- Inspected static Codex desktop 26.928.40906 assets and ChatGPT Android
+  1.2026.258 (2625815) reference sources. Desktop separates runtime attention
+  from its unread store; Android's remote-thread trailing content includes a
+  small unread marker and distinguishes working/approval/input/error states.
+  These were static reference inspections, not live UI interaction.
+- Implemented the requested spinner, unread blue dot, slowly pulsing blue
+  approval/input marker, red warning, and blank quiet state. Screen-reader
+  descriptions distinguish each state; disabled system animations are respected.
+- Focused emulator runs passed four unique cases:
+  `HomeScreenTest#chatIndicatorsAndScreenshots`,
+  `AppTest#inboxRuntimeAndUnreadFollowServerAndVisibleReply`,
+  `AppTest#readingEarlierParagraphKeepsNewReplyUnread`, and
+  `AppTest#compactArchivesRestoreAndNavigation`.
+  The viewport refinement was rechecked in the second three-test run.
+- Fixture screenshots were captured from Compose and visually inspected:
+  `artifacts/chat-status/chat-status-light.png` and
+  `artifacts/chat-status/chat-status-cover-dark.png` (360 dp, 150% text).
+- Pure tests cover runtime precedence, historical baselines, digest persistence,
+  host separation, old responses, approval reconciliation, and first-observed
+  running tasks completing unread. The release workflow runs these with the
+  existing unit/lint/build checks.
+- Read-only smoke checks against Grace verified initialization identity,
+  metadata-only `thread/read`, and descending full `thread/turns/list` with
+  limit 1. No mutation, background resume, server change, or phone installation
+  was performed. Publication stays on `codex/compact-inbox`; merging remains
+  pending phone testing.
