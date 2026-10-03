@@ -7,8 +7,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -18,8 +21,29 @@ import dev.codexops.core.str
 
 @Composable
 internal fun HomeScreen(st: ScreenState, actions: HomeActions) {
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(st.taskNotice?.id) {
+        val notice = st.taskNotice ?: return@LaunchedEffect
+        val result = snackbar.showSnackbar(
+            notice.message,
+            actionLabel = if (notice.undoArchived != null) "Undo" else null,
+            withDismissAction = true,
+            duration = SnackbarDuration.Long,
+        )
+        if (result == SnackbarResult.ActionPerformed) actions.undoTaskAction(notice.id)
+        else actions.dismissTaskNotice(notice.id)
+    }
+    Box(Modifier.fillMaxSize()) {
+        TaskList(st, actions)
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(12.dp))
+    }
+}
+
+@Composable
+private fun TaskList(st: ScreenState, actions: HomeActions) {
     val cover = LocalAppWindowClass.current.coverScreen
     val horizontalPadding = if (cover) 12.dp else 20.dp
+    val context = LocalContext.current
     Column(Modifier.fillMaxSize().padding(horizontal = horizontalPadding)) {
         Row(
             Modifier.fillMaxWidth().padding(
@@ -138,11 +162,14 @@ internal fun HomeScreen(st: ScreenState, actions: HomeActions) {
                     ) {
                         Glyph(R.drawable.ic_chat, modifier = Modifier.size(32.dp))
                         Text(
-                            if (st.ready) "No tasks found" else "Your tasks will appear here",
+                            if (st.tasksLoading) "Loading tasks…"
+                            else if (st.ready) "No tasks found" else "Your tasks will appear here",
                             fontWeight = FontWeight.Medium,
                         )
                         Text(
-                            if (st.ready) "Start a new chat to get going."
+                            if (st.tasksLoading) ""
+                            else if (st.archived) "Archived tasks will appear here."
+                            else if (st.ready) "Start a new chat to get going."
                             else "Connect to ${st.host.displayName} in Settings.",
                             fontSize = 13.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -150,6 +177,9 @@ internal fun HomeScreen(st: ScreenState, actions: HomeActions) {
                     }
                 }
             items(st.tasks, key = { it.str("id") }) { task ->
+                val id = task.str("id")
+                val pending = id in st.pendingTaskActions
+                val unread = id in st.unreadTasks
                 val status = task.map("status").str("type")
                 val projectName =
                     task.str("projectId").takeIf(String::isNotBlank)?.let { projectId ->
@@ -163,10 +193,17 @@ internal fun HomeScreen(st: ScreenState, actions: HomeActions) {
                         "systemError" -> "Needs attention"
                         else -> status.replaceFirstChar { it.uppercase() }.ifBlank { "Task" }
                     }
-                Surface(
-                    onClick = { actions.openTask(task.str("id")) },
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.surface,
+                TaskSwipeRow(
+                    id = id,
+                    archived = st.archived,
+                    unread = unread,
+                    pending = pending,
+                    archiveEnabled = st.ready && !st.tasksLoading && !pending && id !in st.uncertainTaskActions,
+                    unreadEnabled = !st.tasksLoading && !pending,
+                    onOpen = { if (!pending && !st.tasksLoading) actions.openTask(id) },
+                    onCopy = { copyThreadDeeplink(context, id) },
+                    onArchive = { actions.archiveTask(id, !st.archived) },
+                    onUnread = { actions.markTaskUnread(id) },
                 ) {
                     Row(
                         Modifier.fillMaxWidth().padding(
@@ -213,7 +250,11 @@ internal fun HomeScreen(st: ScreenState, actions: HomeActions) {
                                 )
                             }
                         }
-                        Glyph(R.drawable.ic_chevron, modifier = Modifier.size(16.dp))
+                        when {
+                            pending -> CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                            unread -> Glyph(R.drawable.ic_unread, "Unread", Modifier.size(18.dp))
+                            else -> Glyph(R.drawable.ic_chevron, modifier = Modifier.size(16.dp))
+                        }
                     }
                 }
                 HorizontalDivider(

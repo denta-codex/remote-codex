@@ -7,9 +7,16 @@ import android.net.Uri
 import android.os.SystemClock
 import android.os.ParcelFileDescriptor
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModelStore
@@ -29,11 +36,153 @@ import org.junit.*
 import org.junit.Assert.*
 
 class AppTest {
+    @Test
+    fun taskSwipeMarksUnread() {
+        compose.onNodeWithText("Fixture task").performTouchInput { swipeRight() }
+        compose.waitUntil(5000) { "task-test" in model.state.value.unreadTasks }
+        compose.onNodeWithContentDescription("Unread").assertExists()
+        // Repeating the same gesture does not toggle the task back to read.
+        compose.onNodeWithTag("task-row-task-test").performTouchInput { swipeRight() }
+        compose.onNodeWithContentDescription("Unread").assertExists()
+        compose.runOnUiThread {
+            store.clear()
+            model = ClientModel(app, "ws://127.0.0.1:${server.port}/rpc", "/fixture", true)
+            store.put("fixture", model)
+            compose.activity.setContent { RemoteTheme { App(model) } }
+            model.foreground(true)
+        }
+        compose.waitUntil(15000) { model.state.value.ready && model.state.value.tasks.isNotEmpty() }
+        compose.onNodeWithContentDescription("Unread").assertExists()
+        compose.onNodeWithText("Fixture task").performClick()
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.thread == "task-test" }
+        assertFalse("task-test" in model.state.value.unreadTasks)
+        compose.runOnUiThread { model.home() }
+        compose.waitUntil(5000) { model.state.value.page == "home" && !model.state.value.tasksLoading }
+        compose.onNodeWithContentDescription("Unread").assertDoesNotExist()
+    }
+
+    @Test
+    fun taskSwipesArchiveUndoAndUnarchive() {
+        val row = compose.onNodeWithTag("task-row-task-test")
+        // An incomplete drag must spring back without sending anything.
+        row.performTouchInput {
+            swipe(center, Offset(center.x - width * 0.12f, center.y), 300)
+        }
+        compose.waitForIdle()
+        assertTrue(archiveMutations.isEmpty())
+        row.performTouchInput { swipeLeft() }
+        compose.waitUntil(5000) { model.state.value.taskNotice?.message == "Task archived" && !model.state.value.tasksLoading }
+        row.assertDoesNotExist()
+        assertEquals(listOf("thread/archive"), archiveMutations.map { it.str("method") })
+        compose.onNodeWithText("Undo").performClick()
+        compose.waitUntil(5000) { model.state.value.tasks.any { it.str("id") == "task-test" } && !model.state.value.tasksLoading }
+        row.assertExists()
+        row.performTouchInput { swipeLeft() }
+        compose.waitUntil(5000) { model.state.value.tasks.none { it.str("id") == "task-test" } && !model.state.value.tasksLoading }
+        compose.onNodeWithText("Archived").performClick()
+        compose.waitUntil(5000) { model.state.value.tasks.any { it.str("id") == "task-test" } && !model.state.value.tasksLoading }
+        row.performTouchInput { swipeRight() }
+        compose.waitUntil(5000) { "task-test" in model.state.value.unreadTasks }
+        row.performTouchInput { swipeLeft() }
+        compose.waitUntil(5000) { model.state.value.taskNotice?.message == "Task unarchived" && !model.state.value.tasksLoading }
+        row.assertDoesNotExist()
+        assertEquals(listOf("thread/archive", "thread/unarchive", "thread/archive", "thread/unarchive"), archiveMutations.map { it.str("method") })
+        assertTrue(archiveMutations.all { it.map("params").str("threadId") == "task-test" })
+    }
+
+    @Test
+    fun taskLongPressCopiesLinkAndAccessibleActionsWork() {
+        val row = compose.onNodeWithTag("task-row-task-test")
+        row.performTouchInput { longClick() }
+        compose.runOnUiThread {
+            assertEquals("codex://threads/task-test", app.getSystemService(ClipboardManager::class.java).primaryClip?.getItemAt(0)?.text.toString())
+        }
+        assertEquals("home", model.state.value.page)
+        assertTrue(archiveMutations.isEmpty())
+        val unreadActions = row.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.CustomActions]
+        compose.runOnUiThread {
+            val actions = unreadActions
+            assertEquals(setOf("Archive", "Mark unread", "Copy deep link"), actions.map { it.label }.toSet())
+            actions.single { it.label == "Mark unread" }.action()
+        }
+        compose.waitUntil(5000) { "task-test" in model.state.value.unreadTasks }
+        val archiveAction = row.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.CustomActions].single { it.label == "Archive" }
+        compose.runOnUiThread {
+            archiveAction.action()
+        }
+        compose.waitUntil(5000) { model.state.value.taskNotice?.message == "Task archived" }
+        assertEquals(1, archiveMutations.size)
+    }
+
+    @Test
+    fun uncertainArchiveDoesNotReplayOnReconnect() {
+        dropArchiveReply = true
+        compose.onNodeWithTag("task-row-task-test").performTouchInput { swipeLeft() }
+        compose.waitUntil(5000) { "task-test" in model.state.value.uncertainTaskActions }
+        compose.onNodeWithTag("task-row-task-test").assertExists()
+        assertNull(model.state.value.taskNotice)
+        assertTrue(model.state.value.error.orEmpty().contains("outcome unknown"))
+        compose.onNodeWithTag("task-row-task-test").performTouchInput { swipeLeft() }
+        compose.runOnUiThread { model.connect() }
+        compose.waitUntil(15000) { model.state.value.ready && !model.state.value.tasksLoading && model.state.value.tasks.none { it.str("id") == "task-test" } }
+        assertEquals(1, archiveMutations.size)
+        compose.onNodeWithText("Archived").performClick()
+        compose.waitUntil(5000) { model.state.value.tasks.any { it.str("id") == "task-test" } && !model.state.value.tasksLoading }
+        assertFalse("task-test" in model.state.value.uncertainTaskActions)
+        assertEquals(1, archiveMutations.size)
+    }
+
+    @Test
+    fun rejectedArchiveKeepsTaskAndOffersNoUndo() {
+        rejectArchive = true
+        compose.onNodeWithTag("task-row-task-test").performTouchInput { swipeLeft() }
+        compose.waitUntil(5000) { model.state.value.error?.contains("rejected the archive") == true }
+        compose.onNodeWithTag("task-row-task-test").assertExists()
+        assertNull(model.state.value.taskNotice)
+        assertTrue(model.state.value.uncertainTaskActions.isEmpty())
+        assertEquals(1, archiveMutations.size)
+    }
+
+    @Test
+    fun taskGesturesOnCompactScreenRespectCancellationAndPhysicalDirection() {
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                RemoteTheme {
+                    CompositionLocalProvider(
+                        LocalLayoutDirection provides LayoutDirection.Rtl,
+                    ) {
+                        Box(Modifier.size(320.dp, 440.dp)) { App(model) }
+                    }
+                }
+            }
+        }
+        val row = compose.onNodeWithTag("task-row-task-test")
+        row.assertIsDisplayed()
+        row.performTouchInput {
+            down(center)
+            moveTo(Offset(width * 0.05f, center.y), 400)
+            cancel()
+        }
+        row.performTouchInput { swipe(center, Offset(center.x + 4, center.y - 24), 300) }
+        compose.waitForIdle()
+        assertTrue(archiveMutations.isEmpty())
+        assertTrue(model.state.value.unreadTasks.isEmpty())
+        row.performTouchInput { swipeRight() }
+        compose.waitUntil(5000) { "task-test" in model.state.value.unreadTasks }
+        row.performTouchInput { swipeLeft() }
+        compose.waitUntil(5000) { model.state.value.taskNotice?.message == "Task archived" }
+        assertEquals("thread/archive", archiveMutations.single().str("method"))
+    }
+
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
     private lateinit var server: MockWebServer
     private lateinit var model: ClientModel
     private val store = ViewModelStore()
     private val sent = AtomicInteger()
+    private val archivedTaskIds = ConcurrentHashMap.newKeySet<String>()
+    private val archiveMutations = CopyOnWriteArrayList<JsonObject>()
+    @Volatile private var dropArchiveReply = false
+    @Volatile private var rejectArchive = false
     private val prepared = AtomicInteger()
     private val modelLists = AtomicInteger()
     private val workspaceMetadataReads = AtomicInteger()
@@ -130,6 +279,20 @@ class AppTest {
                                         return
                                     }
                                     if (method == "initialized") return
+                                    if (method in setOf("thread/archive", "thread/unarchive")) {
+                                        archiveMutations.add(m)
+                                        if (rejectArchive) {
+                                            ws.send(obj("id" to m["id"], "error" to obj("code" to JsonPrimitive(-32000), "message" to s("Rejected archive"))).toString())
+                                            return
+                                        }
+                                        if (method == "thread/archive") archivedTaskIds.add(params.str("threadId"))
+                                        else archivedTaskIds.remove(params.str("threadId"))
+                                        if (dropArchiveReply) {
+                                            dropArchiveReply = false
+                                            ws.close(1011, "fixture archive response lost")
+                                            return
+                                        }
+                                    }
                                     if (method.startsWith("thread/queue/") && method != "thread/queue/list")
                                         queueMutations.add(m)
                                     val result =
@@ -589,6 +752,7 @@ class AppTest {
                     "draft/project-task",
                     "journal/project-task",
                     "attachments/project-task",
+                    "unread/grace",
                 )
                 .forEach { local.remove(it) }
         }
@@ -662,7 +826,8 @@ class AppTest {
                 if (!params.containsKey("projectId")) true
                 else if (params["projectId"] is JsonNull) task["projectId"] is JsonNull
                 else params.str("projectId") == task.str("projectId")
-            cwdMatches && projectMatches
+            val archived = (params["archived"] as? JsonPrimitive)?.booleanOrNull ?: false
+            cwdMatches && projectMatches && ((task.str("id") in archivedTaskIds) == archived)
         }
     }
 

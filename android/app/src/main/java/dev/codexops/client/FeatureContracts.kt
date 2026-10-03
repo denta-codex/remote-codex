@@ -119,6 +119,11 @@ data class ScreenState(
     val listCursor: String? = null,
     val query: String = "",
     val archived: Boolean = false,
+    val tasksLoading: Boolean = false,
+    val unreadTasks: Set<String> = emptySet(),
+    val pendingTaskActions: Set<String> = emptySet(),
+    val uncertainTaskActions: Set<String> = emptySet(),
+    val taskNotice: TaskNotice? = null,
     val thread: String? = null,
     val threadCwd: String? = null,
     val title: String = "New chat",
@@ -146,6 +151,13 @@ data class ScreenState(
     val filePreview: FilePreviewState? = null,
 )
 
+data class TaskNotice(
+    val id: String,
+    val message: String,
+    val threadId: String? = null,
+    val undoArchived: Boolean? = null,
+)
+
 fun ScreenState.collaborationModel(): String? =
     newTaskOptions.model ?: threadModel ?: models.firstOrNull(ServerModelOption::isDefault)?.id
 
@@ -169,6 +181,14 @@ interface HomeActions {
     fun newChat()
 
     fun openTask(id: String)
+
+    fun archiveTask(id: String, archived: Boolean)
+
+    fun markTaskUnread(id: String)
+
+    fun undoTaskAction(noticeId: String)
+
+    fun dismissTaskNotice(noticeId: String)
 }
 
 interface SettingsActions {

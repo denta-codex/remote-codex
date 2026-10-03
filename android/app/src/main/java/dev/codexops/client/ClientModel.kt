@@ -12,6 +12,8 @@ import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 
 class ClientModel
@@ -34,6 +36,14 @@ constructor(
     private val remoteFileRepository = RemoteFileRepository(app)
     private val _state = MutableStateFlow(ScreenState(host = host))
     val state = _state.asStateFlow()
+    private val unreadLock = Mutex()
+    private val unreadKey = "unread/${host.id}"
+    private val unreadLoaded = viewModelScope.async {
+        val saved = local.get(unreadKey)
+        val ids = if (saved.isBlank()) emptySet() else
+            wire.parseToJsonElement(saved).jsonArray.map { it.jsonPrimitive.content }.toSet()
+        _state.update { it.copy(unreadTasks = ids) }
+    }
     private var connectionJob: Job? = null
     private var updateJob: Job? = null
     private var foreground = false
@@ -336,7 +346,7 @@ constructor(
     }
 
     override fun query(value: String) {
-        _state.update { it.copy(query = value) }
+        _state.update { it.copy(query = value, tasksLoading = true) }
         val n = ++listSelection
         viewModelScope.launch {
             delay(300)
@@ -345,17 +355,99 @@ constructor(
     }
 
     override fun archived(value: Boolean) {
-        _state.update { it.copy(archived = value) }
+        listSelection++
+        _state.update { it.copy(archived = value, tasks = emptyList(), listCursor = null, tasksLoading = true) }
         viewModelScope.launch { guarded { refreshList() } }
     }
 
     override fun projectFilter(value: TaskProjectFilter) {
-        _state.update { it.copy(projectFilter = value) }
+        listSelection++
+        _state.update { it.copy(projectFilter = value, tasksLoading = true) }
         viewModelScope.launch { guarded { refreshList() } }
     }
 
     override fun moreTasks() {
         viewModelScope.launch { guarded { refreshList(true) } }
+    }
+
+    private suspend fun setTaskUnread(id: String, unread: Boolean) {
+        unreadLoaded.await()
+        unreadLock.withLock {
+            val ids = if (unread) _state.value.unreadTasks + id else _state.value.unreadTasks - id
+            local.put(unreadKey, JsonArray(ids.sorted().map(::s)).toString())
+            _state.update { it.copy(unreadTasks = ids) }
+        }
+    }
+
+    override fun markTaskUnread(id: String) {
+        if (_state.value.tasks.none { it.str("id") == id }) return
+        viewModelScope.launch {
+            try {
+                setTaskUnread(id, true)
+                _state.update { it.copy(taskNotice = TaskNotice(UUID.randomUUID().toString(), "Marked unread")) }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                _state.update { it.copy(error = "Could not save the unread reminder.") }
+            }
+        }
+    }
+
+    override fun dismissTaskNotice(noticeId: String) {
+        _state.update { if (it.taskNotice?.id == noticeId) it.copy(taskNotice = null) else it }
+    }
+
+    override fun undoTaskAction(noticeId: String) {
+        val notice = _state.value.taskNotice?.takeIf { it.id == noticeId } ?: return
+        val id = notice.threadId ?: return
+        val archived = notice.undoArchived ?: return
+        dismissTaskNotice(noticeId)
+        changeTaskArchive(id, archived)
+    }
+
+    override fun archiveTask(id: String, archived: Boolean) {
+        val before = _state.value
+        if (before.tasksLoading || before.archived == archived || before.tasks.none { it.str("id") == id }) return
+        changeTaskArchive(id, archived)
+    }
+
+    private fun changeTaskArchive(id: String, archived: Boolean) {
+        val before = _state.value
+        if (id in before.pendingTaskActions || id in before.uncertainTaskActions) return
+        if (!before.ready) {
+            _state.update { it.copy(error = "Reconnect before changing archived tasks.") }
+            return
+        }
+        // Reserve synchronously so repeated releases/accessibility actions cannot double-send.
+        _state.update { it.copy(pendingTaskActions = it.pendingTaskActions + id, error = null) }
+        viewModelScope.launch {
+            try {
+                rpc.call(if (archived) "thread/archive" else "thread/unarchive", obj("threadId" to s(id)))
+            } catch (e: Exception) {
+                if (e is CancellationException && e !is TimeoutCancellationException) throw e
+                // Reads started before the failed request cannot reconcile its outcome.
+                listSelection++
+                _state.update {
+                    it.copy(
+                        tasksLoading = false,
+                        uncertainTaskActions = if (e is RpcRejected) it.uncertainTaskActions else it.uncertainTaskActions + id,
+                        error = if (e is RpcRejected) "The server rejected the archive change."
+                            else "Archive outcome unknown. Reconnect or refresh the task list before trying again. No retry was sent.",
+                    )
+                }
+                return@launch
+            } finally {
+                _state.update { it.copy(pendingTaskActions = it.pendingTaskActions - id) }
+            }
+            // Only an acknowledged mutation removes a row or offers its inverse as Undo.
+            listSelection++
+            _state.update {
+                it.copy(
+                    tasks = if (it.archived != archived) it.tasks.filterNot { row -> row.str("id") == id } else it.tasks,
+                    taskNotice = TaskNotice(UUID.randomUUID().toString(), if (archived) "Task archived" else "Task unarchived", id, !archived),
+                )
+            }
+            guarded { refreshList() }
+        }
     }
 
     private suspend fun refreshProjects() {
@@ -414,9 +506,13 @@ constructor(
     }
 
     private suspend fun refreshList(more: Boolean = false) {
-        if (!_state.value.ready) return
+        if (!_state.value.ready) {
+            _state.update { it.copy(tasksLoading = false) }
+            return
+        }
         val before = _state.value
         val n = ++listSelection
+        _state.update { it.copy(tasksLoading = true) }
         val params =
             obj(
                 "limit" to JsonPrimitive(30),
@@ -450,16 +546,20 @@ constructor(
                             is TaskProjectFilter.Project -> s(filter.id)
                         },
             )
-        val result =
+        val result = try {
             rpc.call(if (before.query.isBlank()) "thread/list" else "thread/search", params)
+        } finally {
+            if (n == listSelection) _state.update { it.copy(tasksLoading = false) }
+        }
         if (n != listSelection) return
+        val rows = result.list("data").map { if (before.query.isBlank()) it else it.map("thread") }
         _state.update {
             it.copy(
+                // Presence in a fresh server list establishes which archive tab owns the task.
+                uncertainTaskActions = it.uncertainTaskActions - rows.map { row -> row.str("id") }.toSet(),
                 tasks =
                     ((if (more) before.tasks else emptyList()) +
-                            result.list("data").map { row ->
-                                if (before.query.isBlank()) row else row.map("thread")
-                            })
+                            rows)
                         .filter { task ->
                             when (val filter = before.projectFilter) {
                                 TaskProjectFilter.All -> true
@@ -633,6 +733,7 @@ constructor(
                 )
             }
             readQueue(id)
+            if (n == selection) setTaskUnread(id, false)
         } finally {
             if (n == selection) {
                 hydrating = false
@@ -1785,6 +1886,11 @@ constructor(
                     refreshList()
                 }
             }
+            return
+        }
+        if (event.str("method") in setOf("thread/archived", "thread/unarchived")) {
+            if (_state.value.page == "home")
+                viewModelScope.launch { guarded { refreshList() } }
             return
         }
         if (hydrating) {
