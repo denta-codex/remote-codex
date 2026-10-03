@@ -178,8 +178,8 @@ private fun ComposerActions(
             Glyph(R.drawable.ic_stop, "Stop")
         }
         FilledIconButton(onSend, Modifier.testTag("send").size(48.dp), shape = CircleShape,
-            colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                contentColor = MaterialTheme.colorScheme.onSecondaryContainer),
+            colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary),
             enabled = state.ready && !state.busy && !state.merge.blocksTask && !state.waitingToSendMode() &&
                 (state.draft.isNotBlank() || state.attachments.isNotEmpty()) && state.journal == null &&
                 (state.newTaskOptions.collaborationMode == null || state.collaborationModes.any {
