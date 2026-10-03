@@ -161,7 +161,7 @@ private fun ComposerActions(
             }
         }
     }
-    val settingsDescription = listOfNotNull("Conversation settings", settings.model, settings.effort, settings.mode, if (state.composerSpeed().fast) "Fast mode" else null).joinToString(", ")
+    val settingsDescription = listOfNotNull("Conversation settings", settings.model, settings.effort.takeIf { it.isNotBlank() }, settings.mode, if (state.composerSpeed().fast) "Fast mode" else null).joinToString(", ")
     val settingsControl: @Composable (Modifier) -> Unit = { modifier ->
         OutlinedButton(onSettings, modifier.heightIn(min = 48.dp).testTag("conversation-settings")
             .semantics {
@@ -173,7 +173,7 @@ private fun ComposerActions(
             Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("${settings.model} · ${settings.effort}", Modifier.weight(1f, fill = false), style = MaterialTheme.typography.labelLarge)
+                    Text(listOf(settings.model, settings.effort).filter { it.isNotBlank() }.joinToString(" · "), Modifier.weight(1f, fill = false), style = MaterialTheme.typography.labelLarge)
                     if (state.composerSpeed().fast) Glyph(R.drawable.ic_fast, modifier =
                         Modifier.size(16.dp).testTag("fast-mode-icon"))
                 }
