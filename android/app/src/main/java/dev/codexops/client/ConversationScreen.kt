@@ -117,6 +117,7 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
                 Message(
                     entry = entry,
                     actions = actions,
+                    visualizationScope = "${st.host.endpoint}/${st.thread}/${entry.key}",
                     canImplement =
                         entry.key == actionablePlan?.key &&
                             st.ready &&
@@ -293,6 +294,7 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
 private fun Message(
     entry: Entry,
     actions: ConversationActions,
+    visualizationScope: String,
     canImplement: Boolean,
     onImplement: () -> Unit,
 ) {
@@ -322,7 +324,7 @@ private fun Message(
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             MediaGallery(entry.media, actions)
             if (entry.text.isNotBlank())
-                SelectionContainer { FileAwareMarkdown(entry.text.take(100000), actions) }
+                VisualizationAwareMarkdown(entry.text.take(100000), visualizationScope, entry.completed, actions)
         }
     else if (entry.kind == "plan") {
         Card(
