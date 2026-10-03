@@ -50,6 +50,8 @@ class AppTest {
     @Volatile private var lastTurnStartParams: JsonObject? = null
     @Volatile private var historyOverride: JsonObject? = null
     @Volatile private var fixtureTitle = "Fixture task"
+    @Volatile private var recencyFixture = false
+    private val recencyRequests = CopyOnWriteArrayList<JsonObject>()
     @Volatile private var lastThreadStart: JsonObject? = null
     private val worktreeAdds = AtomicInteger()
     private val threadStarts = AtomicInteger()
@@ -133,7 +135,10 @@ class AppTest {
                                     if (method.startsWith("thread/queue/") && method != "thread/queue/list")
                                         queueMutations.add(m)
                                     val result =
-                                        when (method) {
+                                        if (recencyFixture && method in listOf("thread/list", "thread/search")) {
+                                            recencyRequests.add(obj("method" to s(method), "params" to params))
+                                            recencyPage(params, method == "thread/search")
+                                        } else when (method) {
                                             "initialize" -> obj("codexHome" to s("/fixture"))
                                             "collaborationMode/list" ->
                                                 obj(
@@ -613,6 +618,31 @@ class AppTest {
             "name" to s(name),
             "roots" to JsonArray(listOf(obj("path" to s(root)))),
         )
+
+    private fun recencyPage(params: JsonObject, search: Boolean): JsonObject {
+        val tasks = listOf(
+            obj(
+                "id" to s("old-lampshades"),
+                "name" to s("lets 3d print some lampshades"),
+                "updatedAt" to JsonPrimitive(300),
+                "recencyAt" to JsonPrimitive(100),
+            ),
+            obj(
+                "id" to s("recent-chat"),
+                "name" to s("Recently active chat"),
+                "updatedAt" to JsonPrimitive(200),
+                "recencyAt" to JsonPrimitive(200),
+            ),
+        )
+        val field = if (params.str("sortKey") == "recency_at") "recencyAt" else "updatedAt"
+        val sorted = tasks.sortedByDescending { it[field]!!.jsonPrimitive.long }
+        val more = params.str("cursor") == "recency-page-2"
+        val task = sorted[if (more) 1 else 0]
+        return obj(
+            "data" to JsonArray(listOf(if (search) obj("thread" to task) else task)),
+            "nextCursor" to if (more) null else s("recency-page-2"),
+        )
+    }
 
     private fun fixtureTasks(params: JsonObject): List<JsonObject> {
         val tasks =
@@ -1361,6 +1391,35 @@ class AppTest {
         compose.waitUntil(15000) { model.state.value.ready && !model.state.value.busy }
         assertEquals(0, sent.get())
         compose.onNodeWithTag("send").assertIsNotEnabled()
+    }
+
+    @Test
+    fun recentChatsIgnoreMetadataUpdatesAcrossPagesAndSearch() {
+        recencyFixture = true
+        compose.runOnUiThread { model.home() }
+        compose.waitUntil(5000) { model.state.value.tasks.firstOrNull()?.str("id") == "recent-chat" }
+        compose.onNodeWithText("Recently active chat").assertIsDisplayed()
+        compose.onNodeWithText("lets 3d print some lampshades").assertDoesNotExist()
+        compose.runOnUiThread { model.moreTasks() }
+        compose.waitUntil(5000) { model.state.value.listCursor == null }
+        assertEquals(listOf("recent-chat", "old-lampshades"), model.state.value.tasks.map { it.str("id") })
+
+        compose.runOnUiThread { model.query("chat") }
+        compose.waitUntil(5000) {
+            model.state.value.tasks.size == 1 && model.state.value.listCursor != null
+        }
+        assertEquals("recent-chat", model.state.value.tasks.single().str("id"))
+        compose.runOnUiThread { model.moreTasks() }
+        compose.waitUntil(5000) { model.state.value.listCursor == null }
+        assertEquals(listOf("recent-chat", "old-lampshades"), model.state.value.tasks.map { it.str("id") })
+        assertEquals(listOf("thread/list", "thread/list", "thread/search", "thread/search"),
+            recencyRequests.map { it.str("method") })
+        recencyRequests.forEach {
+            assertEquals("recency_at", it.map("params").str("sortKey"))
+            assertEquals("desc", it.map("params").str("sortDirection"))
+        }
+        assertEquals(listOf("", "recency-page-2", "", "recency-page-2"),
+            recencyRequests.map { it.map("params").str("cursor") })
     }
 
     @Test

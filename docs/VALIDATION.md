@@ -1,5 +1,31 @@
 # Validation
 
+## Report 624bbb7a — inactive chat promoted in recents
+
+- The frozen report identifies Android 0.2.11 (23), while the supplied checkout
+  `0ce33a5` predates its compact inbox and relative-age labels. The common list
+  request explicitly sorted by `updated_at`. The frozen snapshot does not include
+  task-list timestamps, so it cannot establish the exact update that triggered
+  the captured ordering.
+- A read-only comparison of the current stock state database reproduced the
+  inversion for the reported lampshades task and source chat: descending
+  `updated_at_ms` puts lampshades first; descending `recency_at_ms` puts the source
+  chat first. This is current diagnostic evidence, not a reconstruction of the
+  capture. Both list and search support `recency_at` in the checked-in protocol.
+- Changed the browser's list/search requests to explicit descending `recency_at`,
+  preserving server ordering and opaque cursors across pages. No client-side
+  timestamp cache or reordering was introduced.
+- `scripts/emulator-test --tests
+  AppTest#recentChatsIgnoreMetadataUpdatesAcrossPagesAndSearch` passed: one test,
+  Android 16 managed device. The fixture gives an old chat a newer metadata
+  timestamp and checks list/search order, second pages, sort parameters and
+  cursor propagation. Debug and instrumentation compilation passed as part of
+  that run. Initial sandbox startup was blocked by the read-only Gradle cache
+  before tests ran; the authorized host-level invocation completed successfully.
+- No release, publication, forwarder deployment, or physical-phone installation
+  was performed. The newer inbox's relative-age rendering is absent from this
+  revision and was not changed or validated.
+
 ## 2026-09-30 — Android 0.2.6 (16)
 
 - Source revision: `e03e256c89b77d64b6a6b73738ff0a19b86abfe4`.

@@ -46,7 +46,10 @@ acknowledgement, replay, or custom chunk envelope between Android and the host.
 
 The client pages the stock `project/list` catalog and keeps project identity and
 thread assignment server-owned. The task browser can show all tasks, projectless
-Chats, or one existing project. New tasks default to projectless execution: their
+Chats, or one existing project. List and search pages request descending
+`recency_at` ordering from stock Codex; `updated_at` can advance for metadata
+changes to otherwise inactive chats. Pagination preserves the server's order.
+New tasks default to projectless execution: their
 directories are fixed under `/home/agent/Documents/RemoteCodex`, using a client
 UUID, and preparation uses an explicit workspace-write sandbox rooted there without
 network access. Selecting an existing project supplies its first stock project root

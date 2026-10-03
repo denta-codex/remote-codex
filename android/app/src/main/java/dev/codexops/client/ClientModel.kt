@@ -422,7 +422,10 @@ constructor(
                 "limit" to JsonPrimitive(30),
                 "archived" to JsonPrimitive(before.archived),
                 "modelProviders" to if (before.query.isBlank()) JsonArray(emptyList()) else null,
-                "sortKey" to s("updated_at"),
+                // Metadata updates can touch old chats without new conversation activity.
+                // Let the server order every page by its dedicated recency timestamp.
+                "sortKey" to s("recency_at"),
+                "sortDirection" to s("desc"),
                 "sourceKinds" to
                     JsonArray(
                         listOf(
