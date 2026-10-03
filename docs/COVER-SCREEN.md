@@ -43,7 +43,9 @@ after each test. The focused suite covers:
 - compact composer controls and attachment menu;
 - image expansion and text-file preview;
 - plan card and full-screen plan;
-- blocking question presentation and submission.
+- blocking question presentation and submission;
+- queueing during an active turn with Stop and Queue fully visible, then
+  steering a queued message.
 
 The normal phone suite remains:
 
