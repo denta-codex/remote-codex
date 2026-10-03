@@ -103,6 +103,14 @@ internal fun BugReportMenu(model: ClientModel) {
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             if (screen.page == "chat" && screen.thread != null) {
                 DropdownMenuItem(
+                    text = { Text(if (screen.archived) "Unarchive" else "Archive") },
+                    leadingIcon = { Glyph(if (screen.archived) R.drawable.ic_unarchive else R.drawable.ic_archive) },
+                    enabled = screen.ready && !screen.busy && screen.thread !in screen.pendingTaskActions &&
+                        screen.thread !in screen.uncertainTaskActions,
+                    modifier = Modifier.testTag("archive-chat-menu"),
+                    onClick = { menu = false; model.archiveCurrentTask() },
+                )
+                DropdownMenuItem(
                     text = { Text(if (screen.merge.pending != null) "Check merge state…" else "Merge into main…") },
                     enabled = screen.canInspectMerge() || screen.merge.pending != null && !screen.merge.working,
                     modifier = Modifier.testTag("merge-main-menu"),

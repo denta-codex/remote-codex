@@ -513,6 +513,13 @@ constructor(
         changeTaskArchive(id, archived)
     }
 
+    internal fun archiveCurrentTask() {
+        val before = _state.value
+        val id = before.thread ?: return
+        if (before.page != "chat" || before.busy) return
+        changeTaskArchive(id, !before.archived)
+    }
+
     private fun changeTaskArchive(id: String, archived: Boolean) {
         val before = _state.value
         if (id in before.pendingTaskActions || id in before.uncertainTaskActions) return
@@ -553,7 +560,8 @@ constructor(
                     taskNotice = TaskNotice(UUID.randomUUID().toString(), if (archived) "Task archived" else "Task unarchived", id, !archived),
                 )
             }
-            if (_state.value.page in listOf("home", "archives")) launchList()
+            if (_state.value.page == "chat" && _state.value.thread == id) back()
+            else if (_state.value.page in listOf("home", "archives")) launchList()
         }
     }
 
