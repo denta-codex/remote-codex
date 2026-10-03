@@ -109,7 +109,8 @@ internal fun ConversationComposer(state: ScreenState, actions: ConversationActio
             if (!tray && !(window.coverScreen && typing)) bottomActions(window.coverScreen)
         }
     }
-    if (tray) ModalBottomSheet(
+    ProjectAdditionSheet(state, actions)
+    if (tray && !state.projectAddition.visible) ModalBottomSheet(
         onDismissRequest = { tray = false },
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = MaterialTheme.colorScheme.surfaceVariant,
@@ -256,6 +257,9 @@ private fun ProjectControl(state: ScreenState, actions: ConversationActions, exp
                 leadingIcon = { Glyph(R.drawable.ic_folder, modifier = Modifier.size(18.dp)) },
                 modifier = Modifier.padding(start = 8.dp).heightIn(min = 48.dp).testTag("project-selector"))
             DropdownMenu(menu, { menu = false }) {
+                DropdownMenuItem(text = { Text("Add project") },
+                    onClick = { menu = false; actions.openAddProject() },
+                    modifier = Modifier.testTag("add-project"))
                 DropdownMenuItem(text = { Text("No project") }, leadingIcon = { Glyph(R.drawable.ic_folder) },
                     onClick = { menu = false; actions.updateNewTaskOptions(options.copy(projectId = null,
                         workingDirectory = null, executionTarget = ExecutionTarget.Projectless)) })

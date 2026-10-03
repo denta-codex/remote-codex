@@ -132,6 +132,7 @@ data class ScreenState(
     val appForeground: Boolean = false,
     val configured: Boolean = false,
     val projects: List<CodexProject> = emptyList(),
+    val projectAddition: ProjectAdditionState = ProjectAdditionState(),
     val projectFilter: TaskProjectFilter = TaskProjectFilter.All,
     val tasks: List<JsonObject> = emptyList(),
     val chatActivity: Map<String, ChatActivity> = emptyMap(),
@@ -245,6 +246,15 @@ interface SettingsActions {
 }
 
 interface ConversationActions {
+    fun openAddProject()
+    fun dismissAddProject()
+    fun projectPath(value: String)
+    fun browseProjectFolder(path: String)
+    fun useProjectFolder()
+    fun projectName(value: String)
+    fun addProject()
+    fun checkProjectRegistration()
+    fun chooseMatchingProject(id: String)
     fun inspectMerge()
     fun mergeIntoMain()
     fun reconcileMerge()

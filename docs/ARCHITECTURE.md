@@ -59,6 +59,19 @@ deterministic path under `CODEX_HOME/worktrees/remote-codex-<operation>/workspac
 Project identity remains the selected stock `projectId`; it is not inferred from
 or replaced by the worktree path.
 
+The new-task project picker also offers Add project for an existing host folder.
+A folder-only browser uses stock filesystem reads; pasted paths resolve through
+argument-safe, read-only host realpath execution. Before registration, the client
+pages the catalog and compares canonical roots, reusing a unique match or asking
+which matching project to use. Unmatched folders are registered once through
+stock `project/create`. A host/account-scoped local record is persisted before
+sending and retains the operation key and any acknowledged project ID. Lost
+replies, restarts, and failed catalog refreshes offer read-only reconciliation;
+they never replay creation. Selection preserves the draft and attachments and
+uses the matched server root, including a non-primary root, in Current workspace.
+This does not edit desktop remote-project records, create directories, clone
+repositories, or submit a task.
+
 Task rows use physical left swipe to archive (unarchive in Archived), right swipe
 to mark unread, and long press to copy the existing `codex://threads/<id>` deep
 link. TalkBack custom actions provide the same operations. A deliberate distance

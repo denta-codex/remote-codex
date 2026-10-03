@@ -318,7 +318,7 @@ class AppTest {
 
     @Before
     fun setup() {
-        reportCoverOverride = testName.methodName in setOf("systemScreenshotOffersReportWithTheCapturedWindow", "commandTrayCoverLargeTextKeepsActionsReachable", "coverCameraDockKeepsActionsLeftAndFunctional", "coverChatToolbarAvoidsCutoutWithHiddenStatusBar")
+        reportCoverOverride = testName.methodName in setOf("systemScreenshotOffersReportWithTheCapturedWindow", "commandTrayCoverLargeTextKeepsActionsReachable", "coverCameraDockKeepsActionsLeftAndFunctional", "coverChatToolbarAvoidsCutoutWithHiddenStatusBar", "addProjectCoverPickerKeepsActionsReachable")
         if (coverScreen || landscapeScreen || reportCoverOverride) {
             shell(if (landscapeScreen) "wm size 2992x1224" else "wm size 1080x1272")
             shell(when {
@@ -3017,6 +3017,146 @@ class AppTest {
         assertEquals("/fixture/remote-codex", lastThreadStart?.str("cwd"))
         assertEquals(0, prepared.get())
         demoPause(3000)
+    }
+
+    private val projectCreations = CopyOnWriteArrayList<JsonObject>()
+
+    private fun installProjectAdditionFixture(dropReply: Boolean = false) {
+        val projects = CopyOnWriteArrayList(listOf(
+            project("project-remote", "Remote Codex", "/fixture/remote-codex"),
+            project("project-notes", "Notes", "/fixture/notes")))
+        browserResponse = { method, params ->
+            when (method) {
+                "fs/getMetadata" -> if (params.str("path") == "/missing")
+                    obj("_fixtureError" to obj("code" to JsonPrimitive(-32000), "message" to s("Missing folder")))
+                    else obj("isDirectory" to JsonPrimitive(true))
+                "fs/readDirectory" -> obj("entries" to JsonArray(
+                    if (params.str("path") == "/home/agent/workspaces") listOf(
+                        obj("fileName" to s("op bridge"), "isDirectory" to JsonPrimitive(true)),
+                        obj("fileName" to s("README"), "isDirectory" to JsonPrimitive(false))) else emptyList()))
+                "command/exec" -> {
+                    val command = (params["command"] as? JsonArray)?.map { it.jsonPrimitive.content }.orEmpty()
+                    if (command.firstOrNull() == "realpath") obj("exitCode" to JsonPrimitive(0), "stdout" to s(command.last() + "\n")) else null
+                }
+                "project/list" -> obj("data" to JsonArray(projects.toList()))
+                "project/create" -> {
+                    projectCreations.add(params)
+                    val created = project("added-project", params.str("name"), params.list("roots").single().str("path"))
+                    projects.add(created)
+                    if (dropReply) peer?.cancel()
+                    obj("project" to created)
+                }
+                else -> null
+            }
+        }
+    }
+
+    private fun openProjectAddition() {
+        openConversationTray()
+        compose.onNodeWithTag("project-selector").performClick()
+        compose.onNodeWithTag("add-project").performClick()
+        compose.waitUntil(5000) { model.state.value.projectAddition.loadedPath != null }
+        compose.onNodeWithTag("add-project-sheet").assertIsDisplayed()
+    }
+
+    @Test
+    fun addProjectBrowsesAndPersistsWithoutStartingTask() {
+        installProjectAdditionFixture()
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
+        compose.runOnUiThread { model.draft("Keep this project draft") }
+        openProjectAddition()
+        compose.onNodeWithTag("project-folder-README").assertDoesNotExist()
+        compose.onNodeWithTag("project-folder-op bridge").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.value.projectAddition.loadedPath == "/home/agent/workspaces/op bridge" }
+        compose.onNodeWithText("No subfolders. You can use this folder.").assertIsDisplayed()
+        compose.onNodeWithTag("project-folder-up").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.value.projectAddition.loadedPath == "/home/agent/workspaces" }
+        compose.onNodeWithTag("project-folder-op bridge").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.value.projectAddition.loadedPath == "/home/agent/workspaces/op bridge" }
+        compose.onNodeWithTag("use-project-folder").performClick()
+        compose.onNodeWithTag("project-name").performTextReplacement("Op Bridge")
+        compose.onNodeWithTag("confirm-add-project").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.value.newTaskOptions.projectId == "added-project" && !model.state.value.projectAddition.visible }
+        assertEquals("Keep this project draft", model.state.value.draft)
+        assertEquals("/home/agent/workspaces/op bridge", model.state.value.newTaskOptions.workingDirectory)
+        assertEquals(ExecutionTarget.CurrentWorkspace, model.state.value.newTaskOptions.executionTarget)
+        assertEquals(1, projectCreations.size)
+        assertEquals("Op Bridge", projectCreations.single().str("name"))
+        assertTrue(projectCreations.single().str("idempotencyKey").isNotBlank())
+        assertEquals(0, threadStarts.get())
+        assertEquals(0, sent.get())
+        recreateProjectDraft()
+        compose.waitUntil(15000) { model.state.value.ready && model.state.value.newTaskOptions.projectId == "added-project" }
+        assertEquals("Keep this project draft", model.state.value.draft)
+        assertEquals(1, projectCreations.size)
+    }
+
+    @Test
+    fun addProjectPasteReusesHostProjectAndReportsInvalidPath() {
+        installProjectAdditionFixture()
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
+        openProjectAddition()
+        compose.onNodeWithTag("project-folder-path").performTextReplacement("/missing")
+        compose.onNodeWithTag("open-project-folder").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.value.projectAddition.error != null }
+        compose.onNodeWithTag("use-project-folder").assertIsNotEnabled()
+        compose.onNodeWithTag("project-folder-path").performTextReplacement("/fixture/notes")
+        compose.onNodeWithTag("open-project-folder").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.value.projectAddition.loadedPath == "/fixture/notes" }
+        compose.onNodeWithTag("use-project-folder").performClick()
+        compose.onNodeWithTag("confirm-add-project").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.value.newTaskOptions.projectId == "project-notes" }
+        assertTrue(projectCreations.isEmpty())
+        assertEquals("Notes", model.state.value.projects.single { it.id == "project-notes" }.name)
+    }
+
+    private fun recreateProjectDraft() {
+        compose.runOnUiThread {
+            store.clear()
+            model = ClientModel(app, "ws://127.0.0.1:${server.port}/rpc", "/fixture", true)
+            store.put("fixture", model)
+            compose.activity.setContent { RemoteTheme { App(model) } }
+            model.newChat()
+            model.connect()
+        }
+    }
+
+    @Test
+    fun addProjectLostReplyRecoversAfterRestartWithoutReplay() {
+        installProjectAdditionFixture(dropReply = true)
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
+        openProjectAddition()
+        compose.onNodeWithTag("project-folder-op bridge").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.value.projectAddition.loadedPath == "/home/agent/workspaces/op bridge" }
+        compose.onNodeWithTag("use-project-folder").performClick()
+        compose.onNodeWithTag("confirm-add-project").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.value.projectAddition.pending != null && !model.state.value.projectAddition.working }
+        assertEquals(1, projectCreations.size)
+        recreateProjectDraft()
+        compose.waitUntil(15000) { model.state.value.ready && model.state.value.projects.size == 3 }
+        compose.runOnUiThread { model.openAddProject() }
+        compose.waitUntil(5000) { model.state.value.projectAddition.pending != null }
+        compose.onNodeWithTag("check-project-registration").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.value.newTaskOptions.projectId == "added-project" }
+        assertEquals(1, projectCreations.size)
+        assertEquals(0, threadStarts.get())
+    }
+
+    @Test
+    fun addProjectCoverPickerKeepsActionsReachable() {
+        installProjectAdditionFixture()
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
+        openProjectAddition()
+        compose.onNodeWithTag("project-folder-op bridge").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.value.projectAddition.loadedPath == "/home/agent/workspaces/op bridge" }
+        compose.onNodeWithTag("use-project-folder").assertIsDisplayed().performClick()
+        compose.onNodeWithTag("confirm-add-project").performScrollTo().assertIsDisplayed().performClick()
+        compose.waitUntil(5000) { model.state.value.newTaskOptions.projectId == "added-project" }
+        assertEquals(1, projectCreations.size)
     }
 
     @Test
