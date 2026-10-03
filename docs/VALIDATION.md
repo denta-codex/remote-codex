@@ -1,5 +1,14 @@
 # Validation
 
+## 2026-10-03 — Android 0.3.2 (29)
+
+- Source revision: `b07340d7dd07b2faa7ac1efbd04a483f7937b5b0`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `1841711d76705b28b76098ac0932b2ec28ab2324ac9d15c4e2722fe5aa57bae1`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/home/agent/workspaces/remote-codex/artifacts/releases/run-20261003T152510Z-7LKgwp.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
 ## 2026-10-03 — Retired Autofill playground cleanup
 
 - Based on local main `c3ba403` (Android 0.3.1, build 28). Removed the experimental

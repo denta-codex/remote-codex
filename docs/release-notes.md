@@ -1,8 +1,15 @@
-- Add direct local main merge control with recovery
-- Publish Android 0.3.0 (26)
-- Merge branch 'main' into feature/direct-merge-main
-- Merge branch 'main' into feature/direct-merge-main
-- Merge branch 'codex/release-0.3.0'
-- Suppress keyboard for phone credential Autofill
-- Integrate main with validated phone approval and keyboard suppression
-- Keep cover-screen composer actions beside the cameras
+- Keep cover screen toolbar clear of display cutouts
+- Merge main into cover toolbar fix
+- Remove retired Autofill playground
+- Merge branch 'cleanup/retired-autofill-playground'
+- Default reports to implementation and support committing task changes before merge
+- Add archive action to conversation overflow menu
+- Merge branch 'main' into fix/conversation-archive-menu
+- Hide unknown mode labels in conversation composer
+- Merge branch 'main' into fix/hide-unknown-mode
+- Fix full-screen keyboard text synchronization
+- Make composer send button use primary colors
+- Merge branch 'main' into fix/report-default-and-commit-merge-main
+- Omit unknown mode from cover-screen accessibility
+- Merge branch 'main' into fix/hide-unknown-mode
+- Merge branch 'fix/conversation-archive-menu'
