@@ -1,28 +1,8 @@
-- Support ordered prerelease versions and normal-release promotion
-- Add private Autofill playground with sanitized diagnostics
-- Publish Android 0.2.11-autofill.1 (21)
-- Add manual phone credential approval through transient op-bridge sessions
-- Build Android 0.2.11-phone.1 (22)
-- Record verified phone approval deployment and publication
-- Remove manual model catalog refresh from composer
-- Merge branch 'main' into fix/remove-model-refresh
-- Validate catalog reconciliation using saved new-chat preferences
-- Add task swipe actions and long-press deep links
-- Merge main and integrate task gestures with compact inbox state
-- Fix image viewing with fullscreen zoom and pan
-- Use compact reading typography for conversation Markdown
-- Merge image viewer zoom and pan fix
-- Add pull-to-refresh to the task list
-- Move screenshot report action to the left
-- Merge branch 'main' into fix/report-action-left
-- Integrate pull-to-refresh with current compact inbox
-- Merge branch 'main' into fix/pull-to-refresh
-- Merge main and preserve streaming and table rendering with compact typography
-- Merge compact plan Markdown typography
-- Merge branch 'main' into fix/pull-to-refresh
-- Merge main into phone approval integration
-- Add intent selection and exact request review to reports
-- Implement Android Command tray composer
-- Allow investigated emulator validation reruns
-- Merge main into phone approval integration
-- Merge branch 'main' into codex/phone-approval
+- Add direct local main merge control with recovery
+- Publish Android 0.3.0 (26)
+- Merge branch 'main' into feature/direct-merge-main
+- Merge branch 'main' into feature/direct-merge-main
+- Merge branch 'codex/release-0.3.0'
+- Suppress keyboard for phone credential Autofill
+- Integrate main with validated phone approval and keyboard suppression
+- Keep cover-screen composer actions beside the cameras

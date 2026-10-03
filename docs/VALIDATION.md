@@ -1,5 +1,14 @@
 # Validation
 
+## 2026-10-03 — Android 0.3.1 (28)
+
+- Source revision: `f03ab1a47b4294658a09af732af2ea4e7a4005fc`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `8fd30df067902da46d6f12bf247a88eef9cac1d0a0aab0d19f43fd9e2e59e17a`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/home/agent/workspaces/remote-codex/artifacts/releases/run-20261003T145349Z-Z3DMhv.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
 ## 2026-10-03 — Phone approval manual acceptance
 
 - On preview `0.3.1-phone.1 (27)`, the disposable Login fixture passed normal
