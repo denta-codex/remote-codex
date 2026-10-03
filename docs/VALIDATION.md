@@ -1,5 +1,14 @@
 # Validation
 
+## 2026-10-03 — Android 0.3.1-phone.1 (27)
+
+- Source revision: `6113e5c6e9c1d67138c3f44aa69480e0c3a27234`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `78ffe28935b8fa8c3ee74bae91a1b9d27d8ea505411d26c978b03b7aca1be574`.
+- Outcome: Built and signed locally; not published.
+- Build log: `/home/agent/.codex/worktrees/740e/remote-codex/artifacts/releases/run-20261003T141847Z-6Nzqep.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
 ## 2026-10-03 — Intent-aware reports (unreleased)
 
 - Based on local main `6417fcb`. The report form now requires Investigate,
