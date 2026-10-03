@@ -3,7 +3,10 @@ package dev.codexops.client
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyColumn
@@ -44,8 +47,11 @@ internal fun ConversationComposer(
     var projectMenu by remember { mutableStateOf(false) }
     var modeMenu by remember { mutableStateOf(false) }
     var addMenu by remember { mutableStateOf(false) }
-    val cover = LocalAppWindowClass.current.coverScreen
-    val compactTyping = cover && WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    val window = LocalAppWindowClass.current
+    val landscape = window.compactHeight && !window.compactWidth
+    val compact = window.coverScreen || landscape
+    var optionsOpen by remember { mutableStateOf(false) }
+    val compactTyping = compact && WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val selectedProject =
         state.newTaskOptions.projectId?.let { id -> state.projects.firstOrNull { it.id == id } }
     val projectAvailable =
@@ -57,6 +63,8 @@ internal fun ConversationComposer(
     val selectedMode = modes.firstOrNull { it.mode == state.newTaskOptions.collaborationMode }
     val composerStatus =
         when {
+            state.waitingToSendMode() ->
+                "${selectedMode?.name ?: "Mode"} selected · send when the task is idle"
             state.activeTurn != null -> "Sends after this turn · uses task settings"
             state.queuedMessages.isNotEmpty() -> "Queue paused · tap Send now to continue"
             state.thread == null && !projectAvailable ->
@@ -68,17 +76,135 @@ internal fun ConversationComposer(
                 selectedProject.primaryRoot.orEmpty()
             else -> "${state.host.displayName} defaults"
         }
+    val taskControls: @Composable () -> Unit = {
+        if (state.thread == null) {
+            Box(Modifier.padding(start = 8.dp, top = 2.dp)) {
+                AssistChip(
+                    onClick = { projectMenu = true },
+                    label = {
+                        Text(
+                            selectedProject?.name
+                                ?: if (state.newTaskOptions.projectId == null) "No project"
+                                else "Project unavailable"
+                        )
+                    },
+                    leadingIcon = {
+                        Glyph(
+                            if (state.newTaskOptions.projectId == null) R.drawable.ic_chat
+                            else R.drawable.ic_folder,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    },
+                    modifier = Modifier.testTag("project-selector"),
+                )
+                DropdownMenu(projectMenu, { projectMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("No project") },
+                        onClick = {
+                            projectMenu = false
+                            actions.updateNewTaskOptions(
+                                state.newTaskOptions.copy(
+                                    projectId = null,
+                                    workingDirectory = null,
+                                    executionTarget = ExecutionTarget.Projectless,
+                                )
+                            )
+                        },
+                        leadingIcon = { Glyph(R.drawable.ic_chat) },
+                    )
+                    state.projects.forEach { project ->
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text(project.name)
+                                    Text(
+                                        project.primaryRoot ?: "No workspace root",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            },
+                            onClick = {
+                                projectMenu = false
+                                actions.updateNewTaskOptions(
+                                    state.newTaskOptions.copy(
+                                        projectId = project.id,
+                                        workingDirectory = project.primaryRoot,
+                                        executionTarget = ExecutionTarget.CurrentWorkspace,
+                                    )
+                                )
+                            },
+                            enabled = project.primaryRoot != null,
+                            leadingIcon = { Glyph(R.drawable.ic_folder) },
+                        )
+                    }
+                }
+            }
+        }
+        if (state.thread == null && state.newTaskOptions.projectId != null) {
+            val options = state.newTaskOptions
+            Column(
+                Modifier.fillMaxWidth().padding(
+                    horizontal = if (compact) 8.dp else 12.dp,
+                    vertical = if (compact) 2.dp else 6.dp,
+                ),
+                verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 6.dp),
+            ) {
+                Text(
+                    "Workspace",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = options.executionTarget == ExecutionTarget.CurrentWorkspace,
+                        onClick = {
+                            actions.updateNewTaskOptions(
+                                options.copy(executionTarget = ExecutionTarget.CurrentWorkspace)
+                            )
+                        },
+                        label = { Text("Current") },
+                        modifier = Modifier.testTag("workspace-current"),
+                        enabled = !state.busy && state.journal == null,
+                    )
+                    FilterChip(
+                        selected = options.executionTarget == ExecutionTarget.NewWorktree,
+                        onClick = {
+                            actions.updateNewTaskOptions(
+                                options.copy(executionTarget = ExecutionTarget.NewWorktree)
+                            )
+                        },
+                        label = { Text("New worktree") },
+                        modifier = Modifier.testTag("workspace-new-worktree"),
+                        enabled = !state.busy && state.journal == null,
+                    )
+                }
+                if (!compact)
+                    Text(
+                        when (options.executionTarget) {
+                            ExecutionTarget.NewWorktree ->
+                                "Starts from origin/HEAD in an isolated detached worktree."
+                            else ->
+                                options.workingDirectory?.let { "Uses ${File(it).name.ifBlank { it }} as-is." }
+                                    ?: "Choose a project workspace."
+                        },
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+            }
+        }
+    }
     Surface(
         modifier = Modifier.padding(
-            horizontal = if (cover) 8.dp else 12.dp,
-            vertical = if (cover) 4.dp else 8.dp,
+            horizontal = if (compact) 8.dp else 12.dp,
+            vertical = if (compact) 4.dp else 8.dp,
         ),
         color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = RoundedCornerShape(if (cover) 20.dp else 24.dp),
+        shape = RoundedCornerShape(if (compact) 20.dp else 24.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
-        Column(Modifier.padding(if (cover) 6.dp else 8.dp)) {
-            if (!compactTyping) MessageQueue(state, actions, cover)
+        Column(Modifier.padding(if (compact) 6.dp else 8.dp)) {
+            if (!compactTyping) MessageQueue(state, actions, compact)
             if (state.attachments.isNotEmpty())
                 LazyRow(
                     Modifier.fillMaxWidth().padding(bottom = 8.dp),
@@ -90,129 +216,19 @@ internal fun ConversationComposer(
                         }
                     }
                 }
-            if (state.thread == null) {
-                Box(Modifier.padding(start = 8.dp, top = 2.dp)) {
-                    AssistChip(
-                        onClick = { projectMenu = true },
-                        label = {
-                            Text(
-                                selectedProject?.name
-                                    ?: if (state.newTaskOptions.projectId == null) "No project"
-                                    else "Project unavailable"
-                            )
-                        },
-                        leadingIcon = {
-                            Glyph(
-                                if (state.newTaskOptions.projectId == null) R.drawable.ic_chat
-                                else R.drawable.ic_folder,
-                                modifier = Modifier.size(16.dp),
-                            )
-                        },
-                        modifier = Modifier.testTag("project-selector"),
-                    )
-                    DropdownMenu(projectMenu, { projectMenu = false }) {
-                        DropdownMenuItem(
-                            text = { Text("No project") },
-                            onClick = {
-                                projectMenu = false
-                                actions.updateNewTaskOptions(
-                                    state.newTaskOptions.copy(
-                                        projectId = null,
-                                        workingDirectory = null,
-                                        executionTarget = ExecutionTarget.Projectless,
-                                    )
-                                )
-                            },
-                            leadingIcon = { Glyph(R.drawable.ic_chat) },
-                        )
-                        state.projects.forEach { project ->
-                            DropdownMenuItem(
-                                text = {
-                                    Column {
-                                        Text(project.name)
-                                        Text(
-                                            project.primaryRoot ?: "No workspace root",
-                                            fontSize = 11.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                },
-                                onClick = {
-                                    projectMenu = false
-                                    actions.updateNewTaskOptions(
-                                        state.newTaskOptions.copy(
-                                            projectId = project.id,
-                                            workingDirectory = project.primaryRoot,
-                                            executionTarget = ExecutionTarget.CurrentWorkspace,
-                                        )
-                                    )
-                                },
-                                enabled = project.primaryRoot != null,
-                                leadingIcon = { Glyph(R.drawable.ic_folder) },
-                            )
-                        }
-                    }
-                }
-            }
-            if (state.thread == null && state.newTaskOptions.projectId != null) {
-                val options = state.newTaskOptions
-                Column(
-                    Modifier.fillMaxWidth().padding(
-                        horizontal = if (cover) 8.dp else 12.dp,
-                        vertical = if (cover) 2.dp else 6.dp,
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(if (cover) 2.dp else 6.dp),
-                ) {
-                    Text(
-                        "Workspace",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = options.executionTarget == ExecutionTarget.CurrentWorkspace,
-                            onClick = {
-                                actions.updateNewTaskOptions(
-                                    options.copy(executionTarget = ExecutionTarget.CurrentWorkspace)
-                                )
-                            },
-                            label = { Text("Current") },
-                            modifier = Modifier.testTag("workspace-current"),
-                            enabled = !state.busy && state.journal == null,
-                        )
-                        FilterChip(
-                            selected = options.executionTarget == ExecutionTarget.NewWorktree,
-                            onClick = {
-                                actions.updateNewTaskOptions(
-                                    options.copy(executionTarget = ExecutionTarget.NewWorktree)
-                                )
-                            },
-                            label = { Text("New worktree") },
-                            modifier = Modifier.testTag("workspace-new-worktree"),
-                            enabled = !state.busy && state.journal == null,
-                        )
-                    }
-                    if (!cover)
-                        Text(
-                            when (options.executionTarget) {
-                                ExecutionTarget.NewWorktree ->
-                                    "Starts from origin/HEAD in an isolated detached worktree."
-                                else ->
-                                    options.workingDirectory?.let { "Uses ${File(it).name.ifBlank { it }} as-is." }
-                                        ?: "Choose a project workspace."
-                            },
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                }
-            }
+            if (!landscape) taskControls()
             TextField(
                 state.draft,
                 actions::draft,
                 Modifier.fillMaxWidth().testTag("composer"),
                 placeholder = { Text("Message ${state.host.displayName}…") },
                 minLines = 1,
-                maxLines = if (cover) 3 else 6,
+                maxLines = when {
+                    landscape && compactTyping -> 1
+                    landscape -> 2
+                    compact -> 3
+                    else -> 6
+                },
                 enabled = !state.busy,
                 colors =
                     TextFieldDefaults.colors(
@@ -224,9 +240,10 @@ internal fun ConversationComposer(
                         disabledIndicatorColor = Color.Transparent,
                     ),
             )
-            if (!cover || !state.willQueueMessage()) ModelControls(state, actions, cover)
+            if (!landscape && !state.willQueueMessage() && !compactTyping)
+                ModelControls(state, actions, compact)
             val showStatus =
-                !compactTyping && (!cover ||
+                !landscape && (!compactTyping || state.waitingToSendMode()) && (
                     state.willQueueMessage() ||
                     !projectAvailable ||
                     state.newTaskOptions.model != null ||
@@ -237,17 +254,23 @@ internal fun ConversationComposer(
                     Modifier.fillMaxWidth()
                         .padding(horizontal = 12.dp, vertical = 2.dp)
                         .testTag("composer-status"),
-                    maxLines = if (cover) 1 else 2,
+                    maxLines = if (compact && !state.waitingToSendMode()) 1 else 2,
                     overflow = TextOverflow.Ellipsis,
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             Row(
-                Modifier.fillMaxWidth().padding(start = if (cover) 4.dp else 12.dp)
+                Modifier.fillMaxWidth().padding(start = if (compact) 4.dp else 12.dp)
                     .testTag("composer-actions"),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (cover)
+                // The trailing Stop and Send/Queue buttons are measured first; the leading
+                // attachment actions take only the remaining width and scroll if it is too
+                // narrow, so the primary actions stay reachable at any width or font scale.
+                Row(
+                    Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Box {
                         TextButton(
                             onClick = { addMenu = true },
@@ -285,78 +308,62 @@ internal fun ConversationComposer(
                             )
                         }
                     }
-                else {
-                    TextButton(
-                        onClick = {
-                            picker.launch(
-                                PickVisualMediaRequest(
-                                    ActivityResultContracts.PickVisualMedia.ImageOnly
-                                )
-                            )
-                        },
-                        enabled = !state.busy && state.journal == null,
-                        modifier = Modifier.testTag("add-photos"),
-                    ) { Text("Photos") }
-                    TextButton(
-                        onClick = { filePicker.launch(arrayOf("*/*")) },
-                        enabled = !state.busy && state.journal == null,
-                        modifier = Modifier.testTag("add-files"),
-                    ) { Text("Files") }
-                    TextButton(
-                        onClick = { actions.prepareCamera()?.let(camera::launch) },
-                        enabled = !state.busy && state.journal == null,
-                        modifier = Modifier.testTag("add-camera"),
-                    ) { Text("Camera") }
-                }
-                if (compactTyping && (state.queuedMessages.isNotEmpty() || state.queueError != null))
-                    TextButton(
-                        onClick = { keyboard?.hide() },
-                        modifier = Modifier.testTag("show-queue"),
-                    ) { Text("Queued (${state.queuedMessages.size})", maxLines = 1) }
-                Spacer(Modifier.weight(1f))
-                if (modes.isNotEmpty() && !(cover && state.willQueueMessage()))
-                    Box {
+                    if (landscape)
                         TextButton(
-                            onClick = { modeMenu = true },
-                            modifier = Modifier.testTag("mode-selector"),
-                            enabled =
-                                state.ready &&
-                                    !state.busy &&
-                                    !state.willQueueMessage() &&
-                                    state.journal == null,
-                        ) {
-                            Text(selectedMode?.name ?: "Server default", fontSize = 12.sp)
-                        }
-                        DropdownMenu(
-                            expanded = modeMenu,
-                            onDismissRequest = { modeMenu = false },
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Server default") },
-                                onClick = {
-                                    modeMenu = false
-                                    actions.updateNewTaskOptions(
-                                        state.newTaskOptions.copy(collaborationMode = null)
-                                    )
-                                },
-                                modifier = Modifier.testTag("mode-server-default"),
-                            )
-                            modes.forEach { preset ->
+                            onClick = {
+                                keyboard?.hide()
+                                optionsOpen = true
+                            },
+                            modifier = Modifier.testTag("composer-options"),
+                        ) { Text("Options") }
+                    if (compactTyping && (state.queuedMessages.isNotEmpty() || state.queueError != null))
+                        TextButton(
+                            onClick = { keyboard?.hide() },
+                            modifier = Modifier.testTag("show-queue"),
+                        ) { Text("Queued (${state.queuedMessages.size})", maxLines = 1) }
+                    if (modes.isNotEmpty())
+                        Box {
+                            TextButton(
+                                onClick = { modeMenu = true },
+                                modifier = Modifier.testTag("mode-selector"),
+                                enabled =
+                                    state.ready &&
+                                        !state.busy &&
+                                        state.journal == null,
+                            ) {
+                                Text(selectedMode?.name ?: "Mode", fontSize = 12.sp)
+                            }
+                            DropdownMenu(
+                                expanded = modeMenu,
+                                onDismissRequest = { modeMenu = false },
+                            ) {
                                 DropdownMenuItem(
-                                    text = { Text(preset.name) },
+                                    text = { Text("Server default") },
                                     onClick = {
                                         modeMenu = false
                                         actions.updateNewTaskOptions(
-                                            state.newTaskOptions.copy(
-                                                collaborationMode = preset.mode
-                                            )
+                                            state.newTaskOptions.copy(collaborationMode = null)
                                         )
                                     },
-                                    modifier = Modifier.testTag("mode-${preset.mode}"),
+                                    modifier = Modifier.testTag("mode-server-default"),
                                 )
+                                modes.forEach { preset ->
+                                    DropdownMenuItem(
+                                        text = { Text(preset.name) },
+                                        onClick = {
+                                            modeMenu = false
+                                            actions.updateNewTaskOptions(
+                                                state.newTaskOptions.copy(
+                                                    collaborationMode = preset.mode
+                                                )
+                                            )
+                                        },
+                                        modifier = Modifier.testTag("mode-${preset.mode}"),
+                                    )
+                                }
                             }
                         }
-                    }
+                }
                 if (state.activeTurn != null)
                     IconButton(actions::stop, enabled = state.ready) {
                         Glyph(R.drawable.ic_stop, "Stop")
@@ -367,10 +374,11 @@ internal fun ConversationComposer(
                         keyboard?.hide()
                         actions.send()
                     },
-                    modifier = Modifier.testTag("send").size(if (cover) 44.dp else 48.dp),
+                    modifier = Modifier.testTag("send").size(if (compact) 44.dp else 48.dp),
                     enabled =
                         state.ready &&
                             !state.busy &&
+                            !state.waitingToSendMode() &&
                             (state.draft.isNotBlank() || state.attachments.isNotEmpty()) &&
                             state.journal == null &&
                             (state.thread == null || state.queueReady) &&
@@ -390,6 +398,21 @@ internal fun ConversationComposer(
             }
         }
     }
+    if (landscape && optionsOpen)
+        AlertDialog(
+            onDismissRequest = { optionsOpen = false },
+            title = { Text("Message options") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    taskControls()
+                    ModelControls(state, actions, cover = true)
+                    Text(composerStatus, fontSize = 11.sp)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { optionsOpen = false }) { Text("Done") }
+            },
+        )
 }
 
 @Composable

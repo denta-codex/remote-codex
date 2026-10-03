@@ -46,7 +46,10 @@ acknowledgement, replay, or custom chunk envelope between Android and the host.
 
 The client pages the stock `project/list` catalog and keeps project identity and
 thread assignment server-owned. The task browser can show all tasks, projectless
-Chats, or one existing project. New tasks default to projectless execution: their
+Chats, or one existing project. List and search pages request descending
+`recency_at` ordering from stock Codex; `updated_at` can advance for metadata
+changes to otherwise inactive chats. Pagination preserves the server's order.
+New tasks default to projectless execution: their
 directories are fixed under `/home/agent/Documents/RemoteCodex`, using a client
 UUID, and preparation uses an explicit workspace-write sandbox rooted there without
 network access. Selecting an existing project supplies its first stock project root
@@ -123,11 +126,40 @@ references and file-change paths are validated with stock `fs/getMetadata`, then
 after an explicit tap. Android previews bounded UTF-8 text and images, exposes other types through
 `FileProvider`, and offers Open, Share, and `CreateDocument` save actions. Remote files remain
 limited to 20 MiB; the private preview cache is bounded and expires unretained files after seven
-days. Interactive HTML rendering remains a separate feature.
+days. Ordinary HTML file links remain text previews.
+
+Completed assistant messages recognize standalone `visualize{"path":"/absolute/file.html"}`
+references, with optional `title` and `mode: "wide"`. Code examples and malformed references
+remain Markdown. The viewer reads the fragment using stock `fs/getMetadata` and `fs/readFile`
+over WSS, checks both reported and actual sizes against 1 MB, and requires valid UTF-8.
+It supports responsive inline rendering and a full-screen view on either phone display.
+
+Each viewer uses a WebView shell and an opaque-origin `sandbox="allow-scripts"` iframe.
+The skill's versioned runtime assets supply styles, tabs, tooltips, calendars, carousels,
+and optional mockup helpers. The native message port belongs only to the trusted shell;
+there is no JavaScript Android interface. File/content access, API connections, nested frames,
+forms, popups, permissions, and downloads are disabled. Only HTTPS resources from the skill's
+seven CDN hosts can load; the bounded resource loader checks every redirect and supplies no
+application credentials or WebView cookies. Operational logs contain no HTML or messages.
+
+Widget state is limited to 16 KiB and stored locally under a hash of host, chat, message,
+reference position, and path. It survives view recreation and reopening the chat; it is not
+synced to desktop or injected into model context. `sendFollowUpMessage` requests require a
+touch gesture and native confirmation, then append to the existing composer without sending.
+External HTTPS links also require confirmation. Desktop annotation/Tweak controls are not
+advertised; guarded mockups retain their normal rendering and local interactions. CDN-backed
+charts/icons require connectivity. Missing files offer an explicit read-only Retry action.
 
 Plan mode is exposed only when the stock `collaborationMode/list` capability
 advertises it. The selected stock collaboration setting is sent with `turn/start`;
-completed plans render in a dedicated card and full-screen viewer. Implementing a
+the mode selector remains available during a running turn. Selecting an explicit
+mode keeps the draft unsent until both the active turn and server queue are clear,
+because queue submissions cannot carry that setting. The composer explains the
+wait; sending remains an explicit user action. Selecting Server default restores
+normal queueing. Attachments share an Add menu, and model controls are hidden while
+queueing because queued submissions use task settings. On cover screens they also
+hide while typing to keep the mode and send actions reachable above the keyboard.
+Completed plans render in a dedicated card and full-screen viewer. Implementing a
 completed plan starts a new turn in the advertised default mode and is never
 simulated when the server capability is absent.
 
@@ -147,8 +179,46 @@ Existing projects can be selected but not created, deleted, reordered, or edited
 and only the first project root is offered. New worktrees require a locally
 resolvable `origin/HEAD` and
 do not include uncommitted checkout changes. Worktrees are deliberately retained;
-cleanup, branch/ref selection, setup environments, and general Git management are
-outside this feature.
+cleanup, branch/ref selection, and general Git management are outside this feature.
+Environment execution is a shared workspace-adapter operation with an explicit
+execution deadline and a durable success receipt. Bug reports currently invoke
+the repository's setup script; normal new-task UI does not yet expose environment
+selection. Long commands use operation-specific RPC deadlines rather than the
+ordinary request default.
+
+## User-authored bug reports
+
+Android owns the report UI, collectors, draft persistence, and orchestration; the
+forwarder and stock app-server protocol are unchanged. The menu and a foreground
+Seismic shake detector invoke the same capture flow. The copied Apache-2.0
+detector's license ships in `assets/licenses/seismic.txt`. Registration uses
+`SENSOR_DELAY_GAME`, stops when the activity pauses, and has a three-second
+invocation cooldown.
+
+The phone stores one pending report and its artifacts under app-private
+`files/bug-reports/<UUID>`, with an atomically replaced draft index. The frozen
+context is an explicit field selection, not a raw RPC/state dump. It includes
+loaded visible conversation content and marks unloaded history. Recent action
+metadata is bounded to 100 entries / five minutes. Known pairing credentials are
+redacted from text evidence; the Settings screen is excluded from screenshots.
+PixelCopy captures the focused app window on Android 14+, and the activity window
+on earlier releases (unsupported dialog capture is recorded as unavailable).
+Collectors record their own timestamps and failures; app logcat is bounded to
+five minutes, 2,000 lines, and 512 KiB. Android 11+ supplies abnormal process-exit
+metadata within 24 hours and an available trace up to 2 MiB. Diagnostics are
+report artifacts, never operational log output.
+
+Report submission has its own persisted journal, independent of the original
+conversation journal. It resolves the configured remote-codex project, verifies
+the repository origin, uses the existing detached-worktree adapter, and executes
+`scripts/setup-worktree` with a two-minute process deadline plus transport grace.
+The setup command atomically writes an operation/revision receipt after success.
+Evidence resides beside the worktree checkout. The first turn uses server-default
+model settings, a human-authored description, artifact references, and explicit
+implementation instructions. Every mutation is journaled before dispatch;
+recovery compares authoritative receipts, uploaded bytes, and task/message IDs.
+Missing or conflicting evidence leaves the operation pending instead of replaying
+it. Accepted reports retain the task reference and remove local artifacts.
 
 Limits: no push notifications, directory attachments, terminal emulator, or interactive
 command previews. Activity text is bounded for phone rendering; full output
@@ -184,3 +254,31 @@ recovery state; rollback and Desktop Restart remain explicit. Forwarder deployme
 keeps narrow Ansible backups of the old binary and unit until live acceptance
 succeeds. If deployment fails, retain the reported backup paths for explicit
 recovery; remove them once recovery and verification are complete.
+
+## Inbox activity and phone-local unread
+
+Inbox/archive rows show one accessible indicator: a spinner for active work, a
+slow blue pulse for approval or input, a red warning for a task error, or a blue
+dot for unread assistant output. Quiet/read chats have no indicator. Runtime
+state masks unread without erasing it. System-disabled animations use static
+indicators. Pending requests resolve through server notifications or fresh status
+reads; network/read failures are not presented as task errors.
+
+The activity monitor consumes events before the selected-thread and hydration
+filters. While foregrounded, it refreshes only visible browser rows (or the open
+chat), serially, with a five-second pause between passes. Stock metadata-only
+`thread/read` supplies runtime status. Inactive chats also use a single latest
+full turn from `thread/turns/list` to identify failed turns and compare assistant
+output. It never resumes background threads. Selection/foreground changes cancel
+polling; connection generation and per-thread revisions reject stale results.
+
+Unread is Android-local: Room's existing key/value records hold SHA-256 digests
+of assistant/plan output, keyed by endpoint, Codex home, and thread ID. No transcript
+is stored for this feature and no schema migration is needed. The first observation
+of inactive history establishes a baseline; observed running chats become unread
+when new output is later discovered. Only a foreground conversation showing the
+end of its newest completed reply marks that output read. Scrolling older content,
+remembering a selection, renaming a chat, and changing its project do not mark new
+output read or create unread. Markers survive app restarts; desktop/mobile read
+receipts are not synchronized. Newly encountered inactive chats are baselined,
+so the feature deliberately does not classify all pre-existing history as unread.
