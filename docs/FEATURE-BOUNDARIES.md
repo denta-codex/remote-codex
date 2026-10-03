@@ -16,6 +16,12 @@ separate worktrees.
   agent turn. Host receipts live under the repository's common Git directory in
   `remote-codex-merges/`. Temporary worktrees are operation-owned, and incomplete receipts
   block subsequent merges until explicit reconciliation establishes the outcome.
+  The preview includes all uncommitted task changes using a disposable index without
+  changing the task's real index. Confirmation says `Commit and merge into main` when
+  needed, stages all task changes (including nonignored new files), and creates a task
+  commit with normal hooks and signing before merging. Main must be clean. The reviewed
+  task tree is revalidated before committing and after hooks; a changed tree never
+  advances main. Recovery never repeats a commit and retains any commit already made.
 - `RemoteSession` is the stock Codex RPC boundary. `ClientStore` is the device persistence
   boundary. Feature code should depend on these contracts rather than concrete transport or
   Room/DataStore implementations.

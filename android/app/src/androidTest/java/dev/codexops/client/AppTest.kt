@@ -194,6 +194,7 @@ class AppTest {
     private val sent = AtomicInteger()
     private val mergeCommands = CopyOnWriteArrayList<String>()
     @Volatile private var mergeConflict = false
+    @Volatile private var mergeUncommitted = false
     @Volatile private var dropMergeReply = false
     private val archivedTaskIds = ConcurrentHashMap.newKeySet<String>()
     private val archiveMutations = CopyOnWriteArrayList<JsonObject>()
@@ -509,6 +510,8 @@ class AppTest {
                                                             "targetHead" to s("b".repeat(40)),
                                                             "result" to s(if (state == "succeeded") "a".repeat(40) else ""),
                                                             "count" to JsonPrimitive(1), "fileCount" to JsonPrimitive(1),
+                                                            "uncommittedCount" to JsonPrimitive(if (mergeUncommitted) 1 else 0),
+                                                            "uncommitted" to JsonArray(if (mergeUncommitted) listOf(s("NewTaskFile.kt")) else emptyList()),
                                                             "commits" to JsonArray(listOf(s("aaaaaaa Add direct merge control"))),
                                                             "files" to JsonArray(listOf(s("MergeControl.kt"))),
                                                             "conflicts" to JsonArray(if (mergeConflict) listOf(s("Conflict.kt")) else emptyList()),
@@ -1484,6 +1487,23 @@ class AppTest {
         assertEquals("Keep this draft", model.state.value.draft)
         assertEquals(1, model.state.value.attachments.size)
         demoPause(2000)
+    }
+
+    @Test
+    fun directMergeOffersCommitAndMergeForTaskFiles() {
+        mergeUncommitted = true
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.canInspectMerge() }
+        compose.onNodeWithTag("app-menu").performClick()
+        compose.onNodeWithTag("merge-main-menu").performClick()
+        compose.waitUntil(5000) { model.state.value.merge.report?.str("status") == "ready" }
+        compose.onNodeWithTag("confirm-merge").assertTextContains("Commit and merge into main").assertIsEnabled()
+        compose.onNodeWithText("NewTaskFile.kt").performScrollTo().assertIsDisplayed()
+        assertFalse(mergeCommands.contains("merge"))
+        compose.onNodeWithTag("confirm-merge").performClick()
+        compose.waitUntil(5000) { model.state.value.merge.report?.str("status") == "succeeded" }
+        assertEquals(1, mergeCommands.count { it == "merge" })
+        assertEquals(0, sent.get())
     }
 
     @Test
@@ -2841,14 +2861,14 @@ class AppTest {
         reportField("report-intent-Plan").performClick()
         assertEquals(description, model.reports.state.value.draft!!.description)
         reportField("report-intent-Research").performClick()
-        compose.onNodeWithTag("submit-bug-report").performClick()
+        compose.runOnUiThread { model.reports.review() }
         compose.waitUntil(10000) { model.reports.state.value.draft?.review?.isNotEmpty() == true }
         assertEquals(0, worktreeAdds.get())
         assertEquals(0, sent.get())
         compose.onNodeWithTag("edit-report-request").performClick()
         reportField("remove-report-context.txt").performClick()
         compose.waitUntil(5000) { model.reports.state.value.draft?.attachments?.none { it.id == "context.txt" } == true && !model.reports.state.value.busy }
-        compose.onNodeWithTag("submit-bug-report").performClick()
+        compose.runOnUiThread { model.reports.review() }
         compose.waitUntil(10000) { model.reports.state.value.draft?.review?.isNotEmpty() == true }
         reportField("report-title").performTextReplacement("Research: Task-list gestures")
         compose.waitUntil(5000) { BugReportStore(File(app.filesDir, "bug-reports")).load()?.title == "Research: Task-list gestures" }
@@ -2877,6 +2897,20 @@ class AppTest {
         assertEquals("plan", lastTurnStartParams!!.map("collaborationMode").str("mode"))
         assertTrue(acceptedText.contains(reviewed.str("prompt")))
         assertFalse(remoteFiles.keys.any { it.contains("/report/") && it.endsWith("context.txt") })
+    }
+
+    @Test
+    fun planningReportStartsWithOneClick() {
+        compose.runOnUiThread { model.reports.open() }
+        compose.waitUntil(10000) { model.reports.state.value.visible && !model.reports.state.value.capturing }
+        reportField("report-intent-Plan").performClick()
+        reportField("bug-description").performTextInput("Plan better quick actions")
+        compose.onNodeWithTag("submit-bug-report").assertTextContains("Start planning task").performClick()
+        compose.waitUntil(20000) { model.reports.state.value.lastTask == "task-test" }
+        assertEquals(1, threadStarts.get())
+        assertEquals(1, sent.get())
+        assertEquals("plan", lastTurnStartParams!!.map("collaborationMode").str("mode"))
+        assertTrue(acceptedText.contains("Do not implement changes."))
     }
 
     @Test
@@ -2909,13 +2943,8 @@ class AppTest {
         val screenshot = draft.attachments.single { it.id == "screenshot.png" }
         assertNotNull(android.graphics.BitmapFactory.decodeFile(screenshot.localPath))
         compose.onNodeWithTag("submit-bug-report").assertIsNotEnabled()
+        assertEquals(ReportIntent.Implement, draft.intent)
         reportField("bug-description").performTextInput("The queue button lost my message")
-        compose.onNodeWithTag("submit-bug-report").assertIsNotEnabled()
-        reportField("report-intent-Implement").performClick()
-        compose.onNodeWithTag("submit-bug-report").performClick()
-        compose.waitUntil(10000) { model.reports.state.value.draft?.review?.isNotEmpty() == true }
-        assertEquals(0, threadStarts.get())
-        assertEquals(0, worktreeAdds.get())
         compose.onNodeWithTag("submit-bug-report").assertTextContains("Start implementation task").performClick()
         compose.waitUntil(20000) { model.reports.state.value.lastTask == "task-test" && model.reports.state.value.draft == null }
         assertEquals("default", lastTurnStartParams!!.map("collaborationMode").str("mode"))
@@ -3030,9 +3059,6 @@ class AppTest {
         reportField("report-intent-Investigate").performClick()
         reportField("bug-description").performTextInput("A cover-screen bug")
         compose.onNodeWithTag("submit-bug-report").assertIsDisplayed().performClick()
-        compose.waitUntil(10000) { model.reports.state.value.draft?.review?.isNotEmpty() == true }
-        reportField("report-title").assertIsDisplayed()
-        compose.onNodeWithTag("submit-bug-report").assertTextContains("Start investigation").assertIsDisplayed().performClick()
         compose.waitUntil(20000) { model.reports.state.value.lastTask == "task-test" }
         assertEquals("plan", lastTurnStartParams!!.map("collaborationMode").str("mode"))
         assertEquals(1, sent.get())

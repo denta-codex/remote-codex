@@ -23,7 +23,7 @@ data class BugReportDraft(
     val attachments: List<DraftAttachment> = emptyList(),
     val diagnostics: JsonObject = obj(),
     val journal: JsonObject = obj(),
-    val intent: ReportIntent? = null,
+    val intent: ReportIntent? = ReportIntent.Implement,
     val title: String = "",
     val review: JsonObject = obj(),
 ) {
