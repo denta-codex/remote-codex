@@ -24,6 +24,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.model.State as MarkdownState
+import com.mikepenz.markdown.model.parseMarkdownFlow
 import dev.codexops.core.FileRef
 import java.io.File
 import java.net.URI
@@ -32,6 +34,14 @@ import kotlinx.coroutines.withContext
 
 @Composable
 internal fun FileAwareMarkdown(text: String, actions: ConversationActions) {
+    // Keep the last rendered document while its replacement parses off-thread.
+    // The String overload clears it to a loading box on each streaming delta,
+    // collapsing the list item and destroying the reader's scroll anchor.
+    val markdown by produceState<MarkdownState>(MarkdownState.Loading(), text) {
+        parseMarkdownFlow(text).collect { parsed ->
+            if (parsed !is MarkdownState.Loading) value = parsed
+        }
+    }
     val external = LocalUriHandler.current
     val handler =
         remember(external, actions) {
@@ -41,7 +51,7 @@ internal fun FileAwareMarkdown(text: String, actions: ConversationActions) {
                 }
             }
         }
-    CompositionLocalProvider(LocalUriHandler provides handler) { Markdown(text) }
+    CompositionLocalProvider(LocalUriHandler provides handler) { Markdown(markdown) }
 }
 
 internal fun fileReference(uri: String): FileRef? {
