@@ -186,7 +186,6 @@ interface SettingsActions {
 interface ConversationActions {
     fun updateNewTaskOptions(options: NewTaskOptions)
 
-    fun refreshModels()
 
     fun older()
 

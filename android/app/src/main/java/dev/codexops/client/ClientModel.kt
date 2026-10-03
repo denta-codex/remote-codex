@@ -666,7 +666,7 @@ constructor(
                     modelCatalogMessage =
                         if (it.modelCatalogStatus == ModelCatalogStatus.Loading)
                             "The model catalog is still loading."
-                        else "Models are unavailable. Refresh the server catalog and try again."
+                        else "Models are unavailable. Reconnect to try again."
                 )
             } else {
                 val reconciled =
@@ -689,12 +689,6 @@ constructor(
                     newTaskOptionsJson(_state.value.newTaskOptions).toString(),
                 )
             }
-    }
-
-    override fun refreshModels() {
-        if (!_state.value.ready || _state.value.modelCatalogStatus == ModelCatalogStatus.Loading)
-            return
-        viewModelScope.launch { refreshModelCatalog() }
     }
 
     private suspend fun refreshModelCatalog() {
@@ -748,7 +742,7 @@ constructor(
                 it.copy(
                     modelCatalogStatus = ModelCatalogStatus.Error,
                     modelCatalogMessage =
-                        "Could not load models from ${host.displayName}. Refresh the catalog to try again.",
+                        "Could not load models from ${host.displayName}. Reconnect to try again.",
                 )
             }
         }

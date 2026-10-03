@@ -42,6 +42,7 @@ class AppTest {
     @Volatile private var dropSend = false
     @Volatile private var dropWrite = false
     @Volatile private var fastModelAvailable = true
+    @Volatile private var rejectModelList = false
     @Volatile private var peer: WebSocket? = null
     @Volatile private var acceptedText = ""
     @Volatile private var acceptedInput = JsonArray(emptyList())
@@ -194,7 +195,9 @@ class AppTest {
                                             }
                                             "model/list" -> {
                                                 modelLists.incrementAndGet()
-                                                modelCatalog()
+                                                if (rejectModelList)
+                                                    obj("_fixtureError" to obj("code" to JsonPrimitive(-32603), "message" to s("Models unavailable")))
+                                                else modelCatalog()
                                             }
                                             "thread/list" ->
                                                 obj(
@@ -1192,12 +1195,17 @@ class AppTest {
     }
 
     @Test
-    fun modelControlsUseCatalogAndRefreshUnsupportedSelection() {
+    fun modelControlsUseCatalogAndReconcileOnReconnect() {
         compose.onNodeWithContentDescription("New chat").performClick()
         compose.waitUntil(5000) { model.state.value.page == "chat" }
         demoPause()
 
+        // The catalog loads on connection; neither the composer nor the picker
+        // should expose a manual catalog refresh action.
+        compose.onNodeWithContentDescription("Refresh models").assertDoesNotExist()
+        compose.onNodeWithText("Refresh models").assertDoesNotExist()
         compose.onNodeWithTag("model-selector").performClick()
+        compose.onNodeWithText("Refresh models").assertDoesNotExist()
         demoPause()
         compose.onNodeWithText("Fixture Fast").performClick()
         assertEquals("gpt-fixture-fast", model.state.value.newTaskOptions.model)
@@ -1222,7 +1230,8 @@ class AppTest {
 
         val previousLists = modelLists.get()
         fastModelAvailable = false
-        compose.onNodeWithContentDescription("Refresh models").performClick()
+        compose.waitUntil(5000) { !model.state.value.busy }
+        compose.runOnUiThread { model.connect() }
         compose.waitUntil(5000) {
             modelLists.get() > previousLists &&
                 model.state.value.modelCatalogStatus == ModelCatalogStatus.Ready
@@ -1231,6 +1240,35 @@ class AppTest {
         assertNull(model.state.value.newTaskOptions.reasoningEffort)
         compose.onNodeWithText("Unsupported overrides were cleared", substring = true).assertExists()
         demoPause(3000)
+    }
+
+    @Test
+    fun modelCatalogFailureRecoversOnReconnect() {
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
+        compose.onNodeWithTag("composer").performTextInput("Keep this draft")
+        rejectModelList = true
+        compose.runOnUiThread { model.connect() }
+        compose.waitUntil(5000) {
+            model.state.value.modelCatalogStatus == ModelCatalogStatus.Error
+        }
+        compose.onNodeWithTag("model-selector").assertIsNotEnabled()
+        compose.onNodeWithText("Refresh models").assertDoesNotExist()
+        compose.onNodeWithText("Reconnect to try again.", substring = true).assertIsDisplayed()
+        val previousLists = modelLists.get()
+        rejectModelList = false
+        compose.waitUntil(5000) { !model.state.value.busy }
+        compose.runOnUiThread { model.connect() }
+        compose.waitUntil(5000) {
+            modelLists.get() > previousLists &&
+                model.state.value.modelCatalogStatus == ModelCatalogStatus.Ready
+        }
+        assertEquals(previousLists + 1, modelLists.get())
+        compose.onNodeWithText("Refresh models").assertDoesNotExist()
+        compose.onNodeWithTag("model-selector").assertIsEnabled()
+        compose.onNodeWithTag("composer").assertTextContains("Keep this draft")
+        assertEquals(0, sent.get())
+        assertEquals(0, threadStarts.get())
     }
 
     @Test

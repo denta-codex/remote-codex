@@ -586,14 +586,6 @@ private fun ModelControls(
             Box(Modifier.size(if (cover) 40.dp else 48.dp), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
             }
-        } else {
-            IconButton(
-                onClick = actions::refreshModels,
-                enabled = state.ready && !state.busy,
-                modifier = Modifier.size(if (cover) 40.dp else 48.dp),
-            ) {
-                Glyph(R.drawable.ic_refresh, "Refresh models")
-            }
         }
     }
     state.modelCatalogMessage?.let {
