@@ -69,7 +69,26 @@ internal fun App(model: ClientModel) {
     BackHandler(st.page != "home") { model.back() }
     AdaptiveWindow {
         Scaffold(
-            snackbarHost = { SnackbarHost(snackbar) },
+            snackbarHost = {
+                SnackbarHost(snackbar) { data ->
+                    Snackbar {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            data.visuals.actionLabel?.let { label ->
+                                TextButton(
+                                    onClick = data::performAction,
+                                    colors = ButtonDefaults.textButtonColors(
+                                        contentColor = MaterialTheme.colorScheme.inversePrimary,
+                                    ),
+                                ) { Text(label) }
+                            }
+                            Text(data.visuals.message, Modifier.weight(1f))
+                        }
+                    }
+                }
+            },
             topBar = {
                 TopAppBar(
                     title = {

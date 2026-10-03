@@ -795,3 +795,29 @@ gesture are still pending user-authorized live deployment and delivery.
   limit 1. No mutation, background resume, server change, or phone installation
   was performed. Publication stays on `codex/compact-inbox`; merging remains
   pending phone testing.
+
+## Screenshot report action placement (report 088d56ab)
+
+- The report checkout (`0ce33a5`) predates the bug-report implementation.
+  This fix uses local main at `9a622a6`, where the screenshot prompt uses
+  Material's default trailing snackbar action.
+- The focused regression uses the reported 1080x1272 display and 360 dpi,
+  asserts that "Report bug" is left of "Screenshot taken", and verifies that
+  tapping it preserves the captured draft and screenshot. Display overrides
+  are applied before attaching the mock-backed activity and reset in cleanup.
+- The original layout failed the placement assertion. An earlier fixture run
+  failed before reaching the prompt because resizing after mock attachment
+  recreated the activity; moving resizing to setup corrected that fixture.
+- Diff-counter feasibility was checked against TypeScript bindings generated
+  from installed stock `codex-cli 0.159.2` with
+  `codex app-server generate-ts --experimental`. `TurnDiffUpdatedNotification`
+  contains `threadId`, `turnId`, and the latest aggregate unified `diff` for
+  that turn. `FileUpdateChange` contains `path`, `kind`, and `diff`;
+  `GitDiffToRemoteResponse` contains `sha` and `diff`. These types do not expose
+  ready-made added/removed line counters. A count-only UI can derive counts
+  from diffs, but summing turn counts would not represent net worktree changes
+  when later turns edit or undo earlier changes. No counter UI was added.
+- With the layout fix applied,
+  `scripts/emulator-test --tests AppTest#systemScreenshotOffersReportWithTheCapturedWindow`
+  passed (one test, managed Android 16). No release workflow, deployment, or
+  phone installation was performed.

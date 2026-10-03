@@ -111,9 +111,14 @@ class AppTest {
 
     @Before
     fun setup() {
-        if (coverScreen || landscapeScreen) {
+        reportCoverOverride = testName.methodName == "systemScreenshotOffersReportWithTheCapturedWindow"
+        if (coverScreen || landscapeScreen || reportCoverOverride) {
             shell(if (landscapeScreen) "wm size 2992x1224" else "wm size 1080x1272")
-            shell(if (landscapeScreen) "wm density 480" else "wm density 420")
+            shell(when {
+                landscapeScreen -> "wm density 480"
+                reportCoverOverride -> "wm density 360"
+                else -> "wm density 420"
+            })
             SystemClock.sleep(500)
             compose.activityRule.scenario.recreate()
             compose.waitForIdle()
@@ -2270,6 +2275,9 @@ class AppTest {
         shell("input keyevent KEYCODE_SYSRQ")
         compose.waitUntil(10000) { compose.onAllNodesWithText("Report bug").fetchSemanticsNodes().isNotEmpty() }
         assertFalse(model.reports.state.value.visible)
+        val actionBounds = compose.onNodeWithText("Report bug").fetchSemanticsNode().boundsInRoot
+        val messageBounds = compose.onNodeWithText("Screenshot taken").fetchSemanticsNode().boundsInRoot
+        assertTrue("Report action should be left of the screenshot message", actionBounds.right <= messageBounds.left)
         compose.onNodeWithText("Report bug").performClick()
         compose.waitUntil(10000) { model.reports.state.value.visible && !model.reports.state.value.capturing }
         val draft = requireNotNull(model.reports.state.value.draft)
