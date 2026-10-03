@@ -1,5 +1,25 @@
 # Validation
 
+## 2026-10-03 — Retired Autofill playground cleanup
+
+- Based on local main `c3ba403` (Android 0.3.1, build 28). Removed the experimental
+  Autofill activity, Settings entry, manifest registration, dedicated tests, and
+  experiment guide. Removed the obsolete playground availability statement.
+- Production Credential requests, approval transport, keyboard suppression,
+  protected-window screenshot checks, and prerelease version support remain intact.
+- Core/app unit tests, debug APK assembly, debug lint, and instrumentation APK
+  assembly passed using the existing managed JDK 17 and Android SDK.
+- All three selected Android 16 emulator tests passed with no skips or failures:
+  `CredentialRequestsTest#releaseUsesSeparateRouteClearsValueAndNeverReplays`,
+  `CredentialRequestsTest#pickerHandoffRecreationAndProtectedWindow`, and
+  `AppTest#bugReportSettingsExcludesScreenshotAndPersistsShakePreference`.
+- The merged debug manifest omits the experimental activity and retains the
+  non-exported production approval activity. Source/current-documentation searches
+  found no remaining playground references; historical validation and release
+  version fixtures are retained. `git diff --check` passed.
+- No live credentials were requested. No publication, deployment, or physical
+  phone installation was performed; new manual 1Password acceptance was not run.
+
 ## 2026-10-03 — Android 0.3.1 (28)
 
 - Source revision: `f03ab1a47b4294658a09af732af2ea4e7a4005fc`.

@@ -32,8 +32,7 @@ to match; Autofill cannot independently prove item identity.
    Caller commands then stay unchanged. Restore the old desktop default for
    recovery; there is never automatic fallback.
 
-The old Autofill playground remains available for item-type experiments. It does
-not submit values. The real approval screen clears inputs on selection changes,
+The approval screen clears inputs on selection changes,
 exit, recreation, and submission; temporary picker handoff preserves the field.
 Submitted operations never replay on reconnect. Read-only status checks can
 report completion, cancellation, or uncertainty while the original session lives.
