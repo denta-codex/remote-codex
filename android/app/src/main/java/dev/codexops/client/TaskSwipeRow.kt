@@ -93,7 +93,7 @@ internal fun TaskSwipeRow(
             }
         }
         Box(
-            Modifier.offset { IntOffset(offset.roundToInt(), 0) }
+            Modifier.absoluteOffset { IntOffset(offset.roundToInt(), 0) }
                 .fillMaxWidth().background(MaterialTheme.colorScheme.surface)
                 .testTag("task-row-$id")
                 .semantics {

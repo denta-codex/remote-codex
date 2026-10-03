@@ -1,1 +1,2 @@
-Rebuild of source e03e256c89b7.
+- Use server recency for recent chat ordering
+- Integrate recency fix with current inbox and correct displayed ages
