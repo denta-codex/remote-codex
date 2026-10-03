@@ -260,8 +260,7 @@ private fun ProjectControl(state: ScreenState, actions: ConversationActions, exp
                     onClick = { menu = false; actions.updateNewTaskOptions(options.copy(projectId = null,
                         workingDirectory = null, executionTarget = ExecutionTarget.Projectless)) })
                 state.projects.forEach { candidate ->
-                    DropdownMenuItem(text = { Column { Text(candidate.name); Text(candidate.primaryRoot ?: "No workspace root",
-                        style = MaterialTheme.typography.bodySmall) } }, leadingIcon = { Glyph(R.drawable.ic_folder) },
+                    DropdownMenuItem(text = { Text(candidate.name) }, leadingIcon = { Glyph(R.drawable.ic_folder) },
                         enabled = candidate.primaryRoot != null,
                         onClick = { menu = false; actions.updateNewTaskOptions(options.copy(projectId = candidate.id,
                             workingDirectory = candidate.primaryRoot, executionTarget = ExecutionTarget.CurrentWorkspace)) })
