@@ -33,6 +33,8 @@ class AppTest {
     private lateinit var server: MockWebServer
     private lateinit var model: ClientModel
     private val store = ViewModelStore()
+    private val browserCalls = CopyOnWriteArrayList<Pair<String, JsonObject>>()
+    @Volatile private var browserResponse: ((String, JsonObject) -> JsonObject?)? = null
     private val sent = AtomicInteger()
     private val prepared = AtomicInteger()
     private val modelLists = AtomicInteger()
@@ -132,8 +134,8 @@ class AppTest {
                                     if (method == "initialized") return
                                     if (method.startsWith("thread/queue/") && method != "thread/queue/list")
                                         queueMutations.add(m)
-                                    val result =
-                                        when (method) {
+                                    if (method in listOf("thread/list", "thread/search", "thread/unarchive")) browserCalls.add(method to params)
+                                    val result = browserResponse?.invoke(method, params) ?: when (method) {
                                             "initialize" -> obj("codexHome" to s("/fixture"))
                                             "collaborationMode/list" ->
                                                 obj(
@@ -783,7 +785,8 @@ class AppTest {
     private fun openLongHistory(tallLastMessage: Boolean = false) {
         fixtureTitle = "Polish the task list"
         historyOverride = longHistory(tallLastMessage)
-        compose.runOnUiThread { model.home() }
+        // Navigation now preserves the inbox; explicitly fetch the changed fixture data.
+        compose.runOnUiThread { model.home(); model.retryList() }
         compose.waitUntil(5000) { model.state.value.tasks.first().str("name") == fixtureTitle }
         demoPause(2000)
         compose.onNodeWithText(fixtureTitle).performClick()
@@ -818,7 +821,7 @@ class AppTest {
             .config[SemanticsProperties.VerticalScrollAxisRange].value()
         assertEquals("Incoming content must not pull the reader to the bottom", position, after, .01f)
         demoPause(2000)
-        compose.onNodeWithContentDescription("Tasks").performClick()
+        compose.onNodeWithContentDescription("Back").performClick()
         compose.waitUntil(5000) { model.state.value.page == "home" }
         demoPause(1500)
         compose.onNodeWithText(fixtureTitle).performClick()
@@ -836,7 +839,8 @@ class AppTest {
         compose.onNodeWithText("Scan setup QR").assertIsDisplayed()
         compose.onNodeWithText("Check for updates").performScrollTo().assertIsDisplayed()
         demoPause(2000)
-        compose.onNodeWithContentDescription("Tasks").performClick()
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.onNodeWithContentDescription("Back").performClick()
         compose.onNodeWithContentDescription("New chat").performClick()
         compose.waitUntil(5000) { model.state.value.page == "chat" && model.state.value.thread == null }
         compose.onNodeWithText("What shall we work on?").assertIsDisplayed()
@@ -905,7 +909,7 @@ class AppTest {
         compose.onNodeWithText("Check for updates").performScrollTo().assertIsDisplayed()
         demoPause(2500)
 
-        compose.onNodeWithContentDescription("Tasks").performClick()
+        compose.onNodeWithContentDescription("Back").performClick()
         compose.onNodeWithContentDescription("New chat").performClick()
         compose.waitUntil(5000) { model.state.value.page == "chat" }
         compose.onNodeWithText("What shall we work on?").assertIsDisplayed()
@@ -1364,11 +1368,184 @@ class AppTest {
     }
 
     @Test
+    fun compactInboxVisualAndTyping() {
+        browserResponse = { method, _ -> if (method != "thread/list") null else obj("data" to JsonArray(
+            listOf("Printer connection", "Guardian review", "Linux printing setup", "Merge the auth bridge", "Printer calibration").mapIndexed { index, title ->
+                obj("id" to s("visual-$index"), "name" to s(title), "projectId" to s("project-remote"),
+                    "updatedAt" to JsonPrimitive(java.time.Instant.now().epochSecond - (index + 1) * 600))
+            })) }
+        compose.runOnUiThread { model.retryList() }
+        compose.waitUntil(5000) { !model.state.value.listLoading && model.state.value.tasks.any { it.str("id") == "visual-0" } }
+        val output = InstrumentationRegistry.getArguments().getString("additionalTestOutputDir")
+            ?: app.getExternalFilesDir(null)!!.absolutePath
+        fun capture(name: String) {
+            compose.waitForIdle()
+            val bitmap = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
+            File(output, name).apply { parentFile?.mkdirs() }.outputStream().use {
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
+            }
+        }
+        capture("compact-app-inbox.png")
+        compose.onNodeWithTag("project-control").performClick()
+        capture("compact-app-controls.png")
+        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        compose.onNodeWithText("Search chats").performClick().performTextInput("p")
+        compose.onNodeWithText("Search chats").assertIsFocused().performTextInput("rinter")
+        assertEquals("printer", model.state.value.query)
+        compose.onNodeWithContentDescription("Clear search").performClick()
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.onNodeWithText("Archived chats").assertIsDisplayed()
+        capture("compact-app-settings.png")
+    }
+
+    @Test
+    fun compactBrowserQueriesAndPagination() {
+        // Remove the UI auto-scroll trigger while exercising exact model pagination boundaries.
+        compose.activity.setContent { androidx.compose.material3.Text("Model fixture") }
+        browserCalls.clear()
+        ChatSort.entries.forEach { sort ->
+            compose.runOnUiThread { model.applyListOptions(TaskProjectFilter.Projectless, sort) }
+            compose.waitUntil(5000) { !model.state.value.listLoading }
+            val call = browserCalls.last().second
+            assertEquals(sort.key, call.str("sortKey"))
+            assertEquals(sort.direction, call.str("sortDirection"))
+            assertTrue(call.containsKey("projectId"))
+            assertEquals(JsonNull, call["projectId"])
+        }
+        compose.runOnUiThread { model.applyListOptions(TaskProjectFilter.All, ChatSort.Recent) }
+        compose.waitUntil(5000) { !model.state.value.listLoading }
+        assertFalse(browserCalls.last().second.containsKey("projectId"))
+        compose.runOnUiThread { model.applyListOptions(TaskProjectFilter.Project("project-remote"), ChatSort.Recent) }
+        compose.waitUntil(5000) { !model.state.value.listLoading }
+        assertEquals("project-remote", browserCalls.last().second.str("projectId"))
+        browserCalls.clear()
+        val visited = CopyOnWriteArrayList<String>()
+        var failLast = true
+        browserResponse = { method, params ->
+            if (method != "thread/search") null else {
+                val cursor = params.str("cursor")
+                visited.add(cursor)
+                val row = obj("id" to s(if (cursor == "p2") "match" else "other"),
+                    "name" to s("Title does not contain the query"),
+                    "projectId" to s(if (cursor == "p2") "project-remote" else "project-notes"))
+                when {
+                    cursor == "p3" && failLast -> {
+                        failLast = false
+                        obj("_fixtureError" to obj("code" to JsonPrimitive(-32000), "message" to s("Page unavailable")))
+                    }
+                    cursor == "p3" -> obj("data" to JsonArray(listOf(obj("thread" to obj("id" to s("match"), "projectId" to s("project-remote"))))))
+                    else -> obj("data" to JsonArray(listOf(obj("thread" to row))),
+                        "nextCursor" to s(when(cursor) { "" -> "p1"; "p1" -> "p2"; else -> "p3" }))
+                }
+            }
+        }
+        compose.runOnUiThread { model.query("body-only needle") }
+        compose.waitUntil(5000) { model.state.value.listFailed }
+        assertEquals(listOf("", "p1", "p2", "p3"), visited.toList())
+        assertEquals(listOf("match"), model.state.value.tasks.map { it.str("id") })
+        assertEquals("p3", model.state.value.listCursor)
+        assertFalse(browserCalls.last().second.containsKey("projectId"))
+        compose.runOnUiThread { model.moreTasks() }
+        assertEquals(4, visited.size)
+        compose.runOnUiThread { model.retryList(); model.retryList() }
+        compose.waitUntil(5000) { !model.state.value.listLoading }
+        assertEquals(5, visited.size)
+        assertNull(model.state.value.listCursor)
+        assertEquals(1, model.state.value.tasks.size)
+    }
+
+    @Test
+    fun compactBrowserRepeatedCursorAndStaleSearch() {
+        compose.activity.setContent { androidx.compose.material3.Text("Model fixture") }
+        browserResponse = { method, params -> if (method != "thread/search") null else {
+            if (params.str("searchTerm") == "slow") Thread.sleep(600)
+            obj("data" to JsonArray(listOf(obj("thread" to obj("id" to s(params.str("searchTerm")),
+                "name" to s("Search result"))))), "nextCursor" to s("repeat"))
+        } }
+        compose.runOnUiThread { model.query("slow") }
+        compose.waitUntil(5000) { browserCalls.any { it.first == "thread/search" && it.second.str("searchTerm") == "slow" } }
+        compose.runOnUiThread { model.query("new") }
+        compose.waitUntil(5000) { !model.state.value.listLoading && model.state.value.tasks.any { it.str("id") == "new" } }
+        assertEquals(listOf("new"), model.state.value.tasks.map { it.str("id") })
+        compose.runOnUiThread { model.moreTasks(); model.moreTasks() }
+        compose.waitUntil(5000) { model.state.value.listFailed }
+        assertEquals("repeat", model.state.value.listCursor)
+        assertEquals(1, model.state.value.tasks.size)
+        assertEquals(1, browserCalls.count { it.first == "thread/search" && it.second.str("cursor") == "repeat" })
+    }
+
+    @Test
+    fun compactArchivesRestoreAndNavigation() {
+        compose.activity.setContent { androidx.compose.material3.Text("Model fixture") }
+        compose.runOnUiThread { model.query("inbox query") }
+        compose.waitUntil(5000) { !model.state.value.listLoading }
+        compose.runOnUiThread { model.listPosition(3, 12); model.settings(); model.openArchives() }
+        compose.waitUntil(5000) { !model.state.value.listLoading }
+        assertEquals("", model.state.value.query)
+        assertTrue(model.state.value.archived)
+        assertEquals(JsonPrimitive(true), browserCalls.last().second["archived"])
+        compose.runOnUiThread { model.query("archive query") }
+        compose.waitUntil(5000) { !model.state.value.listLoading }
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(5000) { model.state.value.page == "chat" && !model.state.value.busy }
+        compose.runOnUiThread { model.back() }
+        assertEquals("archives", model.state.value.page)
+        assertEquals("archive query", model.state.value.query)
+        compose.runOnUiThread { model.back(); model.back() }
+        assertEquals("home", model.state.value.page)
+        assertFalse(model.state.value.archived)
+        assertEquals("inbox query", model.state.value.query)
+        assertEquals(3, model.state.value.listIndex)
+        assertEquals(12, model.state.value.listOffset)
+        compose.runOnUiThread { model.settings(); model.openArchives() }
+        var rejectCheck = true
+        browserResponse = { method, _ -> when (method) {
+            "thread/unarchive" -> obj("_fixtureError" to obj("code" to JsonPrimitive(-32000), "message" to s("Uncertain write")))
+            "thread/list" -> if (rejectCheck) obj("_fixtureError" to obj("code" to JsonPrimitive(-32000), "message" to s("Offline"))) else obj("data" to JsonArray(emptyList()))
+            else -> null
+        } }
+        compose.runOnUiThread { model.restoreChat("task-test"); model.restoreChat("task-test") }
+        compose.waitUntil(5000) { model.state.value.restoring.isEmpty() }
+        assertTrue("task-test" in model.state.value.uncertainRestores)
+        assertEquals(1, browserCalls.count { it.first == "thread/unarchive" })
+        rejectCheck = false
+        compose.runOnUiThread { model.restoreChat("task-test") }
+        compose.waitUntil(5000) { model.state.value.restoring.isEmpty() }
+        assertFalse("task-test" in model.state.value.uncertainRestores)
+        assertFalse(model.state.value.tasks.any { it.str("id") == "task-test" })
+        assertEquals(1, browserCalls.count { it.first == "thread/unarchive" })
+        browserResponse = { method, _ -> if (method == "thread/unarchive") obj() else null }
+        compose.runOnUiThread { model.restoreChat("project-task") }
+        compose.waitUntil(5000) { model.state.value.restoring.isEmpty() }
+        assertFalse(model.state.value.tasks.any { it.str("id") == "project-task" })
+    }
+
+    @Test
+    fun changingSearchImmediatelyInvalidatesLoadedTasks() {
+        assertTrue(model.state.value.tasks.isNotEmpty())
+        compose.runOnUiThread {
+            model.query("fixture")
+            assertTrue(model.state.value.tasks.isEmpty())
+            assertNull(model.state.value.listCursor)
+            assertTrue(model.state.value.listLoading)
+        }
+        compose.waitUntil(5000) { !model.state.value.listLoading }
+        assertFalse(model.state.value.listFailed)
+        compose.onNodeWithContentDescription("Clear search").performClick()
+        compose.waitUntil(5000) {
+            model.state.value.query.isEmpty() && !model.state.value.listLoading &&
+                model.state.value.tasks.isNotEmpty()
+        }
+    }
+
+    @Test
     fun projectsAndChatsFilterTaskBrowser() {
         assertEquals(listOf("Remote Codex", "Notes"), model.state.value.projects.map { it.name })
         demoPause(2000)
 
-        compose.onNode(hasText("Remote Codex") and hasClickAction()).performClick()
+        compose.onNodeWithText("All projects").performClick()
+        compose.onNode(hasText("Remote Codex") and isSelectable()).performClick()
+        compose.onNodeWithText("Apply").performClick()
         compose.waitUntil(5000) {
             model.state.value.projectFilter == TaskProjectFilter.Project("project-remote") &&
                 model.state.value.tasks.map { it.str("id") } == listOf("project-task")
@@ -1377,7 +1554,9 @@ class AppTest {
         compose.onNodeWithText(fixtureTitle).assertDoesNotExist()
         demoPause(2000)
 
-        compose.onNodeWithText("Chats").performClick()
+        compose.onNodeWithTag("project-control").performClick()
+        compose.onNodeWithText("No project").performClick()
+        compose.onNodeWithText("Apply").performClick()
         compose.waitUntil(5000) {
             model.state.value.projectFilter == TaskProjectFilter.Projectless &&
                 model.state.value.tasks.map { it.str("id") } == listOf("task-test")

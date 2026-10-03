@@ -63,7 +63,7 @@ internal fun Glyph(
 internal fun App(model: ClientModel) {
     val st by model.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    BackHandler(st.page != "home") { model.home() }
+    BackHandler(st.page != "home") { model.back() }
     AdaptiveWindow {
         Scaffold(
             topBar = {
@@ -74,7 +74,8 @@ internal fun App(model: ClientModel) {
                                 when (st.page) {
                                     "chat" -> st.title
                                     "settings" -> "Settings"
-                                    else -> "Remote Codex"
+                                    "archives" -> "Archived chats"
+                                    else -> "Chats"
                                 },
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.SemiBold,
@@ -102,11 +103,14 @@ internal fun App(model: ClientModel) {
                     },
                     navigationIcon = {
                         if (st.page != "home")
-                            IconButton(onClick = model::home) {
-                                Glyph(R.drawable.ic_back, "Tasks")
+                            IconButton(onClick = model::back) {
+                                Glyph(R.drawable.ic_back, "Back")
                             }
                     },
                     actions = {
+                        if (st.page == "home") IconButton(onClick = model::newChat) {
+                            Glyph(R.drawable.ic_compose, "New chat")
+                        }
                         if (st.page == "chat")
                             st.thread?.let { threadId ->
                                 IconButton(onClick = { copyThreadDeeplink(context, threadId) }) {

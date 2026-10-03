@@ -107,6 +107,20 @@ data class NewTaskOptions(
                 executionTarget != ExecutionTarget.Projectless
 }
 
+enum class ChatSort(val label: String, val key: String, val direction: String) {
+    Recent("Recent activity", "updated_at", "desc"),
+    Newest("Newest created", "created_at", "desc"),
+    Oldest("Oldest created", "created_at", "asc"),
+}
+
+/** Session-only snapshot; archive and inbox keep independent browsing positions. */
+data class ChatListSnapshot(
+    val query: String = "", val project: TaskProjectFilter = TaskProjectFilter.All,
+    val sort: ChatSort = ChatSort.Recent, val tasks: List<JsonObject> = emptyList(),
+    val cursor: String? = null, val initialized: Boolean = false,
+    val failed: Boolean = false, val index: Int = 0, val offset: Int = 0,
+)
+
 data class ScreenState(
     val page: String = "home",
     val host: HostIdentity = GraceHost,
@@ -117,8 +131,16 @@ data class ScreenState(
     val projectFilter: TaskProjectFilter = TaskProjectFilter.All,
     val tasks: List<JsonObject> = emptyList(),
     val listCursor: String? = null,
+    val listLoading: Boolean = false,
+    val listFailed: Boolean = false,
     val query: String = "",
     val archived: Boolean = false,
+    val chatSort: ChatSort = ChatSort.Recent,
+    val listInitialized: Boolean = false,
+    val listIndex: Int = 0,
+    val listOffset: Int = 0,
+    val restoring: Set<String> = emptySet(),
+    val uncertainRestores: Set<String> = emptySet(),
     val thread: String? = null,
     val threadCwd: String? = null,
     val title: String = "New chat",
@@ -154,15 +176,18 @@ interface AppNavigation {
 
     fun settings()
 
+    fun back()
+
     fun home()
 }
 
 interface HomeActions {
+    fun applyListOptions(project: TaskProjectFilter, sort: ChatSort)
+    fun retryList()
+    fun listPosition(index: Int, offset: Int)
+    fun restoreChat(id: String)
+
     fun query(value: String)
-
-    fun archived(value: Boolean)
-
-    fun projectFilter(value: TaskProjectFilter)
 
     fun moreTasks()
 
@@ -172,6 +197,8 @@ interface HomeActions {
 }
 
 interface SettingsActions {
+    fun openArchives()
+
     fun saveCredential(value: String)
 
     fun checkForUpdates()

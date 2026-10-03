@@ -29,6 +29,11 @@ internal fun SettingsScreen(st: ScreenState, actions: SettingsActions) {
             .padding(if (cover) 12.dp else 24.dp),
         verticalArrangement = Arrangement.spacedBy(if (cover) 12.dp else 18.dp),
     ) {
+        OutlinedButton(onClick = actions::openArchives, modifier = Modifier.fillMaxWidth()) {
+            Glyph(R.drawable.ic_archive)
+            Spacer(Modifier.width(12.dp))
+            Text("Archived chats")
+        }
         Text(
             "Connection",
             fontSize = if (cover) 22.sp else 28.sp,
