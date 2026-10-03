@@ -1,0 +1,9 @@
+Visualization runtime snapshot from the installed OpenAI visualize plugin 1.0.45:
+  skills/visualize/assets/visualize.css
+  skills/visualize/assets/visualize.html
+  skills/visualize/assets/standalone-host-bridge.js
+  skills/visualize/assets/calendar.js
+  assets/tweak.js
+Copied unchanged. android-shell.js is Remote Codex's native-host adapter.
+The optional Tweak annotation API is not advertised; guarded mockups still render.
+Update these assets together when updating the supported skill contract.

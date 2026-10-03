@@ -20,12 +20,19 @@ import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownTypography
+import com.mikepenz.markdown.model.State as MarkdownState
+import com.mikepenz.markdown.model.parseMarkdownFlow
+import com.mikepenz.markdown.compose.components.markdownComponents
+import com.mikepenz.markdown.compose.elements.MarkdownTable
+import com.mikepenz.markdown.compose.elements.MarkdownTableHeader
+import com.mikepenz.markdown.compose.elements.MarkdownTableRow
 import dev.codexops.core.FileRef
 import java.io.File
 import java.net.URI
@@ -34,6 +41,14 @@ import kotlinx.coroutines.withContext
 
 @Composable
 internal fun FileAwareMarkdown(text: String, actions: ConversationActions) {
+    // Keep the last rendered document while its replacement parses off-thread.
+    // The String overload clears it to a loading box on each streaming delta,
+    // collapsing the list item and destroying the reader's scroll anchor.
+    val markdown by produceState<MarkdownState>(MarkdownState.Loading(), text) {
+        parseMarkdownFlow(text).collect { parsed ->
+            if (parsed !is MarkdownState.Loading) value = parsed
+        }
+    }
     val external = LocalUriHandler.current
     val handler =
         remember(external, actions) {
@@ -64,7 +79,37 @@ internal fun FileAwareMarkdown(text: String, actions: ConversationActions) {
         inlineCode = body.copy(fontFamily = FontFamily.Monospace, fontSize = 14.sp),
     )
     CompositionLocalProvider(LocalUriHandler provides handler) {
-        Markdown(text, typography = typography)
+        Markdown(
+            markdown,
+            typography = typography,
+            components = markdownComponents(
+                table = { table ->
+                    // The library defaults to one-line, ellipsized cells. Scrolling
+                    // exposes more columns but cannot reveal that discarded text.
+                    MarkdownTable(
+                        table.content,
+                        table.node,
+                        style = table.typography.table,
+                        headerBlock = { content, node, width, style ->
+                            MarkdownTableHeader(
+                                content, node, width, style,
+                                verticalAlignment = Alignment.Top,
+                                maxLines = Int.MAX_VALUE,
+                                overflow = TextOverflow.Clip,
+                            )
+                        },
+                        rowBlock = { content, node, width, style ->
+                            MarkdownTableRow(
+                                content, node, width, style,
+                                verticalAlignment = Alignment.Top,
+                                maxLines = Int.MAX_VALUE,
+                                overflow = TextOverflow.Clip,
+                            )
+                        },
+                    )
+                }
+            ),
+        )
     }
 }
 

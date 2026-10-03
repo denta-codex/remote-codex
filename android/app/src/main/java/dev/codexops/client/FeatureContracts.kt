@@ -15,6 +15,7 @@ data class HostIdentity(
     val displayName: String,
     val endpoint: String,
     val expectedCodexHome: String,
+    val bugReportRepository: String = "/home/agent/workspaces/remote-codex",
 )
 
 val GraceHost =
@@ -107,18 +108,43 @@ data class NewTaskOptions(
                 executionTarget != ExecutionTarget.Projectless
 }
 
+enum class ChatSort(val label: String, val key: String, val direction: String) {
+    Recent("Recent activity", "recency_at", "desc"),
+    Newest("Newest created", "created_at", "desc"),
+    Oldest("Oldest created", "created_at", "asc"),
+}
+
+/** Session-only snapshot; archive and inbox keep independent browsing positions. */
+data class ChatListSnapshot(
+    val query: String = "", val project: TaskProjectFilter = TaskProjectFilter.All,
+    val sort: ChatSort = ChatSort.Recent, val tasks: List<JsonObject> = emptyList(),
+    val cursor: String? = null, val initialized: Boolean = false,
+    val failed: Boolean = false, val index: Int = 0, val offset: Int = 0,
+)
+
 data class ScreenState(
     val page: String = "home",
     val host: HostIdentity = GraceHost,
     val connection: String = "Offline",
     val ready: Boolean = false,
+    val appForeground: Boolean = false,
     val configured: Boolean = false,
     val projects: List<CodexProject> = emptyList(),
     val projectFilter: TaskProjectFilter = TaskProjectFilter.All,
     val tasks: List<JsonObject> = emptyList(),
+    val chatActivity: Map<String, ChatActivity> = emptyMap(),
     val listCursor: String? = null,
+    val listLoading: Boolean = false,
+    val listFailed: Boolean = false,
     val query: String = "",
     val archived: Boolean = false,
+    val pendingTaskActions: Set<String> = emptySet(),
+    val uncertainTaskActions: Set<String> = emptySet(),
+    val taskNotice: TaskNotice? = null,
+    val chatSort: ChatSort = ChatSort.Recent,
+    val listInitialized: Boolean = false,
+    val listIndex: Int = 0,
+    val listOffset: Int = 0,
     val thread: String? = null,
     val threadCwd: String? = null,
     val title: String = "New chat",
@@ -146,6 +172,13 @@ data class ScreenState(
     val filePreview: FilePreviewState? = null,
 )
 
+data class TaskNotice(
+    val id: String,
+    val message: String,
+    val threadId: String? = null,
+    val undoArchived: Boolean? = null,
+)
+
 fun ScreenState.collaborationModel(): String? =
     newTaskOptions.model ?: threadModel ?: models.firstOrNull(ServerModelOption::isDefault)?.id
 
@@ -154,24 +187,37 @@ interface AppNavigation {
 
     fun settings()
 
+    fun back()
+
     fun home()
 }
 
 interface HomeActions {
+    fun visibleChats(ids: Set<String>) {}
+    fun applyListOptions(project: TaskProjectFilter, sort: ChatSort)
+    fun retryList()
+    fun listPosition(index: Int, offset: Int)
+
     fun query(value: String)
-
-    fun archived(value: Boolean)
-
-    fun projectFilter(value: TaskProjectFilter)
 
     fun moreTasks()
 
     fun newChat()
 
     fun openTask(id: String)
+
+    fun archiveTask(id: String, archived: Boolean)
+
+    fun markTaskUnread(id: String)
+
+    fun undoTaskAction(noticeId: String)
+
+    fun dismissTaskNotice(noticeId: String)
 }
 
 interface SettingsActions {
+    fun openArchives()
+
     fun saveCredential(value: String)
 
     fun checkForUpdates()
@@ -184,9 +230,9 @@ interface SettingsActions {
 }
 
 interface ConversationActions {
+    fun viewedReply(thread: String, signature: String) {}
     fun updateNewTaskOptions(options: NewTaskOptions)
 
-    fun refreshModels()
 
     fun older()
 
@@ -203,6 +249,14 @@ interface ConversationActions {
     fun removeAttachment(id: String)
 
     suspend fun loadMedia(media: MediaRef): ByteArray
+
+    suspend fun loadVisualization(reference: VisualizationRef): String
+
+    suspend fun visualizationState(key: String): String
+
+    suspend fun saveVisualizationState(key: String, value: String)
+
+    fun stageVisualizationFollowUp(prompt: String)
 
     fun inspectFile(file: dev.codexops.core.FileRef)
 

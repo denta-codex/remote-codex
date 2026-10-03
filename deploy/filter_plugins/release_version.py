@@ -3,13 +3,24 @@ import re
 
 from ansible.errors import AnsibleFilterError
 
-VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?")
 
 
 def parse_version(value):
-    if not isinstance(value, str) or not VERSION.fullmatch(value):
-        raise AnsibleFilterError("Release versions must be numeric MAJOR.MINOR.PATCH")
-    return tuple(int(part) for part in value.split("."))
+    match = VERSION.fullmatch(value) if isinstance(value, str) else None
+    if not match or len(value) > 64:
+        raise AnsibleFilterError("Release versions must be MAJOR.MINOR.PATCH[-prerelease], without build metadata")
+    identifiers = match[4].split(".") if match[4] else []
+    if any(part.isdigit() and len(part) > 1 and part.startswith("0") for part in identifiers):
+        raise AnsibleFilterError("Numeric prerelease identifiers cannot have leading zeros")
+    # Numeric identifiers sort below text; a normal release sorts above prereleases.
+    prerelease = tuple((0, int(part)) if part.isdigit() else (1, part) for part in identifiers)
+    return (*(int(match[i]) for i in (1, 2, 3)), not identifiers, prerelease)
+
+
+def format_version(version):
+    core = ".".join(map(str, version[:3]))
+    return core if version[3] else core + "-" + ".".join(str(part[1]) for part in version[4])
 
 
 def select_version(gradle, manifests, codes, requested=None):
@@ -30,13 +41,15 @@ def select_version(gradle, manifests, codes, requested=None):
             raise AnsibleFilterError("Release directory names must be numeric build numbers")
         build_codes.append(int(code))
     newest = max(versions)
-    selected = parse_version(requested) if requested is not None else (newest[0], newest[1], newest[2] + 1)
+    selected = parse_version(requested) if requested is not None else (
+        newest[0], newest[1], newest[2] + int(newest[3]), True, ()
+    )
     if selected <= newest:
         raise AnsibleFilterError("Requested version must be newer than repository and existing manifests")
     code = max(build_codes) + 1
     if code > 2100000000:
         raise AnsibleFilterError("Android versionCode limit exceeded")
-    return {"versionName": ".".join(map(str, selected)), "versionCode": code}
+    return {"versionName": format_version(selected), "versionCode": code}
 
 
 class FilterModule:
