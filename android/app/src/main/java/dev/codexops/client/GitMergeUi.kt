@@ -20,6 +20,7 @@ internal fun GitMergeDialog(st: ScreenState, actions: ConversationActions) {
     if (!merge.visible || st.page != "chat") return
     val report = merge.report
     val status = report?.str("status")
+    val commitsTaskChanges = (report?.get("uncommittedCount") as? JsonPrimitive)?.intOrNull?.let { it > 0 } == true
     val cover = LocalAppWindowClass.current.coverScreen
     Dialog(onDismissRequest = actions::dismissMerge, properties = DialogProperties(usePlatformDefaultWidth = !cover)) {
         Surface(Modifier.fillMaxWidth().then(if (cover) Modifier.fillMaxHeight().systemBarsPadding() else Modifier.heightIn(max = 720.dp)),
@@ -34,7 +35,10 @@ internal fun GitMergeDialog(st: ScreenState, actions: ConversationActions) {
                     }
                     report?.let { value ->
                         Text(value.str("reason"), Modifier.testTag("merge-result"))
-                        if (status == "ready") Text("This directly merges all listed commits into local main. It does not push or run tests.")
+                        if (status == "ready") Text(if (commitsTaskChanges)
+                            "All listed uncommitted task files, including new files, will be staged and committed, then merged with the existing task commits into local main. Git ignore rules apply to untracked files."
+                            else "Merge the listed task commits into local main.")
+                        if (status == "ready") Text("Local only. No push or tests are run.")
                         SelectionContainer {
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 val snapshot = merge.pending?.map("snapshot") ?: value
@@ -45,7 +49,7 @@ internal fun GitMergeDialog(st: ScreenState, actions: ConversationActions) {
                                     Text(snapshot.str("destination"))
                                 }
                                 if (value.str("result").isNotEmpty()) Text("Result: ${value.str("result")}")
-                                for ((field, heading) in listOf("conflicts" to "Conflicting files", "commits" to "Commits (${value.str("count")})", "files" to "Changed files (${value.str("fileCount")})")) {
+                                for ((field, heading) in listOf("conflicts" to "Conflicting files", "uncommitted" to "Task files to commit (${value.str("uncommittedCount")})", "commits" to "Existing commits (${value.str("count")})", "files" to "Changed files (${value.str("fileCount")})")) {
                                     val lines = (value[field] as? JsonArray)?.map { it.jsonPrimitive.content }.orEmpty()
                                     if (lines.isNotEmpty()) {
                                         Text(heading, style = MaterialTheme.typography.titleSmall)
@@ -54,6 +58,7 @@ internal fun GitMergeDialog(st: ScreenState, actions: ConversationActions) {
                                 }
                                 if ((value["count"] as? JsonPrimitive)?.intOrNull?.let { it > 100 } == true) Text("Showing the first 100 commits; all commits are included.")
                                 if ((value["fileCount"] as? JsonPrimitive)?.intOrNull?.let { it > 200 } == true) Text("Showing the first 200 changed files.")
+                                if ((value["uncommittedCount"] as? JsonPrimitive)?.intOrNull?.let { it > 200 } == true) Text("Showing the first 200 task files; all task changes will be committed.")
                                 if (merge.pending != null) {
                                     Text("Operation: ${merge.pending.str("operation")}")
                                     Text("Host receipt: ${snapshot.str("common")}/remote-codex-merges/${merge.pending.str("operation")}.json")
@@ -76,7 +81,7 @@ internal fun GitMergeDialog(st: ScreenState, actions: ConversationActions) {
                 }
                 if (merge.pending == null && status != "succeeded") {
                     Button(actions::mergeIntoMain, enabled = status == "ready" && st.canInspectMerge(),
-                        modifier = Modifier.fillMaxWidth().testTag("confirm-merge")) { Text("Merge into main") }
+                        modifier = Modifier.fillMaxWidth().testTag("confirm-merge")) { Text(if (commitsTaskChanges) "Commit and merge into main" else "Merge into main") }
                 }
             }
         }

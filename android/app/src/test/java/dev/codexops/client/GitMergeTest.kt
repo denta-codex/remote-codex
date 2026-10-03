@@ -94,7 +94,7 @@ class GitMergeTest {
         val preview = r.run("inspect")
         for (directory in listOf(r.main, r.source)) {
             val untracked = File(directory, "unsaved.txt").apply { writeText("keep") }
-            assertEquals("blocked", r.run("inspect").str("status"))
+            assertEquals(if (directory == r.main) "blocked" else "ready", r.run("inspect").str("status"))
             assertEquals("blocked", r.run("merge", preview).str("status"))
             assertEquals("keep", untracked.readText())
             untracked.delete()
@@ -103,6 +103,98 @@ class GitMergeTest {
         val newHead = r.git("rev-parse", "HEAD")
         assertEquals("blocked", r.run("merge", preview).str("status"))
         assertEquals(newHead, r.git("rev-parse", "HEAD"))
+    }
+
+    @Test fun commitsAllTaskChangesWithoutChangingIndexDuringPreview() = Repository().use { r ->
+        File(r.source, "base.txt").writeText("staged version\n")
+        r.git("add", "base.txt", cwd = r.source)
+        File(r.source, "base.txt").writeText("final version\n")
+        File(r.source, "feature.txt").delete()
+        File(r.source, "new file.txt").writeText("new\n")
+        File(r.source, ".gitignore").writeText("ignored.txt\n")
+        File(r.source, "ignored.txt").writeText("private\n")
+        val index = File(r.git("rev-parse", "--git-path", "index", cwd = r.source))
+        val before = index.readBytes()
+        val preview = r.run("inspect")
+        assertEquals(preview.toString(), "ready", preview.str("status"))
+        assertEquals("4", preview.str("uncommittedCount"))
+        assertArrayEquals(before, index.readBytes())
+        assertFalse(preview["uncommitted"].toString().contains("ignored.txt"))
+        val id = UUID.randomUUID().toString()
+        val result = r.run("merge", preview, id)
+        assertEquals(result.toString(), "succeeded", result.str("status"))
+        assertEquals("final version\n", File(r.main, "base.txt").readText())
+        assertEquals("new\n", File(r.main, "new file.txt").readText())
+        assertFalse(File(r.main, "feature.txt").exists())
+        assertFalse(File(r.main, "ignored.txt").exists())
+        assertEquals(preview.str("sourceHead"), r.git("rev-parse", "HEAD^", cwd = r.source))
+        assertEquals("", r.git("status", "--porcelain", cwd = r.source))
+        assertEquals("succeeded", r.run("reconcile", preview, id).str("status"))
+    }
+
+    @Test fun uncommittedOnlyTaskCanMergeFromMainBase() = Repository().use { r ->
+        r.git("reset", "--hard", "main", cwd = r.source)
+        File(r.source, "new.txt").writeText("new")
+        val preview = r.run("inspect")
+        assertEquals(preview.toString(), "ready", preview.str("status"))
+        assertEquals("0", preview.str("count"))
+        assertEquals("succeeded", r.run("merge", preview).str("status"))
+        assertEquals("new", File(r.main, "new.txt").readText())
+    }
+
+    @Test fun uncommittedConflictAndChangedContentDoNotCommit() = Repository().use { r ->
+        r.commit(r.main, "base.txt", "main edit\n")
+        File(r.source, "base.txt").writeText("task edit\n")
+        val head = r.git("rev-parse", "HEAD", cwd = r.source)
+        val blocked = r.run("inspect")
+        assertEquals("blocked", blocked.str("status"))
+        assertTrue(blocked["conflicts"].toString().contains("base.txt"))
+        File(r.source, "base.txt").writeText("base\n")
+        File(r.source, "new.txt").writeText("first")
+        val preview = r.run("inspect")
+        assertEquals("ready", preview.str("status"))
+        File(r.source, "new.txt").writeText("changed")
+        assertEquals("blocked", r.run("merge", preview).str("status"))
+        assertEquals(head, r.git("rev-parse", "HEAD", cwd = r.source))
+        assertEquals("changed", File(r.source, "new.txt").readText())
+    }
+
+    @Test fun failedCommitAndLostReplyAreCheckedWithoutReplaying() = Repository().use { r ->
+        File(r.source, "new.txt").writeText("keep")
+        val hooks = File(r.root, "hooks").apply { mkdir() }
+        File(hooks, "pre-commit").apply { writeText("#!/bin/sh\nexit 1\n"); setExecutable(true) }
+        r.git("config", "core.hooksPath", hooks.path)
+        val preview = r.run("inspect")
+        val id = UUID.randomUUID().toString()
+        assertEquals("needsReview", r.run("merge", preview, id).str("status"))
+        assertEquals(preview.str("targetHead"), r.git("rev-parse", "HEAD"))
+        assertEquals(preview.str("sourceHead"), r.git("rev-parse", "HEAD", cwd = r.source))
+        assertEquals("failed", r.run("reconcile", preview, id).str("status"))
+        assertEquals("keep", File(r.source, "new.txt").readText())
+        File(hooks, "pre-commit").delete()
+        val next = r.run("inspect")
+        val nextId = UUID.randomUUID().toString()
+        assertEquals("succeeded", r.run("merge", next, nextId).str("status"))
+        val taskHead = r.git("rev-parse", "HEAD", cwd = r.source)
+        assertEquals("succeeded", r.run("reconcile", next, nextId).str("status"))
+        assertEquals(taskHead, r.git("rev-parse", "HEAD", cwd = r.source))
+        assertEquals("needsReview", r.run("merge", next, nextId).str("status"))
+    }
+
+    @Test fun commitHookCannotSilentlyChangeTheApprovedTree() = Repository().use { r ->
+        File(r.source, "new.txt").writeText("reviewed")
+        val hooks = File(r.root, "hooks").apply { mkdir() }
+        File(hooks, "pre-commit").apply {
+            writeText("#!/bin/sh\nprintf changed > new.txt\ngit add new.txt\n")
+            setExecutable(true)
+        }
+        r.git("config", "core.hooksPath", hooks.path)
+        val preview = r.run("inspect")
+        val id = UUID.randomUUID().toString()
+        assertEquals("needsReview", r.run("merge", preview, id).str("status"))
+        assertEquals(preview.str("targetHead"), r.git("rev-parse", "HEAD"))
+        assertFalse(File(r.main, "new.txt").exists())
+        assertEquals("failed", r.run("reconcile", preview, id).str("status"))
     }
 
     @Test fun missingMainCheckoutAndActiveGitOperationAreBlocked() = Repository().use { r ->

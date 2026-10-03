@@ -77,23 +77,25 @@ internal fun ConversationComposer(state: ScreenState, actions: ConversationActio
             }
             if (!tray && !window.coverScreen && !state.willQueueMessage() && !window.compactHeight && !typing)
                 ProjectControl(state, actions, expanded = false)
-            TextField(state.draft, actions::draft, Modifier.fillMaxWidth().testTag("composer"),
-                placeholder = { Text("Message ${state.host.displayName}…") },
-                trailingIcon = when {
-                    window.coverScreen && !tray && typing -> {
-                        { Box(Modifier.width(if (state.activeTurn != null) 208.dp else 156.dp)) { bottomActions(false) } }
-                    }
-                    window.coverScreen && !tray && state.activeTurn != null -> {
-                        { IconButton(actions::stop, enabled = state.ready) { Glyph(R.drawable.ic_stop, "Stop") } }
-                    }
-                    else -> null
-                },
-                minLines = if (compact || typing || state.willQueueMessage()) 1 else 2,
-                maxLines = if (window.coverScreen && typing) 1 else if (window.compactHeight && !window.coverScreen) 2 else if (compact) 3 else 6, enabled = !state.busy,
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
-                    disabledContainerColor = Color.Transparent, focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent))
+            FullscreenEditorSync(state.draft) {
+                TextField(state.draft, actions::draft, Modifier.fillMaxWidth().testTag("composer"),
+                    placeholder = { Text("Message ${state.host.displayName}…") },
+                    trailingIcon = when {
+                        window.coverScreen && !tray && typing -> {
+                            { Box(Modifier.width(if (state.activeTurn != null) 208.dp else 156.dp)) { bottomActions(false) } }
+                        }
+                        window.coverScreen && !tray && state.activeTurn != null -> {
+                            { IconButton(actions::stop, enabled = state.ready) { Glyph(R.drawable.ic_stop, "Stop") } }
+                        }
+                        else -> null
+                    },
+                    minLines = if (compact || typing || state.willQueueMessage()) 1 else 2,
+                    maxLines = if (window.coverScreen && typing) 1 else if (window.compactHeight && !window.coverScreen) 2 else if (compact) 3 else 6, enabled = !state.busy,
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
+                        disabledContainerColor = Color.Transparent, focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent))
+            }
             if (state.waitingToSendMode() || state.willQueueMessage() || !projectAvailable)
                 Text(when {
                     state.waitingToSendMode() -> "${settings.mode} selected · send when the task is idle"
@@ -181,8 +183,8 @@ private fun ComposerActions(
             Glyph(R.drawable.ic_stop, "Stop")
         }
         FilledIconButton(onSend, Modifier.testTag("send").size(48.dp), shape = CircleShape,
-            colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                contentColor = MaterialTheme.colorScheme.onSecondaryContainer),
+            colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary),
             enabled = state.ready && !state.busy && !state.merge.blocksTask && !state.waitingToSendMode() &&
                 (state.draft.isNotBlank() || state.attachments.isNotEmpty()) && state.journal == null &&
                 (state.newTaskOptions.collaborationMode == null || state.collaborationModes.any {

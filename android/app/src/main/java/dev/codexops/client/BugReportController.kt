@@ -222,14 +222,18 @@ internal class BugReportController(
             _state.update { it.copy(error = "Wait for the current app operation to finish, then start the task.") }
             return
         }
-        if (before.draft?.journal?.isEmpty() == true &&
-            (before.draft.review.isEmpty() || before.draft.title.isBlank())) return
+        if (before.draft?.journal?.isEmpty() == true && !before.draft.canReview) return
         _state.update { it.copy(busy = true, error = null) }
         scope.launch { lock.withLock {
             try {
-                val draft = requireNotNull(_state.value.draft)
+                var draft = requireNotNull(_state.value.draft)
                 withContext(Dispatchers.IO) { store.validate(draft) }
-                val result = BugReportSubmission(rpc, host).run(draft, ::persist)
+                val submission = BugReportSubmission(rpc, host)
+                if (draft.journal.isEmpty() && draft.review.isEmpty()) {
+                    draft = submission.prepare(draft, current().models.firstOrNull { it.isDefault }?.id)
+                    persist(draft)
+                }
+                val result = submission.run(draft, ::persist)
                 if (result.journal.str("stage") == "accepted") finish(result)
             } catch (e: CancellationException) {
                 if (e is TimeoutCancellationException) _state.update { it.copy(error = "The connection timed out. Check and continue to inspect the saved operation; it will not be replayed.") }

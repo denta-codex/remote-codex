@@ -5,24 +5,32 @@ export LC_ALL=C GIT_TERMINAL_PROMPT=0 GIT_MERGE_AUTOEDIT=no GIT_EDITOR=true
 export GIT_OPTIONAL_LOCKS=0
 umask 077
 action=${1:?}; cwd=${2:?}; operation=${3:-}; approved=${4:-'{}'}
-receipt=''; temporary=''; analysis=''; result=''; source=''; destination=''; common=''
+receipt=''; temporary=''; analysis=''; snapshot_index=''; result=''; source=''; destination=''; common=''
 status=blocked; reason=''; conflicts='[]'; commits='[]'; files='[]'; count=0; file_count=0
 source_head=''; target_head=''; source_ref=''; merge_tree=''
+original_source_head=''; source_tree=''; uncommitted='[]'; uncommitted_count=0
 
 reply() {
     jq -cn --arg status "$status" --arg reason "$reason" --arg source "$source" \
         --arg destination "$destination" --arg common "$common" --arg sourceHead "$source_head" \
         --arg targetHead "$target_head" --arg sourceRef "$source_ref" --arg result "$result" \
         --arg operation "$operation" --arg receipt "$receipt" --arg temporary "$temporary" \
+        --arg originalSourceHead "$original_source_head" --arg sourceTree "$source_tree" \
+        --argjson uncommitted "$uncommitted" --argjson uncommittedCount "$uncommitted_count" \
         --argjson conflicts "$conflicts" --argjson commits "$commits" --argjson files "$files" \
         --argjson count "$count" --argjson fileCount "$file_count" \
         '{status:$status,reason:$reason,source:$source,destination:$destination,common:$common,
           sourceHead:$sourceHead,targetHead:$targetHead,sourceRef:$sourceRef,result:$result,
           operation:$operation,receipt:$receipt,temporary:$temporary,conflicts:$conflicts,
-          commits:$commits,files:$files,count:$count,fileCount:$fileCount}'
+          commits:$commits,files:$files,count:$count,fileCount:$fileCount,
+          originalSourceHead:$originalSourceHead,sourceTree:$sourceTree,
+          uncommitted:$uncommitted,uncommittedCount:$uncommittedCount}'
 }
 finish() { status=$1; reason=$2; reply; exit 0; }
-cleanup_analysis() { if [[ -n "$analysis" ]]; then rm -f -- "$analysis"; fi; }
+cleanup_analysis() {
+    if [[ -n "$analysis" ]]; then rm -f -- "$analysis"; fi
+    if [[ -n "$snapshot_index" ]]; then rm -f -- "$snapshot_index" "$snapshot_index.lock"; fi
+}
 trap cleanup_analysis EXIT
 trap 'trap - ERR; status=needsReview; reason="Git operation did not finish normally. Check its state before continuing."; reply; exit 0' ERR
 command -v jq >/dev/null && command -v flock >/dev/null && command -v git >/dev/null
@@ -62,8 +70,21 @@ remove_temporary() {
 save_receipt() {
     local stage=$1
     reply | jq --arg stage "$stage" '{operation,source,destination,common,sourceHead,targetHead,
-        sourceRef,result,temporary,status,reason,stage:$stage}' > "$receipt.part"
+        sourceRef,originalSourceHead,sourceTree,uncommitted,uncommittedCount,
+        result,temporary,status,reason,stage:$stage}' > "$receipt.part"
     mv -- "$receipt.part" "$receipt"
+}
+
+# Build the final task tree without changing its real index or checkout.
+snapshot_source() {
+    snapshot_index=$(mktemp)
+    local index
+    index=$(git -C "$source" rev-parse --git-path index)
+    if [[ -f "$index" ]]; then cp -- "$index" "$snapshot_index"
+    else rm -f -- "$snapshot_index"; GIT_INDEX_FILE="$snapshot_index" git -C "$source" read-tree HEAD; fi
+    GIT_INDEX_FILE="$snapshot_index" git -C "$source" add -A -- . >/dev/null 2>&1
+    source_tree=$(GIT_INDEX_FILE="$snapshot_index" git -C "$source" write-tree)
+    rm -f -- "$snapshot_index"; snapshot_index=''
 }
 
 if [[ "$action" != inspect ]]; then
@@ -80,11 +101,13 @@ if [[ "$action" == reconcile ]]; then
     flock -n 9 || finish needsReview 'A merge operation is still running. Check again after it finishes.'
     saved=$(cat -- "$receipt")
     [[ "$(jq -r '.operation' <<< "$saved")" == "$operation" &&
-       "$(jq -r '.sourceHead' <<< "$saved")" == "$(jq -r '.sourceHead' <<< "$approved")" &&
+       "$(jq -r '.originalSourceHead // .sourceHead' <<< "$saved")" == "$(jq -r '.sourceHead' <<< "$approved")" &&
        "$(jq -r '.targetHead' <<< "$saved")" == "$(jq -r '.targetHead' <<< "$approved")" &&
        "$(jq -r '.destination' <<< "$saved")" == "$(jq -r '.destination' <<< "$approved")" ]] || finish needsReview 'The merge receipt does not match this request.'
     destination=$(jq -r '.destination' <<< "$saved")
     source_head=$(jq -r '.sourceHead' <<< "$saved"); target_head=$(jq -r '.targetHead' <<< "$saved")
+    original_source_head=$(jq -r '.originalSourceHead // .sourceHead' <<< "$saved")
+    source_tree=$(jq -r '.sourceTree // ""' <<< "$saved")
     source_ref=$(jq -r '.sourceRef' <<< "$saved"); result=$(jq -r '.result' <<< "$saved")
     temporary=$(jq -r '.temporary' <<< "$saved"); stage=$(jq -r '.stage' <<< "$saved")
     [[ -z "$temporary" || "$temporary" == "$common/remote-codex-merges/worktree-$operation" ]] || finish needsReview 'The recovery worktree does not match this operation.'
@@ -96,7 +119,7 @@ if [[ "$action" == reconcile ]]; then
     fi
     if [[ "$stage" != succeeded ]] && target_is_expected && clean "$destination" && idle_git "$destination"; then
         remove_temporary || finish needsReview 'Main is unchanged, but the temporary worktree needs cleanup. Check again.'
-        status=failed; reason='Main is unchanged. Refresh the preview before a new merge.'
+        status=failed; reason='Main is unchanged. Any task commit is retained. Refresh the preview before a new merge.'
         save_receipt failed; reply; exit 0
     fi
     finish needsReview 'Git state changed or the outcome is uncertain. Inspect the recorded checkouts on the host; this request will not be replayed.'
@@ -111,6 +134,7 @@ inspect() {
         [[ "$stage" == succeeded || "$stage" == failed ]] || finish blocked 'An earlier merge in this repository needs review. Check its state from the original task first.'
     done
     source_head=$(git -C "$source" rev-parse --verify HEAD 2>/dev/null) || finish blocked 'The source has no committed changes.'
+    original_source_head=$source_head
     source_ref=$(git -C "$source" symbolic-ref -q --short HEAD || true)
     target_head=$(git -C "$source" rev-parse --verify refs/heads/main 2>/dev/null) || finish blocked 'This repository has no local main branch.'
     while IFS= read -r -d '' token; do
@@ -122,26 +146,49 @@ inspect() {
     [[ ${#candidates[@]} == 1 && -d "${candidates[0]}" ]] || finish blocked 'Main must be checked out in one existing local worktree.'
     destination=$(cd -- "${candidates[0]}" && pwd -P)
     target_is_expected || finish blocked 'The main checkout changed. Refresh the preview.'
-    # v1 does not recursively merge repositories or populate submodules.
-    # Check each tree independently (ls-tree takes one tree, then pathspecs).
+    [[ "$source" != "$destination" ]] || finish blocked 'Open a task checkout separate from main to merge its changes.'
+    for path in "$source" "$destination"; do
+        idle_git "$path" || finish blocked 'A checkout has an unfinished Git operation. Finish it first.'
+    done
+    clean "$destination" || finish blocked 'Main has uncommitted changes. Commit or remove them in the main checkout first; task changes are kept separate.'
     for tree in "$source_head" "$target_head"; do
         if [[ -n "$(git -C "$source" ls-tree -r "$tree" | awk '$1 == "160000" {print "submodule"}')" ]]; then
             finish blocked 'Submodule repositories are not supported by this merge control yet.'
         fi
     done
-    for path in "$source" "$destination"; do
-        idle_git "$path" || finish blocked 'A checkout has an unfinished Git operation. Finish it first.'
-        clean "$path" || finish blocked 'Commit or remove uncommitted changes, including untracked files, in both checkouts first.'
+    # Skip-worktree / assume-unchanged entries could conceal files from add -A.
+    if git -C "$source" ls-files -v | LC_ALL=C awk '/^[a-zS] / {found=1} END {exit !found}'; then
+        finish blocked 'The task has hidden index entries. Clear skip-worktree or assume-unchanged flags before merging.'
+    fi
+    snapshot_source
+    uncommitted=$(git -C "$source" diff --no-ext-diff --name-only -z "$source_head" "$source_tree" | jq -Rs 'split("\u0000") | map(select(length > 0))')
+    uncommitted_count=$(jq 'length' <<< "$uncommitted")
+    uncommitted=$(jq '.[0:200]' <<< "$uncommitted")
+    local candidate=$source_head
+    if [[ "$source_tree" != "$(git -C "$source" rev-parse 'HEAD^{tree}')" ]]; then
+        candidate=$(git -C "$source" -c user.name='Remote Codex preview' -c user.email='preview@example.invalid' \
+            -c commit.gpgsign=false commit-tree "$source_tree" -p "$source_head" -m 'Preview task changes')
+    elif ! clean "$source"; then
+        finish blocked 'The task index and working files differ without a final content change. Resolve the staging state first.'
+    fi
+    # v1 does not recursively merge repositories or populate submodules.
+    # Check each tree independently (ls-tree takes one tree, then pathspecs).
+    for tree in "$source_tree" "$target_head"; do
+        if [[ -n "$(git -C "$source" ls-tree -r "$tree" | awk '$1 == "160000" {print "submodule"}')" ]]; then
+            finish blocked 'Submodule repositories are not supported by this merge control yet.'
+        fi
     done
     git -C "$source" merge-base "$target_head" "$source_head" >/dev/null || finish blocked 'Source and main have unrelated histories.'
-    git -C "$source" merge-base --is-ancestor "$source_head" "$target_head" && finish blocked 'These commits are already in main.'
+    if [[ $uncommitted_count == 0 ]]; then
+        git -C "$source" merge-base --is-ancestor "$source_head" "$target_head" && finish blocked 'These commits are already in main.'
+    fi
     count=$(git -C "$source" rev-list --count "$target_head..$source_head")
     commits=$(git -C "$source" log -100 --format='%h %s' "$target_head..$source_head" | jq -Rs 'split("\n") | map(select(length > 0))')
-    files=$(git -C "$source" diff --no-ext-diff --name-only -z "$target_head...$source_head" | jq -Rs 'split("\u0000") | map(select(length > 0))')
+    files=$(git -C "$source" diff --no-ext-diff --name-only -z "$target_head...$candidate" | jq -Rs 'split("\u0000") | map(select(length > 0))')
     file_count=$(jq 'length' <<< "$files"); files=$(jq '.[0:200]' <<< "$files")
     analysis=$(mktemp)
     local exit_code=0
-    git -C "$source" merge-tree --write-tree --name-only -z "$target_head" "$source_head" > "$analysis" 2>/dev/null || exit_code=$?
+    git -C "$source" merge-tree --write-tree --name-only -z "$target_head" "$candidate" > "$analysis" 2>/dev/null || exit_code=$?
     if [[ $exit_code == 1 ]]; then
         conflicts=$(jq -Rs 'split("\u0000") | .[1:] | reduce .[] as $p ({paths:[],done:false}; if .done or $p == "" then .done=true else .paths += [$p] end) | .paths' < "$analysis")
         finish blocked 'Merge conflicts must be resolved before this button can be used.'
@@ -157,16 +204,36 @@ if [[ "$action" == merge ]]; then
     [[ ! -e "$receipt" ]] || finish needsReview 'This operation already has a receipt. Check its state instead of replaying it.'
 fi
 inspect
-if [[ "$action" == inspect ]]; then finish ready 'Ready to merge committed changes into local main.'; fi
-for field in source destination common sourceHead targetHead sourceRef; do
+if [[ "$action" == inspect ]]; then
+    if (( uncommitted_count > 0 )); then finish ready 'Ready to commit task changes and merge into local main.'; fi
+    finish ready 'Ready to merge committed changes into local main.'
+fi
+for field in source destination common sourceHead targetHead sourceRef sourceTree; do
     case "$field" in
         source) value=$source ;; destination) value=$destination ;; common) value=$common ;;
         sourceHead) value=$source_head ;; targetHead) value=$target_head ;; sourceRef) value=$source_ref ;;
+        sourceTree) value=$source_tree ;;
     esac
     [[ "$(jq -r --arg field "$field" '.[$field]' <<< "$approved")" == "$value" ]] || finish blocked 'The approved Git state changed. Refresh the preview and confirm again.'
 done
 mkdir -p -- "$common/remote-codex-merges"
 status=needsReview; reason='Merge preparation started.'; save_receipt preparing
+if (( uncommitted_count > 0 )); then
+    save_receipt committing
+    git -C "$source" add -A -- . >/dev/null 2>&1
+    [[ "$(git -C "$source" write-tree)" == "$source_tree" ]] && target_is_expected &&
+        [[ "$(git -C "$source" rev-parse HEAD)" == "$original_source_head" &&
+           "$(git -C "$source" symbolic-ref -q --short HEAD || true)" == "$source_ref" ]] &&
+        idle_git "$source" && idle_git "$destination" || finish needsReview 'Task files or main changed while staging. Main was not advanced; inspect the task index.'
+    if ! git -C "$source" commit -m 'Commit task changes for merge into main' >/dev/null 2>&1; then
+        finish needsReview 'The task commit did not complete normally. Main was not advanced. Check state before continuing.'
+    fi
+    source_head=$(git -C "$source" rev-parse HEAD)
+    [[ "$(git -C "$source" rev-parse 'HEAD^{tree}')" == "$source_tree" &&
+       "$(git -C "$source" show -s --format=%P HEAD)" == "$original_source_head" ]] &&
+       clean "$source" || finish needsReview 'The task commit differs from the preview. Main was not advanced; inspect the task.'
+    save_receipt committed
+fi
 if git -C "$source" merge-base --is-ancestor "$target_head" "$source_head"; then
     result=$source_head
 else

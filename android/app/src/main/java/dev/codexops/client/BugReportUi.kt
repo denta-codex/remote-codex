@@ -215,7 +215,7 @@ private fun BugReportDialog(state: BugReportState, connected: Boolean, actions: 
                                 modifier = Modifier.fillMaxWidth().testTag("bug-description"))
                         }
                         item { Text("Saved on this phone. Included evidence:", fontSize = 12.sp) }
-                        if (state.busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()); Text(if (!started) "Preparing review…" else reportStage(draft.journal.str("stage"))) }
+                        if (state.busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()); Text(if (!started) "Preparing request…" else reportStage(draft.journal.str("stage"))) }
                         if (draft.journal.isNotEmpty()) item {
                             SelectionContainer { Text("Task: ${draft.journal.str("threadId").ifBlank { "Awaiting identity" }}\nWorkspace: ${draft.journal.str("cwd")}", fontSize = 12.sp) }
                         }
@@ -249,7 +249,7 @@ private fun BugReportDialog(state: BugReportState, connected: Boolean, actions: 
                 if (draft != null) {
                     Button(onClick = {
                         focus.clearFocus()
-                        if (!connected || started || reviewing) actions.submit() else actions.review()
+                        actions.submit()
                     },
                         enabled = !state.busy && !state.capturing && when {
                             !connected -> draft.description.isNotBlank()
@@ -261,7 +261,7 @@ private fun BugReportDialog(state: BugReportState, connected: Boolean, actions: 
                             !connected -> "Save report"
                             started -> "Check and continue"
                             reviewing -> requireNotNull(draft.intent).startLabel
-                            else -> "Review request"
+                            else -> requireNotNull(draft.intent).startLabel
                         })
                     }
                     if (reviewing) TextButton(onClick = { focus.clearFocus(); actions.editRequest() }, enabled = !state.busy,
