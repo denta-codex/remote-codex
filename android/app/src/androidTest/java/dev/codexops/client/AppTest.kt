@@ -44,6 +44,47 @@ import org.junit.Assert.*
 
 class AppTest {
     @Test
+    fun conversationMenuArchivesAndUnarchives() {
+        // Opening directly must work even when the task is absent from the loaded list.
+        browserResponse = { method, _ ->
+            if (method == "thread/search") obj("data" to JsonArray(emptyList()), "nextCursor" to JsonNull) else null
+        }
+        compose.runOnUiThread { model.query("no matching chats") }
+        compose.waitUntil(5000) { !model.state.value.listLoading && model.state.value.tasks.isEmpty() }
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.page == "chat" && !model.state.value.busy }
+        compose.onNodeWithTag("app-menu").performClick()
+        compose.onNodeWithText("Archive").assertIsEnabled().performClick()
+        compose.waitUntil(5000) { model.state.value.page == "home" && !model.state.value.listLoading }
+        assertEquals(listOf("thread/archive"), archiveMutations.map { it.str("method") })
+        compose.runOnUiThread { model.openArchives() }
+        compose.waitUntil(5000) { !model.state.value.listLoading && model.state.value.tasks.isNotEmpty() }
+        compose.onNodeWithText("Fixture task").performClick()
+        compose.waitUntil(10000) { model.state.value.page == "chat" && !model.state.value.busy }
+        compose.onNodeWithTag("app-menu").performClick()
+        compose.onNodeWithText("Unarchive").assertIsEnabled().performClick()
+        compose.waitUntil(5000) { model.state.value.page == "archives" && !model.state.value.listLoading }
+        assertEquals(listOf("thread/archive", "thread/unarchive"), archiveMutations.map { it.str("method") })
+        assertTrue(archiveMutations.all { it.map("params").str("threadId") == "task-test" })
+        assertTrue(model.state.value.tasks.none { it.str("id") == "task-test" })
+    }
+
+    @Test
+    fun conversationMenuUnknownArchiveStaysOpenWithoutRetry() {
+        compose.onNodeWithText("Fixture task").performClick()
+        compose.waitUntil(10000) { model.state.value.page == "chat" && !model.state.value.busy }
+        dropArchiveReply = true
+        compose.onNodeWithTag("app-menu").performClick()
+        compose.onNodeWithText("Archive").performClick()
+        compose.waitUntil(5000) { "task-test" in model.state.value.uncertainTaskActions }
+        assertEquals("chat", model.state.value.page)
+        compose.onNodeWithTag("app-menu").performClick()
+        compose.onNodeWithText("Archive").assertIsNotEnabled()
+        compose.runOnUiThread { model.archiveCurrentTask() }
+        assertEquals(1, archiveMutations.size)
+    }
+
+    @Test
     fun taskSwipeMarksUnread() {
         compose.onNodeWithText("Fixture task").performTouchInput { swipeRight() }
         compose.waitUntil(5000) { model.state.value.chatActivity["task-test"]?.unread == true }
