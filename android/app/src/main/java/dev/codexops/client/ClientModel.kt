@@ -35,17 +35,69 @@ constructor(
     private val remoteFileRepository = RemoteFileRepository(app)
     private val _state = MutableStateFlow(ScreenState(host = host))
     val state = _state.asStateFlow()
-    internal val reports = BugReportController(app, viewModelScope, local, rpc, host, { _state.value }) { id ->
-        viewModelScope.launch {
-            state.first { !it.busy && it.ready }
-            openTask(id)
-        }
-    }
+    internal val reports = BugReportController(app, viewModelScope, local, rpc, host, { _state.value })
     private var connectionJob: Job? = null
     private var updateJob: Job? = null
     private var foreground = false
+    private val visibleChatIds = MutableStateFlow(emptySet<String>())
+    private val activityMonitor = ChatActivityMonitor(viewModelScope, local, rpc, endpoint + "/" + expectedHome) { id, activity ->
+        _state.update { it.copy(chatActivity = it.chatActivity + (id to activity)) }
+    }
+
+    override fun visibleChats(ids: Set<String>) { visibleChatIds.value = ids }
+    override fun viewedReply(thread: String, signature: String) {
+        val st = _state.value
+        if (foreground && st.page == "chat" && st.thread == thread && !st.busy)
+            activityMonitor.read(thread, signature)
+    }
     private var selection = 0
     private var listSelection = 0
+    private var listJob: Job? = null
+    private val listCursors = mutableMapOf<Boolean, MutableSet<String>>()
+    private val listSnapshots = mutableMapOf<Boolean, ChatListSnapshot>()
+    private var chatOrigin = "home"
+    private var settingsOrigin = "home"
+
+    private fun cancelList() {
+        listSelection++
+        listJob?.cancel()
+        listJob = null
+        _state.update { it.copy(listLoading = false, refreshingTasks = false) }
+    }
+
+    private fun saveList() {
+        val st = _state.value
+        listSnapshots[st.archived] = ChatListSnapshot(st.query, st.projectFilter, st.chatSort,
+            st.tasks, st.listCursor, st.listInitialized, st.listFailed, st.listIndex, st.listOffset)
+    }
+
+    private fun invalidateArchiveSnapshots() {
+        // Preserve each tab's search and sort choices while forcing fresh server membership.
+        listSnapshots.replaceAll { _, saved ->
+            saved.copy(tasks = emptyList(), cursor = null, initialized = false, failed = false,
+                index = 0, offset = 0)
+        }
+    }
+
+    private fun showList(archive: Boolean) {
+        cancelList()
+        saveList()
+        val saved = listSnapshots[archive] ?: ChatListSnapshot()
+        _state.update { it.copy(page = if (archive) "archives" else "home", archived = archive,
+            query = saved.query, projectFilter = saved.project, chatSort = saved.sort,
+            tasks = saved.tasks, listCursor = saved.cursor, listInitialized = saved.initialized,
+            listFailed = saved.failed, listIndex = saved.index, listOffset = saved.offset, error = null) }
+        if (!saved.initialized && !saved.failed) launchList()
+    }
+
+    private fun launchList(more: Boolean = false, debounce: Boolean = false, refreshing: Boolean = false) {
+        if (!_state.value.ready || listJob?.isActive == true || _state.value.listLoading) return
+        _state.update { it.copy(listLoading = true, listFailed = false, refreshingTasks = refreshing) }
+        listJob = viewModelScope.launch {
+            if (debounce) delay(300)
+            refreshList(more)
+        }
+    }
     private var modelCatalogSelection = 0
     private var queueSelection = 0
     private var hydrating = false
@@ -61,6 +113,12 @@ constructor(
         }
 
     init {
+        viewModelScope.launch {
+            combine(state.map { Triple(it.page, it.ready && it.appForeground, it.thread) }.distinctUntilChanged(), visibleChatIds) { state, ids ->
+                val (page, active, thread) = state
+                (if (page in listOf("home", "archives")) ids else if (page == "chat" && thread != null) setOf(thread) else emptySet()) to active
+            }.distinctUntilChanged().collect { (ids, active) -> activityMonitor.watch(ids, active) }
+        }
         network.registerDefaultNetworkCallback(callback)
         viewModelScope.launch {
             state.map { listOf(it.page, it.connection, it.thread, it.activeTurn, it.journal?.str("stage"),
@@ -82,6 +140,7 @@ constructor(
 
     fun foreground(value: Boolean) {
         foreground = value
+        _state.update { it.copy(appForeground = value) }
         if (value) UpdateInstallResults.consume(getApplication())?.let(::applyInstallResult)
         if (value && !_state.value.ready) connect()
     }
@@ -150,7 +209,8 @@ constructor(
                         }
                         refreshProjects()
                         viewModelScope.launch { refreshModelCatalog() }
-                        refreshList()
+                        cancelList()
+                        launchList()
                         val id = _state.value.thread
                         if (id != null && _state.value.page == "chat") loadTask(id)
                         else if (_state.value.page == "chat") recoverNew()
@@ -204,6 +264,7 @@ constructor(
                 connectionJob = null
                 rpc.close()
                 _state.update { it.copy(configured = true, page = "home", ready = false) }
+                showList(false)
                 connect()
             } catch (_: Exception) {
                 _state.update {
@@ -336,43 +397,147 @@ constructor(
 
     override fun settings() {
         reports.actions.add("settings")
+        settingsOrigin = _state.value.page
+        cancelList()
+        saveList()
         _state.update { it.copy(page = "settings", error = null) }
+    }
+
+    override fun back() {
+        if (_state.value.busy) return
+        when (_state.value.page) {
+            "archives" -> {
+                cancelList(); saveList()
+                _state.update { it.copy(page = "settings", error = null) }
+            }
+            "settings" -> if (settingsOrigin == "chat") _state.update { it.copy(page = "chat") } else home()
+            "chat" -> if (chatOrigin == "archives") showList(true) else home()
+            else -> home()
+        }
     }
 
     override fun home() {
         reports.actions.add("home")
         if (_state.value.busy) return
         selection++
-        _state.update { it.copy(page = "home", error = null) }
+        showList(false)
+    }
+
+    override fun openArchives() { showList(true) }
+
+    override fun query(value: String) {
+        invalidateList()
+        _state.update { it.copy(query = value) }
+        launchList(debounce = true)
+    }
+
+    override fun applyListOptions(project: TaskProjectFilter, sort: ChatSort) {
+        if (project == _state.value.projectFilter && sort == _state.value.chatSort) return
+        invalidateList()
+        _state.update { it.copy(projectFilter = project, chatSort = sort) }
+        launchList()
+    }
+
+    override fun refreshTasks() {
+        launchList(refreshing = true)
+    }
+
+    override fun moreTasks() {
+        val st = _state.value
+        if (st.listLoading || st.listFailed || st.listCursor == null) return
+        launchList(more = true)
+    }
+
+    override fun retryList() {
+        if (_state.value.uncertainTaskActions.isNotEmpty()) {
+            cancelList()
+            launchList()
+        } else launchList(more = _state.value.listInitialized && _state.value.listCursor != null)
+    }
+
+    override fun listPosition(index: Int, offset: Int) {
+        _state.update { it.copy(listIndex = index, listOffset = offset) }
+    }
+
+    private fun invalidateList() {
+        cancelList()
+        _state.update { it.copy(tasks = emptyList(), listCursor = null, listInitialized = false,
+            listFailed = false, listIndex = 0, listOffset = 0) }
+    }
+
+    override fun markTaskUnread(id: String) {
+        if (_state.value.tasks.none { it.str("id") == id }) return
         viewModelScope.launch {
-            guarded {
-                refreshProjects()
-                refreshList()
+            try {
+                activityMonitor.markUnread(id)
+                _state.update { it.copy(taskNotice = TaskNotice(UUID.randomUUID().toString(), "Marked unread")) }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                _state.update { it.copy(error = "Could not save the unread reminder.") }
             }
         }
     }
 
-    override fun query(value: String) {
-        _state.update { it.copy(query = value) }
-        val n = ++listSelection
-        viewModelScope.launch {
-            delay(300)
-            if (n == listSelection) guarded { refreshList() }
+    override fun dismissTaskNotice(noticeId: String) {
+        _state.update { if (it.taskNotice?.id == noticeId) it.copy(taskNotice = null) else it }
+    }
+
+    override fun undoTaskAction(noticeId: String) {
+        val notice = _state.value.taskNotice?.takeIf { it.id == noticeId } ?: return
+        val id = notice.threadId ?: return
+        val archived = notice.undoArchived ?: return
+        dismissTaskNotice(noticeId)
+        changeTaskArchive(id, archived)
+    }
+
+    override fun archiveTask(id: String, archived: Boolean) {
+        val before = _state.value
+        if (before.listLoading || before.archived == archived || before.tasks.none { it.str("id") == id }) return
+        changeTaskArchive(id, archived)
+    }
+
+    private fun changeTaskArchive(id: String, archived: Boolean) {
+        val before = _state.value
+        if (id in before.pendingTaskActions || id in before.uncertainTaskActions) return
+        if (!before.ready) {
+            _state.update { it.copy(error = "Reconnect before changing archived tasks.") }
+            return
         }
-    }
-
-    override fun archived(value: Boolean) {
-        _state.update { it.copy(archived = value) }
-        viewModelScope.launch { guarded { refreshList() } }
-    }
-
-    override fun projectFilter(value: TaskProjectFilter) {
-        _state.update { it.copy(projectFilter = value) }
-        viewModelScope.launch { guarded { refreshList() } }
-    }
-
-    override fun moreTasks() {
-        viewModelScope.launch { guarded { refreshList(true) } }
+        // Reserve synchronously so repeated releases/accessibility actions cannot double-send.
+        _state.update { it.copy(pendingTaskActions = it.pendingTaskActions + id, error = null) }
+        viewModelScope.launch {
+            try {
+                rpc.call(if (archived) "thread/archive" else "thread/unarchive", obj("threadId" to s(id)))
+            } catch (e: Exception) {
+                if (e is CancellationException && e !is TimeoutCancellationException) throw e
+                // Reads started before the failed request cannot reconcile its outcome.
+                cancelList()
+                invalidateArchiveSnapshots()
+                _state.update {
+                    it.copy(
+                        listLoading = false,
+                        listInitialized = false,
+                        uncertainTaskActions = if (e is RpcRejected) it.uncertainTaskActions else it.uncertainTaskActions + id,
+                        error = if (e is RpcRejected) "The server rejected the archive change."
+                            else "Archive outcome unknown. Reconnect or refresh the task list before trying again. No retry was sent.",
+                    )
+                }
+                return@launch
+            } finally {
+                _state.update { it.copy(pendingTaskActions = it.pendingTaskActions - id) }
+            }
+            // Only an acknowledged mutation removes a row or offers its inverse as Undo.
+            cancelList()
+            invalidateArchiveSnapshots()
+            _state.update {
+                it.copy(
+                    tasks = if (it.archived != archived) it.tasks.filterNot { row -> row.str("id") == id } else it.tasks,
+                    listInitialized = false,
+                    taskNotice = TaskNotice(UUID.randomUUID().toString(), if (archived) "Task archived" else "Task unarchived", id, !archived),
+                )
+            }
+            if (_state.value.page in listOf("home", "archives")) launchList()
+        }
     }
 
     private suspend fun refreshProjects() {
@@ -431,69 +596,64 @@ constructor(
     }
 
     private suspend fun refreshList(more: Boolean = false) {
-        if (!_state.value.ready) return
+        if (!_state.value.ready) { _state.update { it.copy(listLoading = false, refreshingTasks = false) }; return }
         val before = _state.value
         val n = ++listSelection
-        val params =
-            obj(
-                "limit" to JsonPrimitive(30),
-                "archived" to JsonPrimitive(before.archived),
-                "modelProviders" to if (before.query.isBlank()) JsonArray(emptyList()) else null,
-                "sortKey" to s("updated_at"),
-                "sourceKinds" to
-                    JsonArray(
-                        listOf(
-                                "cli",
-                                "vscode",
-                                "exec",
-                                "appServer",
-                                "subAgent",
-                                "subAgentReview",
-                                "subAgentCompact",
-                                "subAgentThreadSpawn",
-                                "subAgentOther",
-                                "unknown",
-                            )
-                            .map(::s)
-                    ),
-                "cursor" to if (more) before.listCursor?.let(::s) else null,
-                "searchTerm" to before.query.takeIf { it.isNotBlank() }?.let(::s),
-                "projectId" to
-                    if (before.query.isNotBlank()) null
-                    else
-                        when (val filter = before.projectFilter) {
-                            TaskProjectFilter.All -> null
-                            TaskProjectFilter.Projectless -> JsonNull
-                            is TaskProjectFilter.Project -> s(filter.id)
-                        },
-            )
-        val result =
-            rpc.call(if (before.query.isBlank()) "thread/list" else "thread/search", params)
-        if (n != listSelection) return
-        _state.update {
-            it.copy(
-                tasks =
-                    ((if (more) before.tasks else emptyList()) +
-                            result.list("data").map { row ->
-                                if (before.query.isBlank()) row else row.map("thread")
-                            })
-                        .filter { task ->
-                            when (val filter = before.projectFilter) {
-                                TaskProjectFilter.All -> true
-                                TaskProjectFilter.Projectless ->
-                                    task["projectId"] == null || task["projectId"] is JsonNull
-                                is TaskProjectFilter.Project -> task.str("projectId") == filter.id
-                            }
-                        }
-                        .distinctBy { t -> t.str("id") },
-                listCursor = result.cursor(),
-            )
+        val scopedSearch = before.query.isNotBlank() && before.projectFilter != TaskProjectFilter.All
+        var cursor = if (more) before.listCursor else null
+        val seen = if (more) listCursors.getOrPut(before.archived) { mutableSetOf() }
+            else mutableSetOf<String>().also { listCursors[before.archived] = it }
+        cursor?.let(seen::add)
+        val rows = (if (more) before.tasks else emptyList()).associateByTo(linkedMapOf()) { it.str("id") }
+        val target = rows.size + 30
+        _state.update { it.copy(listLoading = true, listFailed = false) }
+        try {
+            do {
+                val params = obj(
+                    "limit" to JsonPrimitive(30), "archived" to JsonPrimitive(before.archived),
+                    "modelProviders" to if (before.query.isBlank()) JsonArray(emptyList()) else null,
+                    "sortKey" to s(before.chatSort.key), "sortDirection" to s(before.chatSort.direction),
+                    // Keep the server default: internal reviewer threads are not user chats.
+                    "cursor" to cursor?.let(::s),
+                    "searchTerm" to before.query.takeIf { it.isNotBlank() }?.let(::s),
+                    "projectId" to if (before.query.isNotBlank()) null else when (val filter = before.projectFilter) {
+                        TaskProjectFilter.All -> null
+                        TaskProjectFilter.Projectless -> JsonNull
+                        is TaskProjectFilter.Project -> s(filter.id)
+                    },
+                )
+                val response = rpc.call(if (before.query.isBlank()) "thread/list" else "thread/search", params)
+                if (n != listSelection) return
+                val next = response.cursor()
+                check(next == null || seen.add(next)) { "The server repeated a page. Retry to continue." }
+                response.list("data").map { if (before.query.isBlank()) it else it.map("thread") }
+                    .filter { row -> when (val filter = before.projectFilter) {
+                        TaskProjectFilter.All -> true
+                        TaskProjectFilter.Projectless -> row["projectId"] == null || row["projectId"] is JsonNull
+                        is TaskProjectFilter.Project -> row.str("projectId") == filter.id
+                    } }.forEach { row -> if (row.str("id").isNotBlank()) rows[row.str("id")] = row }
+                cursor = next
+                val confirmedIds = response.list("data").map {
+                    (if (before.query.isBlank()) it else it.map("thread")).str("id")
+                }.toSet()
+                _state.update { it.copy(tasks = rows.values.toList(), listCursor = cursor, listInitialized = true,
+                    uncertainTaskActions = it.uncertainTaskActions - confirmedIds) }
+            } while (scopedSearch && rows.size < target && cursor != null)
+        } catch (e: CancellationException) { throw e
+        } catch (_: Exception) {
+            if (n == listSelection) _state.update { it.copy(listFailed = true) }
+        } finally {
+            if (n == listSelection) _state.update { it.copy(listLoading = false, refreshingTasks = false) }
         }
     }
 
     override fun newChat() {
         reports.actions.add("newChat")
         if (_state.value.busy) return
+        chatOrigin = "home"
+        cancelList(); saveList()
+        listSnapshots.remove(false)
+        _state.update { it.copy(listInitialized = false) }
         viewModelScope.launch {
             selection++
             timeline.clear()
@@ -535,6 +695,8 @@ constructor(
     override fun openTask(id: String) {
         reports.actions.add("openTask", id)
         if (_state.value.busy) return
+        chatOrigin = if (_state.value.archived) "archives" else "home"
+        cancelList(); saveList()
         viewModelScope.launch { guarded { loadTask(id) } }
     }
 
@@ -652,6 +814,7 @@ constructor(
                 )
             }
             readQueue(id)
+            if (n == selection) activityMonitor.opened(id)
         } finally {
             if (n == selection) {
                 hydrating = false
@@ -686,7 +849,7 @@ constructor(
                     modelCatalogMessage =
                         if (it.modelCatalogStatus == ModelCatalogStatus.Loading)
                             "The model catalog is still loading."
-                        else "Models are unavailable. Refresh the server catalog and try again."
+                        else "Models are unavailable. Reconnect to try again."
                 )
             } else {
                 val reconciled =
@@ -709,12 +872,6 @@ constructor(
                     newTaskOptionsJson(_state.value.newTaskOptions).toString(),
                 )
             }
-    }
-
-    override fun refreshModels() {
-        if (!_state.value.ready || _state.value.modelCatalogStatus == ModelCatalogStatus.Loading)
-            return
-        viewModelScope.launch { refreshModelCatalog() }
     }
 
     private suspend fun refreshModelCatalog() {
@@ -768,7 +925,7 @@ constructor(
                 it.copy(
                     modelCatalogStatus = ModelCatalogStatus.Error,
                     modelCatalogMessage =
-                        "Could not load models from ${host.displayName}. Refresh the catalog to try again.",
+                        "Could not load models from ${host.displayName}. Reconnect to try again.",
                 )
             }
         }
@@ -1159,6 +1316,7 @@ constructor(
         if (
             !before.ready ||
                 before.busy ||
+                queue && selectedMode != null ||
                 (text.isBlank() && before.attachments.isEmpty()) ||
                 before.journal != null ||
                 before.thread != null && !before.queueReady ||
@@ -1810,6 +1968,7 @@ constructor(
     private fun handle(event: JsonObject) {
         if (event.str("_epoch").toLongOrNull()?.let { it != rpc.generation } == true) return
         if (event.str("method") == "connection/lost") {
+            activityMonitor.disconnected()
             requests.clear()
             _state.update {
                 it.copy(
@@ -1829,11 +1988,22 @@ constructor(
             viewModelScope.launch {
                 guarded {
                     refreshProjects()
-                    refreshList()
+                    if (_state.value.page in listOf("home", "archives")) {
+                        cancelList()
+                        launchList()
+                    }
                 }
             }
             return
         }
+        if (event.str("method") in setOf("thread/archived", "thread/unarchived")) {
+            invalidateArchiveSnapshots()
+            cancelList()
+            if (_state.value.page in listOf("home", "archives")) launchList()
+            else _state.update { it.copy(listInitialized = false) }
+            return
+        }
+        activityMonitor.event(event)
         if (hydrating) {
             buffered.add(event)
             return

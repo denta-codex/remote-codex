@@ -66,10 +66,29 @@ internal fun App(model: ClientModel) {
     val report by model.reports.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
-    BackHandler(st.page != "home") { model.home() }
+    BackHandler(st.page != "home") { model.back() }
     AdaptiveWindow {
         Scaffold(
-            snackbarHost = { SnackbarHost(snackbar) },
+            snackbarHost = {
+                SnackbarHost(snackbar) { data ->
+                    Snackbar {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            data.visuals.actionLabel?.let { label ->
+                                TextButton(
+                                    onClick = data::performAction,
+                                    colors = ButtonDefaults.textButtonColors(
+                                        contentColor = MaterialTheme.colorScheme.inversePrimary,
+                                    ),
+                                ) { Text(label) }
+                            }
+                            Text(data.visuals.message, Modifier.weight(1f))
+                        }
+                    }
+                }
+            },
             topBar = {
                 TopAppBar(
                     title = {
@@ -78,7 +97,8 @@ internal fun App(model: ClientModel) {
                                 when (st.page) {
                                     "chat" -> st.title
                                     "settings" -> "Settings"
-                                    else -> "Remote Codex"
+                                    "archives" -> "Archived chats"
+                                    else -> "Chats"
                                 },
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.SemiBold,
@@ -106,11 +126,14 @@ internal fun App(model: ClientModel) {
                     },
                     navigationIcon = {
                         if (st.page != "home")
-                            IconButton(onClick = model::home) {
-                                Glyph(R.drawable.ic_back, "Tasks")
+                            IconButton(onClick = model::back) {
+                                Glyph(R.drawable.ic_back, "Back")
                             }
                     },
                     actions = {
+                        if (st.page == "home") IconButton(onClick = model::newChat) {
+                            Glyph(R.drawable.ic_compose, "New chat")
+                        }
                         if (st.page == "chat")
                             st.thread?.let { threadId ->
                                 IconButton(onClick = { copyThreadDeeplink(context, threadId) }) {
@@ -165,9 +188,9 @@ internal fun App(model: ClientModel) {
 internal fun threadDeeplink(threadId: String): String =
     Uri.Builder().scheme("codex").authority("threads").appendPath(threadId).build().toString()
 
-private fun copyThreadDeeplink(context: Context, threadId: String) {
+internal fun copyThreadDeeplink(context: Context, threadId: String) {
     context
         .getSystemService(ClipboardManager::class.java)
         .setPrimaryClip(ClipData.newPlainText("Codex thread deeplink", threadDeeplink(threadId)))
-    Toast.makeText(context, "Deeplink copied", Toast.LENGTH_SHORT).show()
+    Toast.makeText(context, "Link copied", Toast.LENGTH_SHORT).show()
 }

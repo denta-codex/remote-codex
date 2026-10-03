@@ -18,7 +18,6 @@ internal class BugReportController(
     private val rpc: RemoteSession,
     private val host: HostIdentity,
     private val current: () -> ScreenState,
-    private val accepted: (String) -> Unit,
 ) {
     private val _state = MutableStateFlow(BugReportState())
     val state = _state.asStateFlow()
@@ -235,6 +234,6 @@ internal class BugReportController(
         local.put("bug-report/last-task", id)
         withContext(Dispatchers.IO) { store.discard(draft) }
         _state.update { it.copy(draft = null, visible = false, lastTask = id, error = null) }
-        accepted(id)
+        // Keep the current screen and draft in focus. The menu opens lastTask explicitly.
     }
 }

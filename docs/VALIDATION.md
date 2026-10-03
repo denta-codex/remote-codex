@@ -1,5 +1,141 @@
 # Validation
 
+## Task-row gestures — unreleased
+
+- Integrated with main `9a622a6`, retaining the compact inbox, server recency
+  ordering, independent archive/inbox filters, and automatic reply indicators.
+  Manual unread extends the existing host-scoped reply marker; it does not add
+  a second unread store. Opening clears the manual reminder while unseen new
+  replies remain unread until viewed. Archive snapshots refresh without losing
+  each tab's search/sort choices.
+- Integration validation: all six gesture tests below passed in two selected
+  runs, plus `AppTest#compactArchivesRestoreAndNavigation` and
+  `AppTest#readingEarlierParagraphKeepsNewReplyUnread`. All six
+  `ChatActivityTest` unit tests passed, including manual/automatic unread
+  interaction, persistence, and host isolation. Android lint passed.
+- Reproduced the missing right-swipe behavior with `AppTest#taskSwipeMarksUnread`:
+  the baseline failed because no unread indicator appeared after swiping.
+- Implemented left-swipe Archive/Unarchive, right-swipe Mark unread, long-press
+  deep-link copying, threshold haptics, cancellation, TalkBack actions, and
+  acknowledgement-only Undo. Unread reminders persist locally on the phone;
+  they do not synchronize with desktop unread state.
+- Passed six selected Android 16 managed-device tests using
+  `scripts/emulator-test --tests`:
+  `AppTest#taskSwipeMarksUnread`,
+  `AppTest#taskSwipesArchiveUndoAndUnarchive`,
+  `AppTest#taskLongPressCopiesLinkAndAccessibleActionsWork`,
+  `AppTest#uncertainArchiveDoesNotReplayOnReconnect`,
+  `AppTest#rejectedArchiveKeepsTaskAndOffersNoUndo`, and
+  `AppTest#taskGesturesOnCompactScreenRespectCancellationAndPhysicalDirection`.
+  Coverage includes app recreation, clearing unread after opening, repeat
+  swipes, short/cancelled gestures, a compact RTL layout, explicit rejection,
+  and a committed archive whose response is lost before reconnect.
+- `:app:lintDebug` and `git diff --check` passed. Tests use the local WebSocket
+  fixture; no live account mutations or physical-phone verification occurred.
+- No release, publication, forwarder deployment, or phone installation.
+
+## 2026-10-03 — Android 0.2.13 (25)
+
+- Source revision: `a85c2a6bed72c9116353a5bc520ff7c9ff2e3d78`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `b09d7c10efa2a5b4a3e6189318d1f9a693823f2cee71ee105337b95d82823790`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/home/agent/workspaces/remote-codex/artifacts/releases/run-20261003T030034Z-B0WUR6.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
+## Report 624bbb7a — inactive chat promoted in recents
+
+- The frozen report identifies Android 0.2.11 (23), while the supplied checkout
+  `0ce33a5` predates its compact inbox and relative-age labels. The common list
+  request explicitly sorted by `updated_at`. The frozen snapshot does not include
+  task-list timestamps, so it cannot establish the exact update that triggered
+  the captured ordering.
+- A read-only comparison of the current stock state database reproduced the
+  inversion for the reported lampshades task and source chat: descending
+  `updated_at_ms` puts lampshades first; descending `recency_at_ms` puts the source
+  chat first. This is current diagnostic evidence, not a reconstruction of the
+  capture. Both list and search support `recency_at` in the checked-in protocol.
+- Changed the browser's list/search requests to explicit descending `recency_at`,
+  preserving server ordering and opaque cursors across pages. No client-side
+  timestamp cache or reordering was introduced.
+- `scripts/emulator-test --tests
+  AppTest#recentChatsIgnoreMetadataUpdatesAcrossPagesAndSearch` passed: one test,
+  Android 16 managed device. The fixture gives an old chat a newer metadata
+  timestamp and checks list/search order, second pages, sort parameters and
+  cursor propagation. Debug and instrumentation compilation passed as part of
+  that run. Initial sandbox startup was blocked by the read-only Gradle cache
+  before tests ran; the authorized host-level invocation completed successfully.
+- No release, publication, forwarder deployment, or physical-phone installation
+  was performed. The newer inbox's relative-age rendering is absent from this
+  revision and was not changed or validated.
+
+### Integration with current main
+
+- Integrated the fix with the compact inbox's `ChatSort.Recent` contract and
+  changed its displayed age from `updatedAt` to `recencyAt`. Creation sorts keep
+  using `createdAt`. Missing recency remains undated rather than showing a
+  misleading metadata age.
+- Two focused Android 16 emulator cases passed after conflict resolution:
+  `AppTest#recentChatsIgnoreMetadataUpdatesAcrossPagesAndSearch` and
+  `HomeScreenTest#recentAgeUsesRecencyInsteadOfMetadataUpdate`. The former now
+  isolates explicit page boundaries from the newer automatic scroll loading;
+  the latter verifies recent and creation ages independently.
+- The user subsequently authorized merging to main and publishing an in-app
+  update. The release workflow records that outcome separately below.
+
+## 2026-10-03 — Android 0.2.12 (24)
+
+- Source revision: `04b28aa52ca268705f73108c0e76f05475e8898f`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `b089b61e4218f10ada39449ac0b5cfc986f4ec135c00e4c50973a0e5b66143ba`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/home/agent/.codex/worktrees/remote-codex-b9f642a3-8051-435a-b989-e97600b853f4/workspace/artifacts/releases/run-20261003T023734Z-BcYA7q.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
+## 2026-10-03 — Android 0.2.11 (23)
+
+- Source revision: `b803471c1a23f3d9165815b9c484977ef9460295`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `163fba96dfb9d93743763d39cd47850b695c8b3371df8ae72507840f90a2f6ab`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/home/agent/.codex/worktrees/remote-codex-b9f642a3-8051-435a-b989-e97600b853f4/workspace/artifacts/releases/run-20261003T021438Z-7Gy98I.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
+## 2026-10-02 — Plan mode composer report a9ba2621
+
+- The frozen report shows a connected task with an active turn. Reproduced the
+  disabled mode selector with `AppTest#planModeCanBeSelectedWhileWorkingAndSentWhenIdle`:
+  the original composer failed `assertIsEnabled` on `mode-selector`.
+- The composer now exposes mode selection while working, groups attachments in
+  Add, and hides unusable model controls while queueing. Explicit mode drafts wait
+  for an idle task and empty queue before the user sends; the client also rejects
+  attempts to queue them, since queue requests cannot carry collaboration settings.
+- Four focused Android 16 fixture tests passed through `scripts/emulator-test
+  --tests`: selecting Plan during a turn and sending it once idle; waiting behind
+  a paused queue and returning to task settings; normal queue/steer behavior; and
+  the existing Plan-to-implementation flow. The first also checks the Add menu.
+  Results: `artifacts/validation/plan-composer/phone-tests.xml`.
+- Two focused cover-viewport cases initially timed out trying to send with the
+  keyboard open. Hiding model controls during compact typing fixed the layout;
+  both Plan selection/submission and normal queue/steer then passed with zero
+  failures or skips. These used the same `--tests` entry point with
+  `ORG_GRADLE_PROJECT_android.testInstrumentationRunnerArguments.coverScreen=true`.
+  Results: `artifacts/validation/plan-composer/cover-initial-tests.xml` and
+  `artifacts/validation/plan-composer/cover-tests.xml`.
+- Initial validation startup required access to the managed Gradle cache outside
+  the sandbox. A test-only Espresso reference then failed compilation and was
+  replaced with the existing instrumentation API before the passing test run.
+- Validation uses synthetic fixture content, not the live source task or physical
+  Razr. No release, publication, deployment, or phone installation was performed.
+- Integration with main preserved the scrollable action row, pinned Stop/Send,
+  and landscape Options dialog. Four phone cases, cover Plan selection, and the
+  landscape layout case passed. The cover queue case initially raced the IME
+  transition; explicitly enabling the fixture's soft keyboard and waiting for
+  the Queued shortcut fixed the test, which then passed. Integration results:
+  `artifacts/validation/plan-composer/merge-phone-tests.xml`,
+  `merge-compact-initial-tests.xml`, and `merge-cover-queue-tests.xml` in the same
+  directory.
+
 ## Phone approval preview — Android 0.2.11-phone.1 (22)
 
 - Published the previously built artifact; authenticated manifest and full APK verification passed.
@@ -692,3 +828,58 @@ gesture are still pending user-authorized live deployment and delivery.
 - State remains Android-local, and desktop annotation controls are not advertised.
   CDN-backed content still requires connectivity. This change has not been published,
   installed on the phone, or validated against live account content.
+
+## Compact inbox activity indicators
+
+- Inspected static Codex desktop 26.928.40906 assets and ChatGPT Android
+  1.2026.258 (2625815) reference sources. Desktop separates runtime attention
+  from its unread store; Android's remote-thread trailing content includes a
+  small unread marker and distinguishes working/approval/input/error states.
+  These were static reference inspections, not live UI interaction.
+- Implemented the requested spinner, unread blue dot, slowly pulsing blue
+  approval/input marker, red warning, and blank quiet state. Screen-reader
+  descriptions distinguish each state; disabled system animations are respected.
+- Focused emulator runs passed four unique cases:
+  `HomeScreenTest#chatIndicatorsAndScreenshots`,
+  `AppTest#inboxRuntimeAndUnreadFollowServerAndVisibleReply`,
+  `AppTest#readingEarlierParagraphKeepsNewReplyUnread`, and
+  `AppTest#compactArchivesRestoreAndNavigation`.
+  The viewport refinement was rechecked in the second three-test run.
+- Fixture screenshots were captured from Compose and visually inspected:
+  `artifacts/chat-status/chat-status-light.png` and
+  `artifacts/chat-status/chat-status-cover-dark.png` (360 dp, 150% text).
+- Pure tests cover runtime precedence, historical baselines, digest persistence,
+  host separation, old responses, approval reconciliation, and first-observed
+  running tasks completing unread. The release workflow runs these with the
+  existing unit/lint/build checks.
+- Read-only smoke checks against Grace verified initialization identity,
+  metadata-only `thread/read`, and descending full `thread/turns/list` with
+  limit 1. No mutation, background resume, server change, or phone installation
+  was performed. Publication stays on `codex/compact-inbox`; merging remains
+  pending phone testing.
+
+## Screenshot report action placement (report 088d56ab)
+
+- The report checkout (`0ce33a5`) predates the bug-report implementation.
+  This fix uses local main at `9a622a6`, where the screenshot prompt uses
+  Material's default trailing snackbar action.
+- The focused regression uses the reported 1080x1272 display and 360 dpi,
+  asserts that "Report bug" is left of "Screenshot taken", and verifies that
+  tapping it preserves the captured draft and screenshot. Display overrides
+  are applied before attaching the mock-backed activity and reset in cleanup.
+- The original layout failed the placement assertion. An earlier fixture run
+  failed before reaching the prompt because resizing after mock attachment
+  recreated the activity; moving resizing to setup corrected that fixture.
+- Diff-counter feasibility was checked against TypeScript bindings generated
+  from installed stock `codex-cli 0.159.2` with
+  `codex app-server generate-ts --experimental`. `TurnDiffUpdatedNotification`
+  contains `threadId`, `turnId`, and the latest aggregate unified `diff` for
+  that turn. `FileUpdateChange` contains `path`, `kind`, and `diff`;
+  `GitDiffToRemoteResponse` contains `sha` and `diff`. These types do not expose
+  ready-made added/removed line counters. A count-only UI can derive counts
+  from diffs, but summing turn counts would not represent net worktree changes
+  when later turns edit or undo earlier changes. No counter UI was added.
+- With the layout fix applied,
+  `scripts/emulator-test --tests AppTest#systemScreenshotOffersReportWithTheCapturedWindow`
+  passed (one test, managed Android 16). No release workflow, deployment, or
+  phone installation was performed.

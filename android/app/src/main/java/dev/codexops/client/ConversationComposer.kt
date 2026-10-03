@@ -63,6 +63,8 @@ internal fun ConversationComposer(
     val selectedMode = modes.firstOrNull { it.mode == state.newTaskOptions.collaborationMode }
     val composerStatus =
         when {
+            state.waitingToSendMode() ->
+                "${selectedMode?.name ?: "Mode"} selected · send when the task is idle"
             state.activeTurn != null -> "Sends after this turn · uses task settings"
             state.queuedMessages.isNotEmpty() -> "Queue paused · tap Send now to continue"
             state.thread == null && !projectAvailable ->
@@ -238,10 +240,10 @@ internal fun ConversationComposer(
                         disabledIndicatorColor = Color.Transparent,
                     ),
             )
-            if (!landscape && (!compact || !state.willQueueMessage()))
+            if (!landscape && !state.willQueueMessage() && !compactTyping)
                 ModelControls(state, actions, compact)
             val showStatus =
-                !landscape && !compactTyping && (!compact ||
+                !landscape && (!compactTyping || state.waitingToSendMode()) && (
                     state.willQueueMessage() ||
                     !projectAvailable ||
                     state.newTaskOptions.model != null ||
@@ -252,7 +254,7 @@ internal fun ConversationComposer(
                     Modifier.fillMaxWidth()
                         .padding(horizontal = 12.dp, vertical = 2.dp)
                         .testTag("composer-status"),
-                    maxLines = if (compact) 1 else 2,
+                    maxLines = if (compact && !state.waitingToSendMode()) 1 else 2,
                     overflow = TextOverflow.Ellipsis,
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -269,66 +271,42 @@ internal fun ConversationComposer(
                     Modifier.weight(1f).horizontalScroll(rememberScrollState()),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    if (compact)
-                        Box {
-                            TextButton(
-                                onClick = { addMenu = true },
-                                enabled = !state.busy && state.journal == null,
-                                modifier = Modifier.testTag("add-menu"),
-                            ) { Text("Add") }
-                            DropdownMenu(addMenu, { addMenu = false }) {
-                                DropdownMenuItem(
-                                    text = { Text("Photos") },
-                                    onClick = {
-                                        addMenu = false
-                                        picker.launch(
-                                            PickVisualMediaRequest(
-                                                ActivityResultContracts.PickVisualMedia.ImageOnly
-                                            )
+                    Box {
+                        TextButton(
+                            onClick = { addMenu = true },
+                            enabled = !state.busy && state.journal == null,
+                            modifier = Modifier.testTag("add-menu"),
+                        ) { Text("Add") }
+                        DropdownMenu(addMenu, { addMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Photos") },
+                                onClick = {
+                                    addMenu = false
+                                    picker.launch(
+                                        PickVisualMediaRequest(
+                                            ActivityResultContracts.PickVisualMedia.ImageOnly
                                         )
-                                    },
-                                    modifier = Modifier.testTag("add-photos"),
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Files") },
-                                    onClick = {
-                                        addMenu = false
-                                        filePicker.launch(arrayOf("*/*"))
-                                    },
-                                    modifier = Modifier.testTag("add-files"),
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Camera") },
-                                    onClick = {
-                                        addMenu = false
-                                        actions.prepareCamera()?.let(camera::launch)
-                                    },
-                                    modifier = Modifier.testTag("add-camera"),
-                                )
-                            }
-                        }
-                    else {
-                        TextButton(
-                            onClick = {
-                                picker.launch(
-                                    PickVisualMediaRequest(
-                                        ActivityResultContracts.PickVisualMedia.ImageOnly
                                     )
-                                )
-                            },
-                            enabled = !state.busy && state.journal == null,
-                            modifier = Modifier.testTag("add-photos"),
-                        ) { Text("Photos") }
-                        TextButton(
-                            onClick = { filePicker.launch(arrayOf("*/*")) },
-                            enabled = !state.busy && state.journal == null,
-                            modifier = Modifier.testTag("add-files"),
-                        ) { Text("Files") }
-                        TextButton(
-                            onClick = { actions.prepareCamera()?.let(camera::launch) },
-                            enabled = !state.busy && state.journal == null,
-                            modifier = Modifier.testTag("add-camera"),
-                        ) { Text("Camera") }
+                                },
+                                modifier = Modifier.testTag("add-photos"),
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Files") },
+                                onClick = {
+                                    addMenu = false
+                                    filePicker.launch(arrayOf("*/*"))
+                                },
+                                modifier = Modifier.testTag("add-files"),
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Camera") },
+                                onClick = {
+                                    addMenu = false
+                                    actions.prepareCamera()?.let(camera::launch)
+                                },
+                                modifier = Modifier.testTag("add-camera"),
+                            )
+                        }
                     }
                     if (landscape)
                         TextButton(
@@ -343,52 +321,49 @@ internal fun ConversationComposer(
                             onClick = { keyboard?.hide() },
                             modifier = Modifier.testTag("show-queue"),
                         ) { Text("Queued (${state.queuedMessages.size})", maxLines = 1) }
-                }
-                // Mode changes are unavailable while a message would queue, so hide the selector
-                // instead of letting a disabled control crowd out Stop and Queue.
-                if (modes.isNotEmpty() && !state.willQueueMessage())
-                    Box {
-                        TextButton(
-                            onClick = { modeMenu = true },
-                            modifier = Modifier.testTag("mode-selector"),
-                            enabled =
-                                state.ready &&
-                                    !state.busy &&
-                                    !state.willQueueMessage() &&
-                                    state.journal == null,
-                        ) {
-                            Text(selectedMode?.name ?: "Server default", fontSize = 12.sp)
-                        }
-                        DropdownMenu(
-                            expanded = modeMenu,
-                            onDismissRequest = { modeMenu = false },
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Server default") },
-                                onClick = {
-                                    modeMenu = false
-                                    actions.updateNewTaskOptions(
-                                        state.newTaskOptions.copy(collaborationMode = null)
-                                    )
-                                },
-                                modifier = Modifier.testTag("mode-server-default"),
-                            )
-                            modes.forEach { preset ->
+                    if (modes.isNotEmpty())
+                        Box {
+                            TextButton(
+                                onClick = { modeMenu = true },
+                                modifier = Modifier.testTag("mode-selector"),
+                                enabled =
+                                    state.ready &&
+                                        !state.busy &&
+                                        state.journal == null,
+                            ) {
+                                Text(selectedMode?.name ?: "Mode", fontSize = 12.sp)
+                            }
+                            DropdownMenu(
+                                expanded = modeMenu,
+                                onDismissRequest = { modeMenu = false },
+                            ) {
                                 DropdownMenuItem(
-                                    text = { Text(preset.name) },
+                                    text = { Text("Server default") },
                                     onClick = {
                                         modeMenu = false
                                         actions.updateNewTaskOptions(
-                                            state.newTaskOptions.copy(
-                                                collaborationMode = preset.mode
-                                            )
+                                            state.newTaskOptions.copy(collaborationMode = null)
                                         )
                                     },
-                                    modifier = Modifier.testTag("mode-${preset.mode}"),
+                                    modifier = Modifier.testTag("mode-server-default"),
                                 )
+                                modes.forEach { preset ->
+                                    DropdownMenuItem(
+                                        text = { Text(preset.name) },
+                                        onClick = {
+                                            modeMenu = false
+                                            actions.updateNewTaskOptions(
+                                                state.newTaskOptions.copy(
+                                                    collaborationMode = preset.mode
+                                                )
+                                            )
+                                        },
+                                        modifier = Modifier.testTag("mode-${preset.mode}"),
+                                    )
+                                }
                             }
                         }
-                    }
+                }
                 if (state.activeTurn != null)
                     IconButton(actions::stop, enabled = state.ready) {
                         Glyph(R.drawable.ic_stop, "Stop")
@@ -403,6 +378,7 @@ internal fun ConversationComposer(
                     enabled =
                         state.ready &&
                             !state.busy &&
+                            !state.waitingToSendMode() &&
                             (state.draft.isNotBlank() || state.attachments.isNotEmpty()) &&
                             state.journal == null &&
                             (state.thread == null || state.queueReady) &&
@@ -632,14 +608,6 @@ private fun ModelControls(
         if (state.modelCatalogStatus == ModelCatalogStatus.Loading) {
             Box(Modifier.size(if (cover) 40.dp else 48.dp), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-            }
-        } else {
-            IconButton(
-                onClick = actions::refreshModels,
-                enabled = state.ready && !state.busy,
-                modifier = Modifier.size(if (cover) 40.dp else 48.dp),
-            ) {
-                Glyph(R.drawable.ic_refresh, "Refresh models")
             }
         }
     }

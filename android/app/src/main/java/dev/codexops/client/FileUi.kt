@@ -19,12 +19,16 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.m3.markdownTypography
+import com.mikepenz.markdown.model.State as MarkdownState
+import com.mikepenz.markdown.model.parseMarkdownFlow
 import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.compose.elements.MarkdownTable
 import com.mikepenz.markdown.compose.elements.MarkdownTableHeader
@@ -37,6 +41,14 @@ import kotlinx.coroutines.withContext
 
 @Composable
 internal fun FileAwareMarkdown(text: String, actions: ConversationActions) {
+    // Keep the last rendered document while its replacement parses off-thread.
+    // The String overload clears it to a loading box on each streaming delta,
+    // collapsing the list item and destroying the reader's scroll anchor.
+    val markdown by produceState<MarkdownState>(MarkdownState.Loading(), text) {
+        parseMarkdownFlow(text).collect { parsed ->
+            if (parsed !is MarkdownState.Loading) value = parsed
+        }
+    }
     val external = LocalUriHandler.current
     val handler =
         remember(external, actions) {
@@ -46,9 +58,30 @@ internal fun FileAwareMarkdown(text: String, actions: ConversationActions) {
                 }
             }
         }
+    val body = MaterialTheme.typography.bodyLarge.copy(lineHeight = 24.sp)
+    val heading = body.copy(fontWeight = FontWeight.SemiBold)
+    // Material's display headings overwhelm a phone-sized conversation. Use the
+    // same reading scale for messages, plan cards, and the full-screen plan.
+    val typography = markdownTypography(
+        h1 = heading.copy(fontSize = 22.sp, lineHeight = 28.sp),
+        h2 = heading.copy(fontSize = 20.sp, lineHeight = 26.sp),
+        h3 = heading.copy(fontSize = 18.sp, lineHeight = 24.sp),
+        h4 = heading,
+        h5 = heading,
+        h6 = heading,
+        text = body,
+        paragraph = body,
+        ordered = body,
+        bullet = body,
+        list = body,
+        quote = body,
+        code = body.copy(fontFamily = FontFamily.Monospace, fontSize = 14.sp, lineHeight = 20.sp),
+        inlineCode = body.copy(fontFamily = FontFamily.Monospace, fontSize = 14.sp),
+    )
     CompositionLocalProvider(LocalUriHandler provides handler) {
         Markdown(
-            text,
+            markdown,
+            typography = typography,
             components = markdownComponents(
                 table = { table ->
                     // The library defaults to one-line, ellipsized cells. Scrolling

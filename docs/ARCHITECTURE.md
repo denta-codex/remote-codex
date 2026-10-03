@@ -46,7 +46,10 @@ acknowledgement, replay, or custom chunk envelope between Android and the host.
 
 The client pages the stock `project/list` catalog and keeps project identity and
 thread assignment server-owned. The task browser can show all tasks, projectless
-Chats, or one existing project. New tasks default to projectless execution: their
+Chats, or one existing project. List and search pages request descending
+`recency_at` ordering from stock Codex; `updated_at` can advance for metadata
+changes to otherwise inactive chats. Pagination preserves the server's order.
+New tasks default to projectless execution: their
 directories are fixed under `/home/agent/Documents/RemoteCodex`, using a client
 UUID, and preparation uses an explicit workspace-write sandbox rooted there without
 network access. Selecting an existing project supplies its first stock project root
@@ -55,6 +58,25 @@ or create a detached worktree from its local `origin/HEAD`. Worktrees use a
 deterministic path under `CODEX_HOME/worktrees/remote-codex-<operation>/workspace`.
 Project identity remains the selected stock `projectId`; it is not inferred from
 or replaced by the worktree path.
+
+Task rows use physical left swipe to archive (unarchive in Archived), right swipe
+to mark unread, and long press to copy the existing `codex://threads/<id>` deep
+link. TalkBack custom actions provide the same operations. A deliberate distance
+threshold arms the action; release commits it, while cancellation or a short drag
+returns the row without a mutation. Archive changes use stock `thread/archive`
+and `thread/unarchive`, reserve the task while pending, and offer Undo only after
+acknowledgement. Failed or disconnected requests are never automatically replayed.
+An uncertain row remains blocked until a fresh server list establishes its tab;
+reconnect only reads state. Archive notifications from other clients refresh the
+visible list.
+
+The pinned stock protocol has no unread-state API. Manual unread reminders extend
+the existing phone-local reply read markers, persisted by host in Room. Opening
+clears the manual reminder after successful hydration; automatic unread replies
+still require viewing their content. Repeated Mark unread gestures are idempotent;
+archive, filtering, reconnect, and app recreation preserve the reminder. Existing
+activity monitoring continues to flag new replies; read state does not synchronize
+with other clients.
 
 Worktree orchestration is a narrow client adapter over stock `project/read` and
 `command/exec`; there is no invented worktree RPC and no second project browser.
@@ -149,7 +171,14 @@ charts/icons require connectivity. Missing files offer an explicit read-only Ret
 
 Plan mode is exposed only when the stock `collaborationMode/list` capability
 advertises it. The selected stock collaboration setting is sent with `turn/start`;
-completed plans render in a dedicated card and full-screen viewer. Implementing a
+the mode selector remains available during a running turn. Selecting an explicit
+mode keeps the draft unsent until both the active turn and server queue are clear,
+because queue submissions cannot carry that setting. The composer explains the
+wait; sending remains an explicit user action. Selecting Server default restores
+normal queueing. Attachments share an Add menu, and model controls are hidden while
+queueing because queued submissions use task settings. On cover screens they also
+hide while typing to keep the mode and send actions reachable above the keyboard.
+Completed plans render in a dedicated card and full-screen viewer. Implementing a
 completed plan starts a new turn in the advertised default mode and is never
 simulated when the server capability is absent.
 
@@ -244,3 +273,31 @@ recovery state; rollback and Desktop Restart remain explicit. Forwarder deployme
 keeps narrow Ansible backups of the old binary and unit until live acceptance
 succeeds. If deployment fails, retain the reported backup paths for explicit
 recovery; remove them once recovery and verification are complete.
+
+## Inbox activity and phone-local unread
+
+Inbox/archive rows show one accessible indicator: a spinner for active work, a
+slow blue pulse for approval or input, a red warning for a task error, or a blue
+dot for unread assistant output. Quiet/read chats have no indicator. Runtime
+state masks unread without erasing it. System-disabled animations use static
+indicators. Pending requests resolve through server notifications or fresh status
+reads; network/read failures are not presented as task errors.
+
+The activity monitor consumes events before the selected-thread and hydration
+filters. While foregrounded, it refreshes only visible browser rows (or the open
+chat), serially, with a five-second pause between passes. Stock metadata-only
+`thread/read` supplies runtime status. Inactive chats also use a single latest
+full turn from `thread/turns/list` to identify failed turns and compare assistant
+output. It never resumes background threads. Selection/foreground changes cancel
+polling; connection generation and per-thread revisions reject stale results.
+
+Unread is Android-local: Room's existing key/value records hold SHA-256 digests
+of assistant/plan output, keyed by endpoint, Codex home, and thread ID. No transcript
+is stored for this feature and no schema migration is needed. The first observation
+of inactive history establishes a baseline; observed running chats become unread
+when new output is later discovered. Only a foreground conversation showing the
+end of its newest completed reply marks that output read. Scrolling older content,
+remembering a selection, renaming a chat, and changing its project do not mark new
+output read or create unread. Markers survive app restarts; desktop/mobile read
+receipts are not synchronized. Newly encountered inactive chats are baselined,
+so the feature deliberately does not classify all pre-existing history as unread.
