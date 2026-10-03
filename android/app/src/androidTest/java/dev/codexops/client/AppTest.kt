@@ -7,6 +7,12 @@ import android.net.Uri
 import android.os.SystemClock
 import android.os.ParcelFileDescriptor
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -26,10 +32,14 @@ import kotlinx.serialization.json.*
 import okhttp3.*
 import okhttp3.mockwebserver.*
 import org.junit.*
+import org.junit.rules.TestName
 import org.junit.Assert.*
 
 class AppTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+    @get:Rule val testName = TestName()
+    private val landscapeScreen
+        get() = testName.methodName == "landscapeConversationLeavesRoomForMessagesAndDraft"
     private lateinit var server: MockWebServer
     private lateinit var model: ClientModel
     private val store = ViewModelStore()
@@ -38,6 +48,7 @@ class AppTest {
     private val sent = AtomicInteger()
     private val prepared = AtomicInteger()
     private val modelLists = AtomicInteger()
+    private val browserRequests = CopyOnWriteArrayList<JsonObject>()
     private val workspaceMetadataReads = AtomicInteger()
     private val workspaceMetadataRejections = AtomicInteger()
     private val invalidDirectoryProbes = AtomicInteger()
@@ -55,6 +66,8 @@ class AppTest {
     @Volatile private var lastThreadStart: JsonObject? = null
     private val worktreeAdds = AtomicInteger()
     private val threadStarts = AtomicInteger()
+    private val environmentSetups = AtomicInteger()
+    private var reportCoverOverride = false
     @Volatile private var dropWorktreeReply = false
     @Volatile private var dropThreadStartReply = false
     @Volatile private var rejectWorkspaceMetadata = false
@@ -96,9 +109,9 @@ class AppTest {
 
     @Before
     fun setup() {
-        if (coverScreen) {
-            shell("wm size 1080x1272")
-            shell("wm density 420")
+        if (coverScreen || landscapeScreen) {
+            shell(if (landscapeScreen) "wm size 2992x1224" else "wm size 1080x1272")
+            shell(if (landscapeScreen) "wm density 480" else "wm density 420")
             SystemClock.sleep(500)
             compose.activityRule.scenario.recreate()
             compose.waitForIdle()
@@ -132,6 +145,8 @@ class AppTest {
                                         return
                                     }
                                     if (method == "initialized") return
+                                    if (method == "thread/list" || method == "thread/search")
+                                        browserRequests.add(params)
                                     if (method.startsWith("thread/queue/") && method != "thread/queue/list")
                                         queueMutations.add(m)
                                     if (method in listOf("thread/list", "thread/search", "thread/unarchive")) browserCalls.add(method to params)
@@ -225,7 +240,7 @@ class AppTest {
                                                 obj(
                                                     "data" to
                                                         JsonArray(
-                                                            fixtureTasks(obj()).map { task ->
+                                                            fixtureTasks(params).map { task ->
                                                                 obj(
                                                                     "thread" to task,
                                                                     "snippet" to s("fixture match"),
@@ -276,6 +291,12 @@ class AppTest {
                                             }
                                             "command/exec" -> {
                                                 when {
+                                                    "get-url" in command -> obj("exitCode" to JsonPrimitive(0), "stdout" to s("git@github.com:denta-codex/remote-codex.git\n"))
+                                                    "remote-codex-environment" in command -> {
+                                                        environmentSetups.incrementAndGet()
+                                                        remoteFiles[command[5]] = Base64.getEncoder().encodeToString("${command[6]}\n${command[7]}\n".toByteArray())
+                                                        obj("exitCode" to JsonPrimitive(0))
+                                                    }
                                                     command.firstOrNull() == "test" -> {
                                                         invalidDirectoryProbes.incrementAndGet()
                                                         obj("exitCode" to JsonPrimitive(2))
@@ -578,6 +599,7 @@ class AppTest {
                         )
             }
         server.start()
+        File(app.filesDir, "bug-reports").deleteRecursively()
         runBlocking {
             val local = LocalStore(app)
             listOf(
@@ -591,17 +613,20 @@ class AppTest {
                     "draft/project-task",
                     "journal/project-task",
                     "attachments/project-task",
+                    "bug-report/shake",
+                    "bug-report/screenshot",
+                    "bug-report/last-task",
                 )
                 .forEach { local.remove(it) }
         }
         compose.runOnUiThread {
-            model = ClientModel(app, "ws://127.0.0.1:${server.port}/rpc", "/fixture", true)
+            model = ClientModel(app, "ws://127.0.0.1:${server.port}/rpc", "/fixture", true, "/fixture/remote-codex")
             store.put("fixture", model)
             compose.activity.setContent { RemoteTheme { App(model) } }
             model.saveCredential("fixture-credential-0000000000000000000000000000000000000")
         }
         compose.waitUntil(15000) {
-            model.state.value.ready &&
+            model.reports.state.value.loaded && model.state.value.ready &&
                 model.state.value.projects.size == 2 &&
                 model.state.value.tasks.isNotEmpty() &&
                 model.state.value.modelCatalogStatus == ModelCatalogStatus.Ready
@@ -658,7 +683,21 @@ class AppTest {
                             "status" to obj("type" to s("idle")),
                         ),
                     )
-        return tasks.filter { task ->
+        // Stock list/search default to interactive sources. Internal reviewers are only
+        // returned when the client explicitly includes their subagent source kind.
+        val internalTasks =
+            (params["sourceKinds"] as? JsonArray).orEmpty()
+                .map { it.jsonPrimitive.content }
+                .filter { it.startsWith("subAgent") }
+                .map { kind ->
+                    obj(
+                        "id" to s("internal-$kind"),
+                        "name" to s("Internal reviewer $kind"),
+                        "cwd" to s("/fixture"),
+                        "projectId" to JsonNull,
+                    )
+                }
+        return (tasks + internalTasks).filter { task ->
             val cwdMatches = params.str("cwd").let { it.isEmpty() || it == task.str("cwd") }
             val projectMatches =
                 if (!params.containsKey("projectId")) true
@@ -798,6 +837,92 @@ class AppTest {
     private fun latestReply() = compose.onNodeWithText("Latest reply — ready for review.", substring = true)
 
     @Test
+    fun streamingTallReplyKeepsVisibleParagraphStillWhenReading() {
+        openLongHistory(tallLastMessage = true)
+        compose.onNodeWithTag("timeline").performTouchInput {
+            swipe(center, center.copy(y = height * .85f), durationMillis = 1200)
+        }
+        compose.waitForIdle()
+        val paragraph = (1..35).map {
+            "Review note $it: Keep the layout clear and comfortable to read."
+        }.first { compose.onNodeWithText(it).isDisplayed() }
+        val before = compose.onNodeWithText(paragraph).fetchSemanticsNode().boundsInRoot.top
+        val delta = (1..6).joinToString("\n\n", prefix = "\n\n") {
+            "Streaming addition $it: More text arriving while the reader stays here."
+        }
+        emit(peer!!, "item/agentMessage/delta", obj("turnId" to s("history-20"),
+            "itemId" to s("reply-20"), "delta" to s(delta)))
+        compose.waitUntil(5000) { model.state.value.entries.last().text.endsWith(delta) }
+        compose.waitUntil(5000) {
+            compose.onAllNodesWithText("Streaming addition 6:", substring = true)
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.waitForIdle()
+        compose.onNodeWithText(paragraph).assertIsDisplayed()
+        assertEquals("Growing the visible reply must preserve the paragraph's screen position",
+            before, compose.onNodeWithText(paragraph).fetchSemanticsNode().boundsInRoot.top, 1f)
+        compose.onNodeWithTag("jump-to-latest").performClick()
+        compose.waitUntil(5000) {
+            compose.onNodeWithText("Streaming addition 6:", substring = true).isDisplayed()
+        }
+        emit(peer!!, "item/agentMessage/delta", obj("turnId" to s("history-20"),
+            "itemId" to s("reply-20"), "delta" to s("\n\nFollowing resumed here.")))
+        compose.waitUntil(5000) {
+            compose.onNodeWithText("Following resumed here.").isDisplayed()
+        }
+        compose.onNodeWithTag("jump-to-latest").assertDoesNotExist()
+    }
+
+    @Test
+    fun markdownTableWrapsCompleteCellsAndScrollsToLastColumn() {
+        val coverage = "\$0 delivery fees and reduced service fees at participating merchants, subject to order minimums"
+        val timing = "Starts when you activate. Activate now and it runs through December 31, 2029."
+        val longHeader = "When you get it and when the benefit expires"
+        val markdown = """
+            | What you get | What it covers | $longHeader |
+            |---|---|---|
+            | **Free DashPass** | $coverage | Starts when you activate. Activate now and it runs through **December 31, 2029**. |
+            | **One ${'$'}15 promo monthly** | One qualifying DoorDash order—including restaurants or groceries | Each calendar month after activation |
+            | **Two ${'$'}10 promos monthly** | Qualifying **non-restaurant** orders: groceries, convenience items, retail, etc. Each ${'$'}10 requires a separate order. | Both available each calendar month |
+        """.trimIndent()
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                RemoteTheme {
+                    Column(
+                        Modifier.width(368.dp).verticalScroll(rememberScrollState())
+                    ) {
+                        SelectionContainer {
+                            FileAwareMarkdown(markdown, model)
+                        }
+                    }
+                }
+            }
+        }
+        compose.waitUntil(5000) {
+            compose.onAllNodesWithText(coverage, substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        fun assertCompleteWrappedText(text: String) {
+            val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+            compose.onNodeWithText(text, substring = true).performSemanticsAction(
+                androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult
+            ) { it(layouts) }
+            assertTrue("Expected wrapped text: $text", layouts.single().lineCount > 1)
+            assertFalse("Text must not overflow: $text", layouts.single().hasVisualOverflow)
+            val layout = layouts.single()
+            assertEquals(layout.layoutInput.text.length, layout.getLineEnd(layout.lineCount - 1))
+        }
+        assertCompleteWrappedText(coverage)
+        val horizontalTable = compose.onNode(
+            SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange)
+        )
+        horizontalTable.performTouchInput { swipeLeft() }
+        compose.onNodeWithText(longHeader, substring = true).assertIsDisplayed()
+        compose.onNodeWithText(timing, substring = true).assertIsDisplayed()
+        assertCompleteWrappedText(longHeader)
+        assertCompleteWrappedText(timing)
+    }
+
+    @Test
     fun polishedConversationOpensAtLatestAndKeepsReadingPosition() {
         openLongHistory()
         latestReply().assertIsDisplayed()
@@ -806,12 +931,15 @@ class AppTest {
         compose.onNodeWithText("scripts/check", substring = true).assertIsDisplayed()
         demoPause(2000)
         compose.onNodeWithText("Command").performClick()
+        val latestPosition = compose.onNodeWithTag("timeline").fetchSemanticsNode()
+            .config[SemanticsProperties.VerticalScrollAxisRange].value()
         compose.onNodeWithTag("timeline").performTouchInput { swipeDown() }
         compose.onNodeWithTag("timeline").performTouchInput { swipeDown() }
         compose.waitForIdle()
         val position = compose.onNodeWithTag("timeline").fetchSemanticsNode()
             .config[SemanticsProperties.VerticalScrollAxisRange].value()
-        assertTrue("Scrolled into older messages", position > 2f)
+        assertTrue("Scrolled into older messages", position < latestPosition)
+        latestReply().assertIsNotDisplayed()
         demoPause(2000)
         emit(peer!!, "item/agentMessage/delta", obj("turnId" to s("history-20"),
             "itemId" to s("reply-20"), "delta" to s("\n\nA final spacing check is complete.")))
@@ -876,6 +1004,9 @@ class AppTest {
         emit(peer!!, "item/agentMessage/delta", obj("turnId" to s("history-20"),
             "itemId" to s("reply-20"), "delta" to s("\n\nStreaming finished here.")))
         compose.waitUntil(5000) { model.state.value.entries.last().text.endsWith("here.") }
+        compose.waitUntil(5000) {
+            compose.onNodeWithText("Streaming finished here.", substring = true).isDisplayed()
+        }
         compose.onNodeWithText("Streaming finished here.", substring = true).assertIsDisplayed()
     }
 
@@ -887,7 +1018,7 @@ class AppTest {
         }
         runBlocking { LocalStore(app).saveToken("") }
         server.shutdown()
-        if (coverScreen) {
+        if (coverScreen || landscapeScreen || reportCoverOverride) {
             shell("wm size reset")
             shell("wm density reset")
         }
@@ -936,6 +1067,52 @@ class AppTest {
         assertTrue("Composer actions are $composerHeight dp high", composerHeight <= 56f)
         compose.onNodeWithTag("send").assertIsDisplayed()
         demoPause(3000)
+    }
+
+    @Test
+    fun landscapeConversationLeavesRoomForMessagesAndDraft() {
+        // Match the reported Razr window; setup installs the mock after resizing.
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) {
+            model.state.value.thread == "task-test" && !model.state.value.busy
+        }
+        compose.waitForIdle()
+        val configuration = compose.activity.resources.configuration
+        assertTrue(configuration.screenWidthDp > 900)
+        assertTrue(configuration.screenHeightDp < 480)
+        val timeline = compose.onNodeWithTag("timeline").getUnclippedBoundsInRoot()
+        val height = timeline.bottom - timeline.top
+        assertTrue("Landscape timeline is only $height", height >= 160.dp)
+        compose.onNodeWithTag("composer").assertIsDisplayed()
+        compose.onNodeWithTag("send").assertIsDisplayed()
+        compose.onNodeWithTag("composer-options").performClick()
+        compose.onNodeWithTag("model-selector").performClick()
+        compose.onNodeWithText("Fixture Fast").performClick()
+        compose.onNodeWithTag("reasoning-selector").performClick()
+        compose.onNodeWithText("medium").performClick()
+        compose.onNodeWithText("Done").performClick()
+        assertEquals("gpt-fixture-fast", model.state.value.newTaskOptions.model)
+        assertEquals("medium", model.state.value.newTaskOptions.reasoningEffort)
+        compose.onNodeWithTag("add-menu").performClick()
+        compose.onNodeWithText("Photos").assertIsDisplayed()
+        compose.onNodeWithText("Files").assertIsDisplayed()
+        compose.onNodeWithText("Camera").assertIsDisplayed()
+        shell("input keyevent KEYCODE_BACK")
+        compose.onNodeWithTag("composer").performTextInput("A landscape draft\nwith several\nlines of text")
+        compose.onNodeWithTag("send").assertIsDisplayed().assertIsEnabled()
+        assertEquals("A landscape draft\nwith several\nlines of text", model.state.value.draft)
+        compose.runOnUiThread { model.newChat() }
+        compose.waitUntil(5000) {
+            model.state.value.thread == null && !model.state.value.busy
+        }
+        compose.onNodeWithTag("composer-options").performClick()
+        compose.onNodeWithTag("project-selector").performClick()
+        compose.onNodeWithText("Remote Codex").performClick()
+        compose.onNodeWithTag("workspace-new-worktree").performScrollTo().performClick()
+        assertEquals(ExecutionTarget.NewWorktree, model.state.value.newTaskOptions.executionTarget)
+        compose.onNodeWithText("Done").performClick()
+        compose.onNodeWithTag("composer").assertIsDisplayed()
+        compose.onNodeWithTag("send").assertIsDisplayed()
     }
 
     @Test
@@ -1012,8 +1189,79 @@ class AppTest {
 
     private fun enqueueFixture(text: String = "Do this next") {
         compose.onNodeWithTag("composer").performTextInput(text)
+        demoPause()
+        assertComposerActionFullyVisible(compose.onNodeWithContentDescription("Queue message"))
+        assertComposerActionFullyVisible(compose.onNodeWithContentDescription("Stop"))
         compose.onNodeWithContentDescription("Queue message").performClick()
         compose.waitUntil(10000) { !model.state.value.busy && model.state.value.queuedMessages.any { it.text == text } }
+        demoPause()
+    }
+
+    // Compose test clicks reach nodes that a Row pushed past its clipped edge, so check the
+    // unclipped bounds against the action row the user can actually see.
+    private fun assertComposerActionFullyVisible(action: SemanticsNodeInteraction) {
+        val row = compose.onNodeWithTag("composer-actions").fetchSemanticsNode()
+        val node = action.assertIsDisplayed().fetchSemanticsNode()
+        val rowRight = row.positionInRoot.x + row.size.width
+        val nodeRight = node.positionInRoot.x + node.size.width
+        assertTrue(
+            "Composer action ends at $nodeRight px beyond the action row edge at $rowRight px",
+            nodeRight <= rowRight + 0.5f,
+        )
+    }
+
+    @Test
+    fun planModeCanBeSelectedWhileWorkingAndSentWhenIdle() {
+        openRunningQueueFixture()
+        compose.onNodeWithTag("model-selector").assertDoesNotExist()
+        compose.onNodeWithTag("add-menu").assertIsDisplayed().performClick()
+        compose.onNodeWithTag("add-photos").assertIsDisplayed()
+        compose.onNodeWithTag("add-files").assertIsDisplayed()
+        compose.onNodeWithTag("add-camera").assertIsDisplayed()
+        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        compose.onNodeWithTag("mode-selector").assertIsDisplayed().assertIsEnabled().performClick()
+        compose.onNodeWithTag("mode-plan").performClick()
+        compose.onNodeWithTag("mode-selector").assertTextContains("Plan")
+        compose.onNodeWithTag("composer").performTextInput("Plan the next change")
+        compose.onNodeWithTag("send").assertIsNotEnabled()
+        compose.onNodeWithTag("composer-status")
+            .assertTextContains("Plan selected · send when the task is idle")
+        // The model must also reject a queue submission that would lose the mode.
+        compose.runOnUiThread { model.send() }
+        compose.waitForIdle()
+        assertTrue(queueMutations.isEmpty())
+        assertEquals("Plan the next change", model.state.value.draft)
+        holdTurnOpen = false
+        emit(peer!!, "turn/completed", obj("turn" to obj("id" to s("turn-test"), "status" to s("completed"))))
+        compose.waitUntil(5000) { model.state.value.activeTurn == null }
+        assertEquals(1, turnRequests.size)
+        compose.onNodeWithTag("send").assertIsDisplayed().assertIsEnabled().performClick()
+        compose.waitUntil(10000) { turnRequests.size == 2 && !model.state.value.busy }
+        assertEquals("plan", turnRequests.last().map("collaborationMode").str("mode"))
+        assertEquals("Plan the next change", turnRequests.last().list("input").single().str("text"))
+        assertTrue(queueMutations.isEmpty())
+    }
+
+    @Test
+    fun planDraftWaitsForExistingQueueAndCanReturnToTaskSettings() {
+        openRunningQueueFixture()
+        enqueueFixture()
+        holdTurnOpen = false
+        emit(peer!!, "turn/completed", obj("turn" to obj("id" to s("turn-test"), "status" to s("interrupted"))))
+        compose.waitUntil(5000) { model.state.value.activeTurn == null }
+        compose.onNodeWithTag("mode-selector").performClick()
+        compose.onNodeWithTag("mode-plan").performClick()
+        compose.onNodeWithTag("composer").performTextInput("Plan after the queue")
+        compose.onNodeWithTag("send").assertIsNotEnabled()
+        compose.runOnUiThread { model.send() }
+        compose.waitForIdle()
+        assertEquals(1, queueMutations.size)
+        compose.onNodeWithTag("mode-selector").performClick()
+        compose.onNodeWithTag("mode-server-default").performClick()
+        compose.onNodeWithTag("send").assertIsEnabled().performClick()
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.queuedMessages.size == 2 }
+        assertEquals(1, turnRequests.size)
+        assertEquals(listOf("thread/queue/add", "thread/queue/add"), queueMutations.map { it.str("method") })
     }
 
     @Test
@@ -1024,14 +1272,23 @@ class AppTest {
         assertEquals(1, sent.get())
         assertTrue(steerRequests.isEmpty())
         assertEquals(listOf("Do this next", "Then review it"), model.state.value.queuedMessages.map { it.text })
+        if (coverScreen) shell("settings put secure show_ime_with_hard_keyboard 1")
         compose.onNodeWithTag("composer").performTextInput("An unfinished thought")
+        // Wait for the real IME transition before using the compact queue shortcut.
         if (coverScreen) {
+            compose.waitUntil(5000) {
+                compose.onAllNodesWithTag("show-queue").fetchSemanticsNodes().isNotEmpty()
+            }
             compose.onNodeWithTag("show-queue").assertIsDisplayed().performClick()
-            compose.waitUntil(5000) { compose.onAllNodesWithTag("message-queue").fetchSemanticsNodes().isNotEmpty() }
+            compose.waitUntil(5000) {
+                compose.onAllNodesWithTag("send-queued-queue-1").fetchSemanticsNodes().isNotEmpty()
+            }
         }
         val queued = queueItems.first()
+        demoPause(2500)
         compose.onNodeWithTag("send-queued-queue-1").performScrollTo().performClick()
         compose.waitUntil(10000) { !model.state.value.busy && model.state.value.queuedMessages.size == 1 }
+        demoPause()
         assertEquals(1, steerRequests.size)
         assertEquals(queued["input"], steerRequests.single()["input"])
         assertEquals(queued["clientUserMessageId"], steerRequests.single()["clientUserMessageId"])
@@ -1041,6 +1298,7 @@ class AppTest {
         assertNull(model.state.value.journal)
         compose.onNodeWithTag("remove-queued-queue-2").performClick()
         compose.waitUntil(10000) { !model.state.value.busy && model.state.value.queuedMessages.isEmpty() }
+        demoPause(2000)
         assertEquals(1, steerRequests.size)
         compose.onNodeWithTag("composer").assertTextContains("An unfinished thought")
     }
@@ -1312,6 +1570,31 @@ class AppTest {
     }
 
     @Test
+    fun visualizationLoadsFromHistoryExpandsAndShowsMissingFileRecovery() {
+        val path = "/fixture/chart.html"
+        remoteFiles[path] = Base64.getEncoder().encodeToString("<div id=\"chart\">Fixture visualization</div>".toByteArray())
+        historyOverride = obj("data" to JsonArray(listOf(obj(
+            "id" to s("visual-turn"), "status" to s("completed"),
+            "items" to JsonArray(listOf(obj("id" to s("visual-reply"), "type" to s("agentMessage"),
+                "text" to s("Before the chart.\n\nvisualize{\"path\":\"$path\",\"title\":\"Fixture chart\",\"mode\":\"wide\"}\n\nAfter the chart."))))
+        ))))
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(15000) { compose.onAllNodesWithTag("visualization-webview").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Before the chart.").assertExists()
+        compose.onNodeWithText("After the chart.").assertExists()
+        compose.onNodeWithTag("expand-visualization").performClick()
+        compose.onNodeWithTag("visualization-fullscreen").assertIsDisplayed()
+        compose.onNodeWithTag("close-visualization").performClick()
+        compose.onNodeWithTag("visualization-fullscreen").assertDoesNotExist()
+        compose.runOnUiThread { model.home() }
+        remoteFiles.remove(path)
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { compose.onAllNodesWithTag("visualization-error").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Retry").assertExists()
+        assertEquals(0, sent.get())
+    }
+
+    @Test
     fun remoteTextFileUsesMetadataAndOpensAReadablePreview() {
         compose.runOnUiThread { model.openTask("task-test") }
         compose.waitUntil(10000) {
@@ -1539,6 +1822,36 @@ class AppTest {
     }
 
     @Test
+    fun taskBrowserExcludesInternalReviewers() {
+        fun assertInteractiveTasks() {
+            assertEquals(
+                listOf("task-test", "project-task"),
+                model.state.value.tasks.map { it.str("id") },
+            )
+            compose.onNodeWithText("Internal reviewer", substring = true).assertDoesNotExist()
+            compose.onNodeWithText(fixtureTitle).assertIsDisplayed()
+        }
+
+        assertInteractiveTasks()
+        for (search in listOf(false, true)) {
+            for (archived in listOf(false, true)) {
+                val count = browserRequests.size
+                compose.runOnUiThread {
+                    if (archived) model.openArchives() else model.home()
+                    model.query(if (search) "fixture" else "")
+                }
+                compose.waitUntil(5000) { browserRequests.size > count && !model.state.value.listLoading }
+                compose.waitForIdle()
+                assertInteractiveTasks()
+                val request = browserRequests.last()
+                assertEquals(archived, request["archived"]?.jsonPrimitive?.boolean)
+                assertEquals(if (search) "fixture" else "", request.str("searchTerm"))
+                assertTrue((request["sourceKinds"] as? JsonArray).isNullOrEmpty())
+            }
+        }
+    }
+
+    @Test
     fun projectsAndChatsFilterTaskBrowser() {
         assertEquals(listOf("Remote Codex", "Notes"), model.state.value.projects.map { it.name })
         demoPause(2000)
@@ -1727,6 +2040,132 @@ class AppTest {
         compose.onNodeWithTag("composer").assertTextContains("Keep this idea")
         compose.onNodeWithTag("draft-attachment").assertIsDisplayed()
         demoPause(3500)
+    }
+
+    @Test
+    fun bugReportCapturesScreenAndStartsIsolatedFixTask() {
+        compose.runOnUiThread { model.newChat() }
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
+        compose.onNodeWithTag("composer").performTextInput("Keep my original draft")
+        compose.onNodeWithTag("app-menu").performClick()
+        compose.onNodeWithTag("report-bug").performClick()
+        compose.waitUntil(10000) { model.reports.state.value.visible && !model.reports.state.value.capturing }
+        val draft = requireNotNull(model.reports.state.value.draft)
+        assertEquals("chat", draft.context.str("screen"))
+        assertEquals("Keep my original draft", draft.context.str("draft"))
+        assertEquals("captured", draft.diagnostics.map("screenshot").str("status"))
+        val screenshot = draft.attachments.single { it.id == "screenshot.png" }
+        assertNotNull(android.graphics.BitmapFactory.decodeFile(screenshot.localPath))
+        compose.onNodeWithTag("bug-description").performTextInput("The queue button lost my message")
+        compose.onNodeWithTag("submit-bug-report").performClick()
+        compose.waitUntil(20000) { model.reports.state.value.lastTask == "task-test" && model.reports.state.value.draft == null }
+        assertEquals(1, environmentSetups.get())
+        assertEquals(1, worktreeAdds.get())
+        assertEquals(1, threadStarts.get())
+        assertEquals("project-remote", threadStartParams!!.str("projectId"))
+        assertTrue(remoteFiles.keys.any { it.contains("/report/") && it.contains("screenshot") })
+        assertTrue(acceptedText.contains("The queue button lost my message"))
+        assertEquals("Keep my original draft", runBlocking { LocalStore(app).get("draft/new") })
+        assertFalse(File(screenshot.localPath).exists())
+        compose.waitUntil(5000) { !model.reports.state.value.busy && !model.reports.state.value.visible }
+        compose.waitForIdle()
+        assertEquals("chat", model.state.value.page)
+        assertNull(model.state.value.thread)
+        compose.onNodeWithTag("composer").assertTextContains("Keep my original draft")
+        // Opening the fix task remains an explicit action.
+        compose.onNodeWithTag("app-menu").performClick()
+        compose.onNodeWithText("Last bug report").performClick()
+        compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy }
+    }
+
+    @Test
+    fun systemScreenshotOffersReportWithTheCapturedWindow() {
+        compose.waitUntil(5000) { model.reports.state.value.loaded }
+        compose.runOnUiThread { model.newChat() }
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
+        compose.onNodeWithTag("composer").performTextInput("Screenshot this draft")
+        shell("input keyevent KEYCODE_SYSRQ")
+        compose.waitUntil(10000) { compose.onAllNodesWithText("Report bug").fetchSemanticsNodes().isNotEmpty() }
+        assertFalse(model.reports.state.value.visible)
+        compose.onNodeWithText("Report bug").performClick()
+        compose.waitUntil(10000) { model.reports.state.value.visible && !model.reports.state.value.capturing }
+        val draft = requireNotNull(model.reports.state.value.draft)
+        assertEquals("Screenshot this draft", draft.context.str("draft"))
+        assertEquals("captured", draft.diagnostics.map("screenshot").str("status"))
+        val screenshot = draft.attachments.single { it.id == "screenshot.png" }
+        assertNotNull(android.graphics.BitmapFactory.decodeFile(screenshot.localPath))
+    }
+
+    @Test
+    fun bugReportScreenshotSurvivesOfflineRecreationAndCanBeRemoved() {
+        compose.runOnUiThread {
+            model.reports.open {
+                assertFalse(model.reports.state.value.visible)
+                assertTrue(model.reports.state.value.capturing)
+                captureBugReportScreenshot(compose.activity)
+            }
+        }
+        compose.waitUntil(10000) { model.reports.state.value.visible && !model.reports.state.value.capturing }
+        val original = requireNotNull(model.reports.state.value.draft)
+        val screenshot = original.attachments.single { it.id == "screenshot.png" }
+        val originalBytes = File(screenshot.localPath).readBytes()
+        compose.onNodeWithTag("bug-description").performTextInput("Remember this offline")
+        compose.waitUntil(5000) { BugReportStore(File(app.filesDir, "bug-reports")).load()?.description == "Remember this offline" }
+        compose.runOnUiThread {
+            store.clear()
+            model = ClientModel(app, "ws://127.0.0.1:${server.port}/rpc", "/fixture", true, "/fixture/remote-codex")
+            store.put("fixture", model)
+            compose.activity.setContent { RemoteTheme { App(model) } }
+        }
+        compose.waitUntil(5000) { model.reports.state.value.loaded }
+        var recaptured = false
+        compose.runOnUiThread { model.reports.open { recaptured = true; byteArrayOf() } }
+        compose.onNodeWithTag("bug-description").assertTextContains("Remember this offline")
+        assertFalse(recaptured)
+        assertEquals(original.capturedAt, model.reports.state.value.draft!!.capturedAt)
+        assertArrayEquals(originalBytes, File(screenshot.localPath).readBytes())
+        compose.onNodeWithTag("submit-bug-report").assertTextContains("Save report")
+        compose.onNodeWithTag("submit-bug-report").performClick()
+        compose.waitUntil(5000) { !model.reports.state.value.visible }
+        assertEquals(0, threadStarts.get())
+        compose.runOnUiThread { model.reports.open() }
+        compose.runOnUiThread { model.reports.removeAttachment("screenshot.png") }
+        compose.waitUntil(5000) { model.reports.state.value.draft!!.attachments.none { it.id == "screenshot.png" } }
+        assertFalse(File(screenshot.localPath).exists())
+        compose.onNodeWithTag("discard-bug-report").performClick()
+        compose.waitUntil(5000) { model.reports.state.value.draft == null }
+        assertFalse(File(app.filesDir, "bug-reports/${original.id}").exists())
+    }
+
+    @Test
+    fun bugReportSettingsExcludesScreenshotAndPersistsShakePreference() {
+        assertFalse(model.reports.state.value.shakeEnabled)
+        compose.runOnUiThread { model.settings(); model.reports.shakeEnabled(false) }
+        compose.onNodeWithTag("app-menu").performClick()
+        compose.onNodeWithTag("report-bug").performClick()
+        compose.waitUntil(10000) { model.reports.state.value.visible && !model.reports.state.value.capturing }
+        val report = requireNotNull(model.reports.state.value.draft)
+        assertEquals("omitted", report.diagnostics.map("screenshot").str("status"))
+        assertTrue(report.attachments.none { it.id == "screenshot.png" })
+        assertFalse(report.context.toString().contains("fixture-credential"))
+        assertEquals("false", runBlocking { LocalStore(app).get("bug-report/shake") })
+        compose.onNodeWithTag("close-bug-report").performClick()
+        assertEquals(report.id, model.reports.state.value.draft!!.id)
+    }
+
+    @Test
+    fun bugReportCaptureFailureStillAllowsSubmissionOnCoverDisplay() {
+        reportCoverOverride = true
+        shell("wm size 1080x1272")
+        shell("wm density 420")
+        compose.waitForIdle()
+        compose.runOnUiThread { model.reports.open { error("Fixture capture failure") } }
+        compose.waitUntil(10000) { model.reports.state.value.visible && !model.reports.state.value.capturing }
+        assertEquals("unavailable", model.reports.state.value.draft!!.diagnostics.map("screenshot").str("status"))
+        compose.onNodeWithTag("bug-description").performTextInput("A cover-screen bug")
+        compose.onNodeWithTag("submit-bug-report").assertIsDisplayed().performClick()
+        compose.waitUntil(20000) { model.reports.state.value.lastTask == "task-test" }
+        assertEquals(1, sent.get())
     }
 
     @Test
@@ -1932,7 +2371,7 @@ class AppTest {
         compose.waitUntil(5000) {
             model.state.value.page == "chat" && model.state.value.collaborationModes.size == 2
         }
-        compose.onNodeWithTag("mode-selector").assertTextContains("Server default").performClick()
+        compose.onNodeWithTag("mode-selector").assertTextContains("Mode").performClick()
         compose.onNodeWithTag("mode-plan").performClick()
         compose.onNodeWithTag("mode-selector").assertTextContains("Plan")
         compose.onNodeWithTag("composer").performTextInput("Propose a safe change")

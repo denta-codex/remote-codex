@@ -1,5 +1,120 @@
 # Validation
 
+## 2026-10-02 — Plan mode composer report a9ba2621
+
+- The frozen report shows a connected task with an active turn. Reproduced the
+  disabled mode selector with `AppTest#planModeCanBeSelectedWhileWorkingAndSentWhenIdle`:
+  the original composer failed `assertIsEnabled` on `mode-selector`.
+- The composer now exposes mode selection while working, groups attachments in
+  Add, and hides unusable model controls while queueing. Explicit mode drafts wait
+  for an idle task and empty queue before the user sends; the client also rejects
+  attempts to queue them, since queue requests cannot carry collaboration settings.
+- Four focused Android 16 fixture tests passed through `scripts/emulator-test
+  --tests`: selecting Plan during a turn and sending it once idle; waiting behind
+  a paused queue and returning to task settings; normal queue/steer behavior; and
+  the existing Plan-to-implementation flow. The first also checks the Add menu.
+  Results: `artifacts/validation/plan-composer/phone-tests.xml`.
+- Two focused cover-viewport cases initially timed out trying to send with the
+  keyboard open. Hiding model controls during compact typing fixed the layout;
+  both Plan selection/submission and normal queue/steer then passed with zero
+  failures or skips. These used the same `--tests` entry point with
+  `ORG_GRADLE_PROJECT_android.testInstrumentationRunnerArguments.coverScreen=true`.
+  Results: `artifacts/validation/plan-composer/cover-initial-tests.xml` and
+  `artifacts/validation/plan-composer/cover-tests.xml`.
+- Initial validation startup required access to the managed Gradle cache outside
+  the sandbox. A test-only Espresso reference then failed compilation and was
+  replaced with the existing instrumentation API before the passing test run.
+- Validation uses synthetic fixture content, not the live source task or physical
+  Razr. No release, publication, deployment, or phone installation was performed.
+- Integration with main preserved the scrollable action row, pinned Stop/Send,
+  and landscape Options dialog. Four phone cases, cover Plan selection, and the
+  landscape layout case passed. The cover queue case initially raced the IME
+  transition; explicitly enabling the fixture's soft keyboard and waiting for
+  the Queued shortcut fixed the test, which then passed. Integration results:
+  `artifacts/validation/plan-composer/merge-phone-tests.xml`,
+  `merge-compact-initial-tests.xml`, and `merge-cover-queue-tests.xml` in the same
+  directory.
+
+## 2026-10-01 — Android 0.2.10 (20)
+
+- Source revision: `b9caccb017935c43023c1077e8da0f25ff393c69`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `1f00b1b7a9b1ee9151da4a3833b6b75fce8993c7a2d7666e73fdaa9f1ea07041`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/home/agent/workspaces/remote-codex/artifacts/releases/run-20261001T232232Z-KLnBfB.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
+## 2026-10-01 — Android 0.2.9 (19)
+
+- Source revision: `c23d2eb6f75c6a0fcc0a1a83f448c0ecd1ab9f71`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `12c1806c860646aceb95d93b255b3e641f22c18f7c9ed4e6643c429b18db5513`.
+- Outcome: Built and signed locally; not published.
+- Build log: `/home/agent/workspaces/remote-codex/artifacts/releases/run-20261001T231240Z-XWDCjW.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
+## 2026-10-01 — Android 0.2.8 (18)
+
+- Source revision: `332c158378ffc231fe6174aa981a715c90289ab6`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `6efecd86111ea6432a678955a4feb5c5b548c726a6d488ec53ae85f1023e1aac`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/home/agent/workspaces/remote-codex/artifacts/releases/run-20261001T195016Z-0fpcC1.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
+## 2026-10-01 — Android 0.2.7 (17)
+
+- Source revision: `946ad4ddde110953687d061cb9c18bb9c8b80d8a`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `19eb13912e5098877d696a5ddb7cd4db6b7b7fcec2d0a757e94c37a36adfe3fe`.
+- Outcome: Built and signed locally; not published.
+- Build log: `/home/agent/workspaces/remote-codex/artifacts/releases/run-20261001T194602Z-EN6SJI.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
+## 2026-10-01 — Screenshot-to-report prompt
+
+- On Android 14+, the app registers an `Activity.ScreenCaptureCallback` while it
+  is visible (`DETECT_SCREEN_CAPTURE`, a normal permission). Each screenshot
+  copies only the app window right away and shows a Material 3 snackbar,
+  "Screenshot taken · Report bug". Tapping it opens the existing report flow
+  with that copy. A newer screenshot replaces a pending prompt. The app never
+  reads the saved system screenshot.
+- Shake-to-report is now opt-in, and the existing `bug-report/shake` key is
+  honored only when it is `true`. The new screenshot preference is stored as
+  `bug-report/screenshot`.
+- App unit tests (including the new screenshot-prompt gate), debug lint (no new
+  warnings), and androidTest assembly passed. Three focused managed Android 16
+  tests passed: a real `KEYCODE_SYSRQ` system screenshot that offers the
+  snackbar and captures the window, Settings exclusion with the shake default
+  off, and menu capture with fix-task submission.
+
+## 2026-10-01 — Shake-to-report with Android diagnostics
+
+- Android debug and instrumentation assembly, all 37 app unit tests, and debug
+  lint passed (zero lint errors). Fifteen unit tests cover report snapshots,
+  credential redaction, bounded logs/action history, persistent artifacts,
+  Seismic sampling and invocation gates, blocked native collectors, destination
+  validation, and journal recovery.
+- Lost acknowledgements were simulated after directory creation, worktree
+  creation, environment setup, evidence-directory creation, upload, task
+  creation, naming, and initial submission. Recovery confirmed each authoritative
+  result without repeating the mutation; missing/conflicting evidence stayed
+  pending.
+- Four focused managed Android 16 report tests passed on the final implementation:
+  actual screenshot capture and isolated fix-task submission, offline report and
+  screenshot persistence across model recreation, Settings screenshot exclusion,
+  and successful cover-layout submission despite capture failure.
+- A separate focused cover-viewport run passed real screenshot/task submission
+  and navigation reachability. The earlier menu-capture failure exposed a Compose
+  frame-clock assumption in a model coroutine; the corrected Android frame
+  callback passed subsequent runs.
+- Fixture results are retained under `artifacts/validation/bug-report/`:
+  `final-report-tests.xml`, `cover-tests.xml`, and the earlier diagnostic runs.
+- No live fix task was created, and no forwarder deployment, update publication,
+  or phone installation was performed. Physical Razr gesture sensitivity,
+  interaction with its other gestures, real-device diagnostics, and live Grace
+  task acceptance remain unchecked in `docs/DEVICE-ACCEPTANCE.md`.
+
 ## 2026-09-30 — Android 0.2.6 (16)
 
 - Source revision: `e03e256c89b77d64b6a6b73738ff0a19b86abfe4`.
@@ -562,3 +677,25 @@ gesture are still pending user-authorized live deployment and delivery.
   verified and the existing app was opened, but the keyguard prevented initial
   UI confirmation. On October 1 the user confirmed the app works on the phone,
   completing physical-device acceptance. No account content was saved or displayed.
+
+## October 1, 2026 — inline visualizations
+
+- Added the visualize marker parser, bounded stock-RPC HTML reader, bundled runtime,
+  isolated WebView renderer, full-screen expansion, local widget state, and confirmed
+  follow-up drafting. No forwarder or stock Codex changes are required.
+- Five parser/policy/size/state unit tests cover code examples, malformed and streaming
+  markers, multiple visuals, invalid UTF-8, oversized files, and CDN URL validation.
+  All 27 app unit tests and Android lint passed after the final source changes.
+- The focused managed Android 16 tests passed:
+  `VisualizationTest#sandboxRendersInteractsRestoresStateAndBlocksEscapes` and
+  `AppTest#visualizationLoadsFromHistoryExpandsAndShowsMissingFileRecovery`.
+  They exercise real WebView JavaScript and touch input, restored interaction state,
+  follow-up messages, opaque-origin isolation, blocked file/network access, history
+  rendering, full-screen expansion, and explicit missing-file recovery.
+- Testing exposed and fixed interception of the viewer's own document, native message
+  initialization, and compositor synchronization in the touch fixture. The renderer
+  serves its shell locally at a dedicated HTTPS origin; the test waits for WebView's
+  visual-state callback before tapping a recreated view.
+- State remains Android-local, and desktop annotation controls are not advertised.
+  CDN-backed content still requires connectivity. This change has not been published,
+  installed on the phone, or validated against live account content.

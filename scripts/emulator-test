@@ -49,8 +49,9 @@ case "$mode" in
             dev.codexops.client.AppTest#remoteTextFileUsesMetadataAndOpensAReadablePreview
             dev.codexops.client.AppTest#advertisedPlanModeRendersFullscreenPlanAndImplementsWithDefaultMode
             dev.codexops.client.AppTest#planModeQuestionCanBeAnswered
+            dev.codexops.client.AppTest#normalSendQueuesAndCanSteerWithoutChangingNewDraft
         )
-        timeout_duration=6m
+        timeout_duration=7m
         ;;
 esac
 

@@ -15,6 +15,7 @@ data class HostIdentity(
     val displayName: String,
     val endpoint: String,
     val expectedCodexHome: String,
+    val bugReportRepository: String = "/home/agent/workspaces/remote-codex",
 )
 
 val GraceHost =
@@ -230,6 +231,14 @@ interface ConversationActions {
     fun removeAttachment(id: String)
 
     suspend fun loadMedia(media: MediaRef): ByteArray
+
+    suspend fun loadVisualization(reference: VisualizationRef): String
+
+    suspend fun visualizationState(key: String): String
+
+    suspend fun saveVisualizationState(key: String, value: String)
+
+    fun stageVisualizationFollowUp(prompt: String)
 
     fun inspectFile(file: dev.codexops.core.FileRef)
 

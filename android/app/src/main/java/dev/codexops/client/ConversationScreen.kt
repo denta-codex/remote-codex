@@ -17,6 +17,10 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -35,6 +39,17 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
     var confirmUnlock by remember { mutableStateOf(false) }
     val scroll = rememberLazyListState()
     var followLatest by remember { mutableStateOf(true) }
+    var initiallyPositioned by remember { mutableStateOf(false) }
+    val readingScroll = remember(scroll) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                // Stop before the next layout/streaming update, even for a short drag.
+                if (source == NestedScrollSource.UserInput && available.y != 0f)
+                    followLatest = false
+                return Offset.Zero
+            }
+        }
+    }
     val saveDocument =
         rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri ->
             uri?.let(actions::saveFile)
@@ -49,177 +64,194 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
                         preset.turnSetting(st.collaborationModel()) != null
                 }
         }
-    // Reverse layout anchors new history at the latest message, even when that
-    // message is taller than the viewport. Stable keys preserve reading position.
+    // A normal list anchors the top of the visible message. Reverse layout instead
+    // anchors its bottom, moving the paragraph being read when that message grows.
     LaunchedEffect(scroll) {
         snapshotFlow {
-                Triple(
-                    scroll.isScrollInProgress,
-                    scroll.firstVisibleItemIndex,
-                    scroll.firstVisibleItemScrollOffset,
-                )
+                !scroll.isScrollInProgress && !scroll.canScrollForward
             }
-            .collect { (scrolling, index, offset) ->
-                if (scrolling) followLatest = index == 0 && offset < 48
+            .collect { atRestAtEnd ->
+                if (atRestAtEnd) followLatest = true
             }
     }
-    LaunchedEffect(messages.lastOrNull(), st.decisions, st.journal, st.busy, st.activeTurn) {
-        // Composer/decision presentation can change this column's height in the same frame.
-        // Wait for that layout before moving the reverse-list anchor.
-        withFrameNanos { }
-        // Schedule the anchor for the list's next measure instead of forcing a
-        // synchronous remeasure while asynchronous Markdown may be relaying out.
-        if (followLatest && !scroll.isScrollInProgress) scroll.requestScrollToItem(0)
+    LaunchedEffect(scroll, followLatest, messages.isNotEmpty()) {
+        if (!followLatest || messages.isEmpty()) return@LaunchedEffect
+        if (!initiallyPositioned) withFrameNanos { }
+        // Observe measured content, including asynchronous Markdown and composer
+        // resizing. Serial collection lets each animation finish while coalescing
+        // new layouts; a token must not cancel and restart the animation.
+        snapshotFlow { scroll.layoutInfo }.collect { layout ->
+            if (layout.totalItemsCount > 0) {
+                if (!initiallyPositioned) {
+                    scroll.scrollToItem(layout.totalItemsCount - 1)
+                    initiallyPositioned = true
+                } else if (scroll.canScrollForward) {
+                    scroll.animateScrollToItem(layout.totalItemsCount - 1)
+                }
+            }
+        }
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-    LazyColumn(
-        Modifier.weight(1f).fillMaxWidth().testTag("timeline"),
-        state = scroll,
-        reverseLayout = true,
-        contentPadding = PaddingValues(
-            horizontal = if (cover) 12.dp else 20.dp,
-            vertical = if (cover) 8.dp else 20.dp,
-        ),
-        verticalArrangement = Arrangement.spacedBy(
-            if (cover) 12.dp else 20.dp,
-            Alignment.Bottom,
-        ),
-    ) {
-        if (st.busy || st.activeTurn != null)
-            item(key = "activity") {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-                    Text(
-                        if (st.busy && st.journal != null)
-                            StockWorkspaceAdapter.progress(st.journal.str("stage"))
-                        else if (st.busy) "Updating…"
-                        else "Working on ${st.host.displayName}",
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+    Box(Modifier.weight(1f).fillMaxWidth()) {
+        LazyColumn(
+            Modifier.fillMaxSize().nestedScroll(readingScroll).testTag("timeline"),
+            state = scroll,
+            contentPadding = PaddingValues(
+                horizontal = if (cover) 12.dp else 20.dp,
+                vertical = if (cover) 8.dp else 20.dp,
+            ),
+            verticalArrangement = Arrangement.spacedBy(
+                if (cover) 12.dp else 20.dp,
+                Alignment.Bottom,
+            ),
+        ) {
+            if (st.historyCursor != null)
+                item(key = "history") {
+                    TextButton(onClick = actions::older, modifier = Modifier.fillMaxWidth()) {
+                        Glyph(R.drawable.ic_up)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Load earlier messages")
+                    }
                 }
-            }
-        if (st.attention && st.decisions.isEmpty())
-            item {
-                Text(
-                    "Needs attention. Approval details are unavailable here; open this task on desktop.",
-                    color = MaterialTheme.colorScheme.primary,
+            items(messages, key = { it.key }) { entry ->
+                Message(
+                    entry = entry,
+                    actions = actions,
+                    visualizationScope = "${st.host.endpoint}/${st.thread}/${entry.key}",
+                    canImplement =
+                        entry.key == actionablePlan?.key &&
+                            st.ready &&
+                            !st.busy &&
+                            st.activeTurn == null &&
+                            st.queuedMessages.isEmpty() &&
+                            st.queueReady &&
+                            st.journal == null,
+                    onImplement = { actions.implementPlan(entry.key) },
                 )
             }
-        st.journal?.let { journal ->
-            item {
-                Card {
-                    Column(Modifier.padding(16.dp)) {
-                        Text(
-                            when {
-                                st.busy -> StockWorkspaceAdapter.progress(journal.str("stage")).trimEnd('…')
-                                journal.containsKey("queuedMessage") -> "Queue action needs review"
-                                journal.str("failure").isNotEmpty() -> "Setup needs attention"
-                                journal.str("stage") == "accepted" -> "Message accepted"
-                                else -> "Operation needs review"
-                            },
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Text(
-                            journal.str("failure").ifEmpty {
-                                "This operation will not be sent again automatically. Check the task on ${st.host.displayName} before discarding its record."
-                            },
-                            Modifier.padding(vertical = 8.dp),
-                            fontSize = 13.sp,
-                        )
-                        SelectionContainer {
+            items(st.decisions, key = { it.key }) { decision ->
+                DecisionCard(decision, st, actions)
+            }
+            if (st.attention && st.decisions.isEmpty())
+                item(key = "attention") {
+                    Text(
+                        "Needs attention. Approval details are unavailable here; open this task on desktop.",
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            st.journal?.let { journal ->
+                item(key = "journal") {
+                    Card {
+                        Column(Modifier.padding(16.dp)) {
                             Text(
-                                if (journal.containsKey("queuedMessage")) journal.str("text")
-                                else "Task: ${journal.str("threadId").ifEmpty { "ID not received" }}\nWorkspace: ${journal.str("cwd").ifEmpty { "Existing task" }}",
-                                fontSize = 11.sp,
+                                when {
+                                    st.busy -> StockWorkspaceAdapter.progress(journal.str("stage")).trimEnd('…')
+                                    journal.containsKey("queuedMessage") -> "Queue action needs review"
+                                    journal.str("failure").isNotEmpty() -> "Setup needs attention"
+                                    journal.str("stage") == "accepted" -> "Message accepted"
+                                    else -> "Operation needs review"
+                                },
+                                fontWeight = FontWeight.Bold,
                             )
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            if (!st.busy && st.ready) {
-                                TextButton(
-                                    onClick = actions::recoverPreparation,
-                                    modifier = Modifier.testTag("check-setup"),
-                                ) {
-                                    Text(
-                                        if (journal.str("stage") in setOf("queuedRemoved", "queuedSteerRejected"))
-                                            "Send saved message"
-                                        else "Check and continue"
-                                    )
+                            Text(
+                                journal.str("failure").ifEmpty {
+                                    "This operation will not be sent again automatically. Check the task on ${st.host.displayName} before discarding its record."
+                                },
+                                Modifier.padding(vertical = 8.dp),
+                                fontSize = 13.sp,
+                            )
+                            SelectionContainer {
+                                Text(
+                                    if (journal.containsKey("queuedMessage")) journal.str("text")
+                                    else "Task: ${journal.str("threadId").ifEmpty { "ID not received" }}\nWorkspace: ${journal.str("cwd").ifEmpty { "Existing task" }}",
+                                    fontSize = 11.sp,
+                                )
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                if (!st.busy && st.ready) {
+                                    TextButton(
+                                        onClick = actions::recoverPreparation,
+                                        modifier = Modifier.testTag("check-setup"),
+                                    ) {
+                                        Text(
+                                            if (journal.str("stage") in setOf("queuedRemoved", "queuedSteerRejected"))
+                                                "Send saved message"
+                                            else "Check and continue"
+                                        )
+                                    }
+                                }
+                                TextButton(onClick = { confirmUnlock = true }) {
+                                    Text("Discard record…")
                                 }
                             }
-                            TextButton(onClick = { confirmUnlock = true }) {
-                                Text("Discard record…")
-                            }
                         }
                     }
                 }
             }
-        }
-        items(st.decisions.reversed(), key = { it.key }) { decision ->
-            DecisionCard(decision, st, actions)
-        }
-        items(messages.asReversed(), key = { it.key }) { entry ->
-            Message(
-                entry = entry,
-                actions = actions,
-                canImplement =
-                    entry.key == actionablePlan?.key &&
-                        st.ready &&
-                        !st.busy &&
-                        st.activeTurn == null &&
-                        st.queuedMessages.isEmpty() &&
-                        st.queueReady &&
-                        st.journal == null,
-                onImplement = { actions.implementPlan(entry.key) },
-            )
-        }
-        if (st.historyCursor != null)
-            item(key = "history") {
-                TextButton(onClick = actions::older, modifier = Modifier.fillMaxWidth()) {
-                    Glyph(R.drawable.ic_up)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Load earlier messages")
-                }
-            }
-        if (st.entries.isEmpty() && st.thread == null)
-            item(key = "empty") {
-                Column(
-                    Modifier.fillMaxWidth().fillParentMaxHeight()
-                        .padding(vertical = if (cover) 8.dp else 40.dp),
-                    verticalArrangement = Arrangement.spacedBy(
-                        if (cover) 8.dp else 14.dp,
-                        Alignment.CenterVertically,
-                    ),
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(16.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant,
+            if (st.busy || st.activeTurn != null)
+                item(key = "activity") {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        Box(
-                            Modifier.size(if (cover) 40.dp else 52.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Glyph(
-                                R.drawable.ic_compose,
-                                modifier = Modifier.size(if (cover) 20.dp else 26.dp),
-                            )
-                        }
-                    }
-                    Text(
-                        "What shall we work on?",
-                        fontSize = if (cover) 22.sp else 28.sp,
-                        lineHeight = if (cover) 26.sp else 34.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    if (!cover)
+                        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
                         Text(
-                            "Ask a question, investigate an issue,\nor pick up an idea.",
+                            if (st.busy && st.journal != null)
+                                StockWorkspaceAdapter.progress(st.journal.str("stage"))
+                            else if (st.busy) "Updating…"
+                            else "Working on ${st.host.displayName}",
+                            fontSize = 13.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
                 }
+            if (st.entries.isEmpty() && st.thread == null)
+                item(key = "empty") {
+                    Column(
+                        Modifier.fillMaxWidth().fillParentMaxHeight()
+                            .padding(vertical = if (cover) 8.dp else 40.dp),
+                        verticalArrangement = Arrangement.spacedBy(
+                            if (cover) 8.dp else 14.dp,
+                            Alignment.CenterVertically,
+                        ),
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                        ) {
+                            Box(
+                                Modifier.size(if (cover) 40.dp else 52.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Glyph(
+                                    R.drawable.ic_compose,
+                                    modifier = Modifier.size(if (cover) 20.dp else 26.dp),
+                                )
+                            }
+                        }
+                        Text(
+                            "What shall we work on?",
+                            fontSize = if (cover) 22.sp else 28.sp,
+                            lineHeight = if (cover) 26.sp else 34.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        if (!cover)
+                            Text(
+                                "Ask a question, investigate an issue,\nor pick up an idea.",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                    }
+                }
+            if (messages.isNotEmpty())
+                item(key = "latest-end") { Spacer(Modifier.height(1.dp)) }
+        }
+        if (!followLatest)
+            FilledTonalIconButton(
+                onClick = { followLatest = true },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp)
+                    .testTag("jump-to-latest"),
+            ) {
+                Glyph(R.drawable.ic_down, "Jump to latest")
             }
     }
     if (!cover || st.decisions.isEmpty())
@@ -262,6 +294,7 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
 private fun Message(
     entry: Entry,
     actions: ConversationActions,
+    visualizationScope: String,
     canImplement: Boolean,
     onImplement: () -> Unit,
 ) {
@@ -291,7 +324,7 @@ private fun Message(
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             MediaGallery(entry.media, actions)
             if (entry.text.isNotBlank())
-                SelectionContainer { FileAwareMarkdown(entry.text.take(100000), actions) }
+                VisualizationAwareMarkdown(entry.text.take(100000), visualizationScope, entry.completed, actions)
         }
     else if (entry.kind == "plan") {
         Card(
