@@ -22,18 +22,24 @@ on the phone. If a reply is lost, **Check merge state…** reconciles the host
 receipt and Git state without resending the merge. Submodules are not supported
 by this control in v1.
 
-Take a screenshot while the app is open and tap **Report bug** in the snackbar
-(Android 14+), or use **⋮ → Report a bug**, to save a
+Take a screenshot while the app is open and tap **Report or request** in the snackbar
+(Android 14+), or use **⋮ → Report or request**, to save a
 report with a screenshot, recent app logs, available process-exit diagnostics,
-and frozen conversation/task context. Describe the problem, review or remove
-artifacts, and choose **Start fix task**. The report creates an isolated
-remote-codex worktree, runs its environment setup, and starts an ordinary fix task
-on Grace. Settings includes an **Offer a bug report after screenshots** toggle
-(on by default) and an opt-in **Shake to report a bug** toggle, which is off by
+and frozen conversation/task context. Choose **Investigate**, **Research**, **Plan**,
+or **Implement**, describe your request, and preview or remove evidence on the same
+form. **Review request** shows the destination, editable title, and complete message
+before you explicitly start the task. Only Implement authorizes code changes;
+the other intents use the server's Plan mode. Missing mode support keeps the draft
+saved instead of falling back to implementation. Submitting creates an isolated
+remote-codex worktree, runs its environment setup, and starts the selected task on
+Grace. **Last report task** opens it. Reports do not publish, deploy, or install updates.
+Settings includes an **Offer a report after screenshots** toggle
+(on by default) and an opt-in **Shake to report or request** toggle, which is off by
 default because shaking can trigger Motorola's flashlight gesture.
 
 Reports remain on the phone while offline and across restarts. Reopening a saved
-report preserves its original evidence. Screenshots are omitted on the Settings
+report preserves its intent, text, review, and original evidence; reconnecting never
+submits automatically. Screenshots are omitted on the Settings
 screen, which contains connection credentials. App logs cover this application's
 UID only; optional full Android bug-report archives can be added as files within
 the existing 20 MiB per-file / 50 MiB total limits. Capture failures are listed

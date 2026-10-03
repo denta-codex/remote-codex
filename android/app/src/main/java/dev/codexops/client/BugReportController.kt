@@ -89,7 +89,7 @@ internal class BugReportController(
                     val files = mutableListOf<DraftAttachment>()
                     withContext(Dispatchers.IO) {
                         files += store.attachment(id, "context.json", safeContext.toString().toByteArray(), "application/json")
-                        val readable = "Remote Codex bug report $id\nCaptured at epoch milliseconds $instant\n\n" +
+                        val readable = "Remote Codex report $id\nCaptured at epoch milliseconds $instant\n\n" +
                             Json { prettyPrint = true }.encodeToString(JsonObject.serializer(), safeContext)
                         files += store.attachment(id, "context.txt", readable.toByteArray())
                     }
@@ -128,19 +128,37 @@ internal class BugReportController(
 
     fun close() { _state.update { it.copy(visible = false) } }
 
-    fun describe(text: String) {
-        if (_state.value.busy || _state.value.draft?.journal?.isNotEmpty() == true) return
+    fun describe(text: String) = updateDraft { it.copy(description = text, review = obj()) }
+
+    fun chooseIntent(intent: ReportIntent) = updateDraft {
+        it.copy(intent = intent, title = if (intent == it.intent) it.title else "", review = obj())
+    }
+
+    fun title(text: String) = updateDraft {
+        it.copy(title = text, review = if (it.review.isEmpty()) obj() else JsonObject(it.review + ("name" to s(text))))
+    }
+
+    fun editRequest() = updateDraft { it.copy(review = obj()) }
+
+    private fun updateDraft(change: (BugReportDraft) -> BugReportDraft) {
+        if (_state.value.busy || _state.value.capturing || _state.value.draft?.journal?.isNotEmpty() == true) return
         val draft = _state.value.draft ?: return
-        _state.update { it.copy(draft = draft.copy(description = text), error = null) }
+        _state.update { it.copy(draft = change(draft), error = null) }
         scope.launch { lock.withLock {
             try { _state.value.draft?.let { saveOnly(it) } }
-            catch (_: Exception) { _state.update { it.copy(error = "The report description could not be saved. Keep this screen open and try again.") } }
+            catch (_: Exception) { _state.update { it.copy(error = "The request could not be saved. Keep this screen open and try again.") } }
         } }
+    }
+
+    fun review() = edit { draft ->
+        require(current().ready) { "Reconnect to review the destination. Your draft is saved." }
+        withContext(Dispatchers.IO) { store.validate(draft) }
+        BugReportSubmission(rpc, host).prepare(draft, current().models.firstOrNull { it.isDefault }?.id)
     }
 
     fun removeAttachment(id: String) = edit { draft ->
         val file = draft.attachments.firstOrNull { it.id == id } ?: return@edit draft
-        val next = draft.copy(attachments = draft.attachments.filterNot { it.id == id },
+        val next = draft.copy(attachments = draft.attachments.filterNot { it.id == id }, review = obj(),
             diagnostics = JsonObject(draft.diagnostics + ("removed-$id" to obj("status" to s("removed"), "message" to s("${file.displayName} was removed by the reporter.")))))
         saveOnly(next) // Persist removal before deleting bytes.
         withContext(Dispatchers.IO) { store.removeAttachment(draft.id, file) }
@@ -157,7 +175,7 @@ internal class BugReportController(
                     File(file.localPath).copyTo(target)
                     file.copy(localPath = target.path)
                 }
-                draft = draft.copy(attachments = draft.attachments + stored)
+                draft = draft.copy(attachments = draft.attachments + stored, review = obj())
                 persist(draft)
             } finally { importer.delete(file) }
         }
@@ -178,11 +196,13 @@ internal class BugReportController(
 
     fun discard() {
         if (_state.value.busy || _state.value.capturing || _state.value.draft?.journal?.isNotEmpty() == true) return
+        _state.update { it.copy(busy = true) }
         scope.launch { lock.withLock {
             try {
                 _state.value.draft?.let { withContext(Dispatchers.IO) { store.discard(it) } }
                 _state.update { it.copy(draft = null, visible = false, error = null) }
             } catch (_: Exception) { _state.update { it.copy(error = "The saved report could not be discarded.") } }
+            finally { _state.update { it.copy(busy = false) } }
         } }
     }
 
@@ -199,9 +219,11 @@ internal class BugReportController(
             return
         }
         if (current().busy) {
-            _state.update { it.copy(error = "Wait for the current app operation to finish, then start the fix task.") }
+            _state.update { it.copy(error = "Wait for the current app operation to finish, then start the task.") }
             return
         }
+        if (before.draft?.journal?.isEmpty() == true &&
+            (before.draft.review.isEmpty() || before.draft.title.isBlank())) return
         _state.update { it.copy(busy = true, error = null) }
         scope.launch { lock.withLock {
             try {

@@ -10,6 +10,50 @@ import kotlinx.serialization.json.*
 internal class BugReportSubmission(private val rpc: RemoteSession, private val host: HostIdentity) {
     private val workspaces = StockWorkspaceAdapter(rpc)
 
+    /** Read-only preparation; nothing on the host is created until the reviewed draft is submitted. */
+    suspend fun prepare(draft: BugReportDraft, defaultModel: String?): BugReportDraft {
+        val intent = requireNotNull(draft.intent) { "Choose what Codex should do." }
+        val presets = try {
+            CollaborationModePreset.parse(rpc.call("collaborationMode/list", obj()))
+        } catch (_: RpcRejected) {
+            emptyList()
+        }
+        val modeSetting = presets.singleOrNull { it.mode == intent.mode }?.turnSetting(defaultModel)
+        require(modeSetting != null) { "${intent.name} requires an available ${intent.mode} mode and model. Your draft is saved; reconnect and review again." }
+
+        require(draft.canReview) { "Choose an intent and describe your request." }
+        require(draft.journal.isEmpty()) { "This report has already started." }
+        val projects = mutableListOf<JsonObject>()
+        var cursor: String? = null
+        val seen = mutableSetOf<String>()
+        do {
+            val page = rpc.call("project/list", obj("limit" to JsonPrimitive(100), "cursor" to cursor?.let(::s)))
+            projects += page.list("data")
+            cursor = page.cursor()
+            check(projects.size <= 5000 && (cursor == null || seen.add(cursor))) { "Project listing did not complete." }
+        } while (cursor != null)
+        val matches = projects.filter { it.list("roots").any { root -> root.str("path").trimEnd('/') == host.bugReportRepository } }
+        require(matches.size == 1) { "The configured remote-codex checkout must belong to exactly one project on ${host.displayName}." }
+        val plan = WorkspacePlans.create(NewTaskOptions(projectId = matches.single().str("id"),
+            workingDirectory = host.bugReportRepository, executionTarget = ExecutionTarget.NewWorktree), draft.id, host.expectedCodexHome)
+        workspaces.validateSelectedProject(plan)
+        val origin = command(listOf("git", "-C", host.bugReportRepository, "remote", "get-url", "origin")).str("stdout").trim()
+        require(validBugReportOrigin(origin)) { "The reporting checkout does not identify denta-codex/remote-codex." }
+        val commit = workspaces.resolveDefaultCommit(host.bugReportRepository)
+        val input = reportInput(draft, "${plan.worktreeRoot}/report", commit)
+        val review = obj("projectId" to s(requireNotNull(plan.projectId)), "cwd" to s(plan.workingDirectory),
+            "root" to s(requireNotNull(plan.worktreeRoot)), "commit" to s(commit),
+            "projectName" to s(matches.single().str("name").ifBlank { "Remote Codex" }),
+            "name" to s(draft.taskTitle),
+            "submissionVersion" to JsonPrimitive(2),
+            "intent" to s(intent.name),
+            "collaborationMode" to modeSetting,
+            "input" to input,
+            "prompt" to s((input.first() as JsonObject).str("text")),
+        )
+        return draft.copy(title = draft.taskTitle, review = review)
+    }
+
     suspend fun run(initial: BugReportDraft, save: suspend (BugReportDraft) -> Unit): BugReportDraft {
         var draft = initial
         suspend fun record(stage: String, vararg fields: Pair<String, JsonElement>) {
@@ -18,27 +62,19 @@ internal class BugReportSubmission(private val rpc: RemoteSession, private val h
             draft = next
         }
         if (draft.journal.isEmpty()) {
-            require(draft.description.isNotBlank()) { "Describe what went wrong." }
-            val projects = mutableListOf<JsonObject>()
-            var cursor: String? = null
-            val seen = mutableSetOf<String>()
-            do {
-                val page = rpc.call("project/list", obj("limit" to JsonPrimitive(100), "cursor" to cursor?.let(::s)))
-                projects += page.list("data")
-                cursor = page.cursor()
-                check(projects.size <= 5000 && (cursor == null || seen.add(cursor))) { "Project listing did not complete." }
-            } while (cursor != null)
-            val matches = projects.filter { it.list("roots").any { root -> root.str("path").trimEnd('/') == host.bugReportRepository } }
-            require(matches.size == 1) { "The configured remote-codex checkout must belong to exactly one project on ${host.displayName}." }
-            val plan = WorkspacePlans.create(NewTaskOptions(projectId = matches.single().str("id"),
-                workingDirectory = host.bugReportRepository, executionTarget = ExecutionTarget.NewWorktree), draft.id, host.expectedCodexHome)
-            workspaces.validateSelectedProject(plan)
-            val origin = command(listOf("git", "-C", host.bugReportRepository, "remote", "get-url", "origin")).str("stdout").trim()
-            require(validBugReportOrigin(origin)) { "The reporting checkout does not identify denta-codex/remote-codex." }
-            val commit = workspaces.resolveDefaultCommit(host.bugReportRepository)
-            record("validated", "projectId" to s(requireNotNull(plan.projectId)), "cwd" to s(plan.workingDirectory),
-                "root" to s(requireNotNull(plan.worktreeRoot)), "commit" to s(commit),
-                "name" to s("Bug: " + draft.description.lineSequence().first().take(100)))
+            require(draft.canReview && draft.review.isNotEmpty()) { "Review the request before starting a task." }
+            val review = draft.review
+            val input = reportInput(draft, "${review.str("root")}/report", review.str("commit"))
+            require(review.str("name") == draft.taskTitle &&
+                review["input"] == input && review.str("prompt") == (input.first() as JsonObject).str("text") &&
+                review.str("intent") == draft.intent?.name &&
+                review.map("collaborationMode").str("mode") == draft.intent?.mode) {
+                "The request changed. Review it again before starting."
+            }
+            // Freeze everything before the first host mutation. The draft owns the selected attachments.
+            val frozen = draft.copy(journal = JsonObject(review + ("stage" to s("validated"))), review = obj())
+            save(frozen)
+            draft = frozen
         }
 
         val root = draft.journal.str("root")
@@ -135,14 +171,21 @@ internal class BugReportSubmission(private val rpc: RemoteSession, private val h
             record("named")
         }
         if (draft.journal.str("stage") == "named") {
-            val prompt = bugReportPrompt(draft, evidence)
-            val attachments = draft.attachments.mapIndexed { index, file -> TurnAttachment(file.kind, file.displayName, remotePath(evidence, index, file)) }
+            val input = if (draft.journal.str("submissionVersion") == "2") draft.journal["input"] as JsonArray
+                else reportInput(draft, evidence, draft.journal.str("commit"), legacySubmission = true)
             record("sending")
-            // A newly created thread uses the server's default implementation mode and model.
-            rpc.call("turn/start", turnStartParams(threadId, turnInput(prompt, attachments), draft.id, NewTaskOptions()))
+            val mode = if (draft.journal.str("submissionVersion") == "2") draft.journal.map("collaborationMode") else null
+            rpc.call("turn/start", turnStartParams(threadId, input, draft.id, NewTaskOptions(), mode))
             record("accepted")
         }
         return draft
+    }
+
+    private fun reportInput(draft: BugReportDraft, evidence: String, revision: String, legacySubmission: Boolean = false): JsonArray {
+        val attachments = draft.attachments.mapIndexed { index, file ->
+            TurnAttachment(file.kind, file.displayName, remotePath(evidence, index, file))
+        }
+        return turnInput(bugReportPrompt(draft, evidence, revision, legacySubmission), attachments)
     }
 
     private suspend fun command(argv: List<String>, timeout: Long = 30_000): JsonObject {

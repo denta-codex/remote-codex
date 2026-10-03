@@ -122,6 +122,15 @@ constructor(
 
     init {
         viewModelScope.launch {
+            state.map { Triple(it.ready && it.page == "chat", it.thread, it.settingsCwd()) }
+                .distinctUntilChanged().collectLatest { (active, _, cwd) ->
+                    _state.update { it.copy(inheritedSettings = InheritedSettings(cwd,
+                        if (active && cwd != null) ModelCatalogStatus.Loading else ModelCatalogStatus.Unavailable)) }
+                    if (active && cwd != null) readComposerConfig(cwd)
+                }
+        }
+
+        viewModelScope.launch {
             combine(state.map { Triple(it.page, it.ready && it.appForeground, it.thread) }.distinctUntilChanged(), visibleChatIds) { state, ids ->
                 val (page, active, thread) = state
                 (if (page in listOf("home", "archives")) ids else if (page == "chat" && thread != null) setOf(thread) else emptySet()) to active
@@ -181,8 +190,6 @@ constructor(
                             ready = false,
                             queueReady = false,
                             collaborationModes = emptyList(),
-                            newTaskOptions =
-                                it.newTaskOptions.copy(collaborationMode = null),
                             error = null,
                             configured = true,
                             modelCatalogStatus = ModelCatalogStatus.Loading,
@@ -213,6 +220,8 @@ constructor(
                                 connection = "Connected to ${host.displayName}",
                                 ready = true,
                                 collaborationModes = modes,
+                                newTaskOptions = if (modes.any { mode -> mode.mode == it.newTaskOptions.collaborationMode })
+                                    it.newTaskOptions else it.newTaskOptions.copy(collaborationMode = null),
                             )
                         }
                         refreshProjects()
@@ -673,6 +682,10 @@ constructor(
             val savedOptions = parseNewTaskOptions(local.get("options/new"))
             val options = journal?.let { optionsFromJournal(it, savedOptions) } ?: savedOptions
             _state.update {
+                val reconciled = if (it.modelCatalogStatus == ModelCatalogStatus.Ready)
+                    reconcileModelOptions(options, it.models, null).options else options
+                val restored = if (it.ready && it.collaborationModes.none { mode -> mode.mode == reconciled.collaborationMode })
+                    reconciled.copy(collaborationMode = null) else reconciled
                 it.copy(
                     page = "chat",
                     thread = null,
@@ -688,8 +701,9 @@ constructor(
                     historyCursor = null,
                     draft = draft,
                     attachments = attachments,
-                    newTaskOptions = options,
+                    newTaskOptions = restored,
                     threadModel = null,
+                    threadMode = null,
                     threadReasoningEffort = null,
                     journal = journal,
                     error = null,
@@ -747,6 +761,7 @@ constructor(
                 attachments = emptyList(),
                 newTaskOptions = NewTaskOptions(),
                 threadModel = null,
+                threadMode = null,
                 threadReasoningEffort = null,
                 error = null,
                 busy = true,
@@ -798,7 +813,7 @@ constructor(
                     it.map("params").str("threadId") == id
             }
             _state.update {
-                val threadModel = thread.str("model").takeIf(String::isNotBlank)
+                val threadModel = response.str("model").takeIf(String::isNotBlank)
                 val options =
                     reconcileModelOptions(
                         it.newTaskOptions,
@@ -814,7 +829,7 @@ constructor(
                     newTaskOptions = options.options,
                     threadModel = threadModel,
                     threadReasoningEffort =
-                        thread.str("reasoningEffort").takeIf(String::isNotBlank),
+                        response.str("reasoningEffort").takeIf(String::isNotBlank),
                     threadCwd = thread.str("cwd").takeIf(String::isNotBlank),
                     modelCatalogMessage =
                         if (options.removedUnsupportedChoice)
@@ -862,12 +877,12 @@ constructor(
                     modelCatalogMessage =
                         if (it.modelCatalogStatus == ModelCatalogStatus.Loading)
                             "The model catalog is still loading."
-                        else "Models are unavailable. Reconnect to try again."
+                        else "Models are unavailable. Refresh models in Conversation settings."
                 )
             } else {
                 val reconciled =
                     if (it.modelCatalogStatus == ModelCatalogStatus.Ready)
-                        reconcileModelOptions(normalized, it.models, it.threadModel)
+                        reconcileModelOptions(normalized, it.models, it.threadModel ?: it.inheritedSettings.takeIf { config -> config.cwd == it.settingsCwd() }?.model)
                     else ReconciledModelOptions(normalized, removedUnsupportedChoice = false)
                 it.copy(
                     newTaskOptions = reconciled.options,
@@ -885,6 +900,35 @@ constructor(
                     newTaskOptionsJson(_state.value.newTaskOptions).toString(),
                 )
             }
+    }
+
+    override fun refreshModels() {
+        if (!_state.value.ready || _state.value.modelCatalogStatus == ModelCatalogStatus.Loading) return
+        viewModelScope.launch { refreshModelCatalog() }
+        _state.value.settingsCwd()?.let { cwd -> viewModelScope.launch { readComposerConfig(cwd) } }
+    }
+
+    private suspend fun readComposerConfig(cwd: String) {
+        try {
+            val result = rpc.call("config/read", obj("cwd" to s(cwd), "includeLayers" to JsonPrimitive(false)))
+            _state.update {
+                if (it.ready && it.settingsCwd() == cwd) {
+                    val config = parseInheritedSettings(result, cwd)
+                    val reconciled = if (it.modelCatalogStatus == ModelCatalogStatus.Ready)
+                        reconcileModelOptions(it.newTaskOptions, it.models, it.threadModel ?: config.model)
+                    else ReconciledModelOptions(it.newTaskOptions, false)
+                    it.copy(inheritedSettings = config, newTaskOptions = reconciled.options,
+                        modelCatalogMessage = if (reconciled.removedUnsupportedChoice)
+                            "The selected reasoning is unavailable for this project's model. The override was cleared."
+                        else it.modelCatalogMessage)
+                } else it
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            _state.update {
+                if (it.settingsCwd() == cwd) it.copy(inheritedSettings = InheritedSettings(cwd, ModelCatalogStatus.Error)) else it
+            }
+        }
     }
 
     private suspend fun refreshModelCatalog() {
@@ -914,7 +958,7 @@ constructor(
             val catalog = rows.distinctBy(ServerModelOption::id)
             _state.update {
                 val reconciled =
-                    reconcileModelOptions(it.newTaskOptions, catalog, it.threadModel)
+                    reconcileModelOptions(it.newTaskOptions, catalog, it.threadModel ?: it.inheritedSettings.takeIf { config -> config.cwd == it.settingsCwd() }?.model)
                 it.copy(
                     models = catalog,
                     modelCatalogStatus = ModelCatalogStatus.Ready,
@@ -938,7 +982,7 @@ constructor(
                 it.copy(
                     modelCatalogStatus = ModelCatalogStatus.Error,
                     modelCatalogMessage =
-                        "Could not load models from ${host.displayName}. Reconnect to try again.",
+                        "Could not load models from ${host.displayName}. Refresh models to try again.",
                 )
             }
         }
@@ -1498,10 +1542,9 @@ constructor(
                         title = journal.str("text").take(80).ifBlank { "Attachment message" },
                         journal = journal,
                         threadModel =
-                            thread.str("model").takeIf(String::isNotBlank)
-                                ?: journal.str("model").takeIf(String::isNotBlank),
+                            result.str("model").takeIf(String::isNotBlank),
                         threadReasoningEffort =
-                            thread.str("reasoningEffort").takeIf(String::isNotBlank),
+                            result.str("reasoningEffort").takeIf(String::isNotBlank),
                     )
                 }
                 stage = "taskReady"
@@ -2062,6 +2105,8 @@ constructor(
                 it.copy(
                     threadModel = threadModel,
                     threadReasoningEffort = settings.str("effort").takeIf(String::isNotBlank),
+                    threadCwd = settings.str("cwd").takeIf(String::isNotBlank) ?: it.threadCwd,
+                    threadMode = settings.map("collaborationMode").str("mode").takeIf(String::isNotBlank),
                     newTaskOptions = reconciled.options,
                     modelCatalogMessage =
                         if (reconciled.removedUnsupportedChoice)

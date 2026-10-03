@@ -3,417 +3,336 @@ package dev.codexops.client
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.io.File
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun ConversationComposer(
-    state: ScreenState,
-    actions: ConversationActions,
-    onSend: () -> Unit,
-) {
+internal fun ConversationComposer(state: ScreenState, actions: ConversationActions, onSend: () -> Unit) {
     val keyboard = LocalSoftwareKeyboardController.current
-    val picker =
-        rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) {
-            actions.addAttachments(it)
-        }
-    val filePicker =
-        rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) {
-            actions.addFiles(it)
-        }
-    val camera =
-        rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) {
-            actions.finishCamera(it)
-        }
-    var projectMenu by remember { mutableStateOf(false) }
-    var modeMenu by remember { mutableStateOf(false) }
-    var addMenu by remember { mutableStateOf(false) }
+    val focus = LocalFocusManager.current
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) {
+        actions.addAttachments(it)
+    }
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) {
+        actions.addFiles(it)
+    }
+    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { actions.finishCamera(it) }
+    var tray by rememberSaveable(state.thread) { mutableStateOf(false) }
     val window = LocalAppWindowClass.current
-    val landscape = window.compactHeight && !window.compactWidth
-    val compact = window.coverScreen || landscape
-    var optionsOpen by remember { mutableStateOf(false) }
-    val compactTyping = compact && WindowInsets.ime.getBottom(LocalDensity.current) > 0
-    val selectedProject =
-        state.newTaskOptions.projectId?.let { id -> state.projects.firstOrNull { it.id == id } }
-    val projectAvailable =
-        state.newTaskOptions.projectId == null || selectedProject?.primaryRoot != null
-    val modes =
-        state.collaborationModes.filter {
-            it.turnSetting(state.collaborationModel()) != null
-        }
-    val selectedMode = modes.firstOrNull { it.mode == state.newTaskOptions.collaborationMode }
-    val composerStatus =
-        when {
-            state.waitingToSendMode() ->
-                "${selectedMode?.name ?: "Mode"} selected · send when the task is idle"
-            state.activeTurn != null -> "Sends after this turn · uses task settings"
-            state.queuedMessages.isNotEmpty() -> "Queue paused · tap Send now to continue"
-            state.thread == null && !projectAvailable ->
-                "Choose an available project or No project"
-            state.newTaskOptions.model != null ||
-                state.newTaskOptions.reasoningEffort != null ->
-                "Explicit overrides apply to the next turn"
-            state.thread == null && selectedProject != null ->
-                selectedProject.primaryRoot.orEmpty()
-            else -> "${state.host.displayName} defaults"
-        }
-    val taskControls: @Composable () -> Unit = {
-        if (state.thread == null) {
-            Box(Modifier.padding(start = 8.dp, top = 2.dp)) {
-                AssistChip(
-                    onClick = { projectMenu = true },
-                    label = {
-                        Text(
-                            selectedProject?.name
-                                ?: if (state.newTaskOptions.projectId == null) "No project"
-                                else "Project unavailable"
-                        )
-                    },
-                    leadingIcon = {
-                        Glyph(
-                            if (state.newTaskOptions.projectId == null) R.drawable.ic_chat
-                            else R.drawable.ic_folder,
-                            modifier = Modifier.size(16.dp),
-                        )
-                    },
-                    modifier = Modifier.testTag("project-selector"),
-                )
-                DropdownMenu(projectMenu, { projectMenu = false }) {
-                    DropdownMenuItem(
-                        text = { Text("No project") },
-                        onClick = {
-                            projectMenu = false
-                            actions.updateNewTaskOptions(
-                                state.newTaskOptions.copy(
-                                    projectId = null,
-                                    workingDirectory = null,
-                                    executionTarget = ExecutionTarget.Projectless,
-                                )
-                            )
-                        },
-                        leadingIcon = { Glyph(R.drawable.ic_chat) },
-                    )
-                    state.projects.forEach { project ->
-                        DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text(project.name)
-                                    Text(
-                                        project.primaryRoot ?: "No workspace root",
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            },
-                            onClick = {
-                                projectMenu = false
-                                actions.updateNewTaskOptions(
-                                    state.newTaskOptions.copy(
-                                        projectId = project.id,
-                                        workingDirectory = project.primaryRoot,
-                                        executionTarget = ExecutionTarget.CurrentWorkspace,
-                                    )
-                                )
-                            },
-                            enabled = project.primaryRoot != null,
-                            leadingIcon = { Glyph(R.drawable.ic_folder) },
-                        )
-                    }
-                }
-            }
-        }
-        if (state.thread == null && state.newTaskOptions.projectId != null) {
-            val options = state.newTaskOptions
-            Column(
-                Modifier.fillMaxWidth().padding(
-                    horizontal = if (compact) 8.dp else 12.dp,
-                    vertical = if (compact) 2.dp else 6.dp,
-                ),
-                verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 6.dp),
-            ) {
-                Text(
-                    "Workspace",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(
-                        selected = options.executionTarget == ExecutionTarget.CurrentWorkspace,
-                        onClick = {
-                            actions.updateNewTaskOptions(
-                                options.copy(executionTarget = ExecutionTarget.CurrentWorkspace)
-                            )
-                        },
-                        label = { Text("Current") },
-                        modifier = Modifier.testTag("workspace-current"),
-                        enabled = !state.busy && state.journal == null,
-                    )
-                    FilterChip(
-                        selected = options.executionTarget == ExecutionTarget.NewWorktree,
-                        onClick = {
-                            actions.updateNewTaskOptions(
-                                options.copy(executionTarget = ExecutionTarget.NewWorktree)
-                            )
-                        },
-                        label = { Text("New worktree") },
-                        modifier = Modifier.testTag("workspace-new-worktree"),
-                        enabled = !state.busy && state.journal == null,
-                    )
-                }
-                if (!compact)
-                    Text(
-                        when (options.executionTarget) {
-                            ExecutionTarget.NewWorktree ->
-                                "Starts from origin/HEAD in an isolated detached worktree."
-                            else ->
-                                options.workingDirectory?.let { "Uses ${File(it).name.ifBlank { it }} as-is." }
-                                    ?: "Choose a project workspace."
-                        },
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-            }
-        }
+    val compact = window.coverScreen || window.compactHeight
+    val typing = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    val settings = state.composerSettings()
+    val project = state.projects.firstOrNull { it.id == state.newTaskOptions.projectId }
+    val projectAvailable = state.newTaskOptions.projectId == null || project?.primaryRoot != null
+    val bottomActions: @Composable () -> Unit = {
+        ComposerActions(state, actions, settings,
+            onSettings = { focus.clearFocus(); keyboard?.hide(); tray = !tray },
+            onPhotos = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+            onFiles = { filePicker.launch(arrayOf("*/*")) },
+            onCamera = { actions.prepareCamera()?.let(camera::launch) },
+            onSend = { tray = false; onSend(); keyboard?.hide(); actions.send() },
+            projectAvailable = projectAvailable)
     }
     Surface(
-        modifier = Modifier.padding(
-            horizontal = if (compact) 8.dp else 12.dp,
-            vertical = if (compact) 4.dp else 8.dp,
-        ),
+        Modifier.padding(horizontal = if (compact) 8.dp else 12.dp, vertical = if (compact) 4.dp else 8.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = RoundedCornerShape(if (compact) 20.dp else 24.dp),
+        shape = RoundedCornerShape(24.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(Modifier.padding(if (compact) 6.dp else 8.dp)) {
-            if (!compactTyping) MessageQueue(state, actions, compact)
-            if (state.attachments.isNotEmpty())
-                LazyRow(
-                    Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(state.attachments, key = { it.id }) { attachment ->
-                        DraftAttachmentPreview(attachment) {
-                            actions.removeAttachment(attachment.id)
-                        }
-                    }
-                }
-            if (!landscape) taskControls()
-            TextField(
-                state.draft,
-                actions::draft,
-                Modifier.fillMaxWidth().testTag("composer"),
-                placeholder = { Text("Message ${state.host.displayName}…") },
-                minLines = 1,
-                maxLines = when {
-                    landscape && compactTyping -> 1
-                    landscape -> 2
-                    compact -> 3
-                    else -> 6
-                },
-                enabled = !state.busy,
-                colors =
-                    TextFieldDefaults.colors(
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent,
-                        disabledContainerColor = Color.Transparent,
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent,
-                        disabledIndicatorColor = Color.Transparent,
-                    ),
-            )
-            if (!landscape && !state.willQueueMessage() && !compactTyping)
-                ModelControls(state, actions, compact)
-            val showStatus =
-                !landscape && (!compactTyping || state.waitingToSendMode()) && (
-                    state.willQueueMessage() ||
-                    !projectAvailable ||
-                    state.newTaskOptions.model != null ||
-                    state.newTaskOptions.reasoningEffort != null)
-            if (showStatus)
-                Text(
-                    composerStatus,
-                    Modifier.fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 2.dp)
-                        .testTag("composer-status"),
-                    maxLines = if (compact && !state.waitingToSendMode()) 1 else 2,
-                    overflow = TextOverflow.Ellipsis,
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            Row(
-                Modifier.fillMaxWidth().padding(start = if (compact) 4.dp else 12.dp)
-                    .testTag("composer-actions"),
-                verticalAlignment = Alignment.CenterVertically,
+            if (!typing || !compact) MessageQueue(state, actions, compact || typing)
+            if (state.attachments.isNotEmpty()) LazyRow(
+                Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                // The trailing Stop and Send/Queue buttons are measured first; the leading
-                // attachment actions take only the remaining width and scroll if it is too
-                // narrow, so the primary actions stay reachable at any width or font scale.
-                Row(
-                    Modifier.weight(1f).horizontalScroll(rememberScrollState()),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box {
-                        TextButton(
-                            onClick = { addMenu = true },
-                            enabled = !state.busy && state.journal == null,
-                            modifier = Modifier.testTag("add-menu"),
-                        ) { Text("Add") }
-                        DropdownMenu(addMenu, { addMenu = false }) {
-                            DropdownMenuItem(
-                                text = { Text("Photos") },
-                                onClick = {
-                                    addMenu = false
-                                    picker.launch(
-                                        PickVisualMediaRequest(
-                                            ActivityResultContracts.PickVisualMedia.ImageOnly
-                                        )
-                                    )
-                                },
-                                modifier = Modifier.testTag("add-photos"),
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Files") },
-                                onClick = {
-                                    addMenu = false
-                                    filePicker.launch(arrayOf("*/*"))
-                                },
-                                modifier = Modifier.testTag("add-files"),
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Camera") },
-                                onClick = {
-                                    addMenu = false
-                                    actions.prepareCamera()?.let(camera::launch)
-                                },
-                                modifier = Modifier.testTag("add-camera"),
-                            )
-                        }
-                    }
-                    if (landscape)
-                        TextButton(
-                            onClick = {
-                                keyboard?.hide()
-                                optionsOpen = true
-                            },
-                            modifier = Modifier.testTag("composer-options"),
-                        ) { Text("Options") }
-                    if (compactTyping && (state.queuedMessages.isNotEmpty() || state.queueError != null))
-                        TextButton(
-                            onClick = { keyboard?.hide() },
-                            modifier = Modifier.testTag("show-queue"),
-                        ) { Text("Queued (${state.queuedMessages.size})", maxLines = 1) }
-                    if (modes.isNotEmpty())
-                        Box {
-                            TextButton(
-                                onClick = { modeMenu = true },
-                                modifier = Modifier.testTag("mode-selector"),
-                                enabled =
-                                    state.ready &&
-                                        !state.busy &&
-                                        state.journal == null,
-                            ) {
-                                Text(selectedMode?.name ?: "Mode", fontSize = 12.sp)
-                            }
-                            DropdownMenu(
-                                expanded = modeMenu,
-                                onDismissRequest = { modeMenu = false },
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text("Server default") },
-                                    onClick = {
-                                        modeMenu = false
-                                        actions.updateNewTaskOptions(
-                                            state.newTaskOptions.copy(collaborationMode = null)
-                                        )
-                                    },
-                                    modifier = Modifier.testTag("mode-server-default"),
-                                )
-                                modes.forEach { preset ->
-                                    DropdownMenuItem(
-                                        text = { Text(preset.name) },
-                                        onClick = {
-                                            modeMenu = false
-                                            actions.updateNewTaskOptions(
-                                                state.newTaskOptions.copy(
-                                                    collaborationMode = preset.mode
-                                                )
-                                            )
-                                        },
-                                        modifier = Modifier.testTag("mode-${preset.mode}"),
-                                    )
-                                }
-                            }
-                        }
+                items(state.attachments, key = { it.id }) { attachment ->
+                    DraftAttachmentPreview(attachment) { actions.removeAttachment(attachment.id) }
                 }
-                if (state.activeTurn != null)
-                    IconButton(actions::stop, enabled = state.ready) {
-                        Glyph(R.drawable.ic_stop, "Stop")
-                    }
-                FilledIconButton(
-                    {
-                        onSend()
-                        keyboard?.hide()
-                        actions.send()
-                    },
-                    modifier = Modifier.testTag("send").size(if (compact) 44.dp else 48.dp),
-                    enabled =
-                        state.ready &&
-                            !state.busy &&
-                            !state.merge.blocksTask &&
-                            !state.waitingToSendMode() &&
-                            (state.draft.isNotBlank() || state.attachments.isNotEmpty()) &&
-                            state.journal == null &&
-                            (state.thread == null || state.queueReady) &&
-                            (state.thread != null ||
-                                projectAvailable &&
-                                    state.newTaskOptions.hasExecutionDestination()) &&
-                            (state.willQueueMessage() ||
-                                (state.newTaskOptions.model == null &&
-                                    state.newTaskOptions.reasoningEffort == null) ||
-                                state.modelCatalogStatus == ModelCatalogStatus.Ready),
-                ) {
-                    Glyph(
-                        if (state.willQueueMessage()) R.drawable.ic_queue else R.drawable.ic_send,
-                        if (state.willQueueMessage()) "Queue message" else "Send",
-                    )
+            }
+            if (!tray && !state.willQueueMessage() && (!window.compactHeight && !typing || window.coverScreen && !typing))
+                ProjectControl(state, actions, expanded = false)
+            TextField(state.draft, actions::draft, Modifier.fillMaxWidth().testTag("composer"),
+                placeholder = { Text("Message ${state.host.displayName}…") },
+                minLines = if (compact || typing || state.willQueueMessage()) 1 else 2,
+                maxLines = if (window.compactHeight && !window.coverScreen) 2 else if (compact) 3 else 6, enabled = !state.busy,
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
+                    disabledContainerColor = Color.Transparent, focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent))
+            if (state.waitingToSendMode() || state.willQueueMessage() || !projectAvailable)
+                Text(when {
+                    state.waitingToSendMode() -> "${settings.mode} selected · send when the task is idle"
+                    state.willQueueMessage() -> "Sends after this turn · uses task settings"
+                    else -> "Choose an available project or No project"
+                }, Modifier.padding(horizontal = 8.dp).testTag("composer-status"), style = MaterialTheme.typography.bodySmall)
+            if (compact && typing && state.queuedMessages.isNotEmpty())
+                TextButton({ focus.clearFocus(); keyboard?.hide() }, Modifier.testTag("show-queue")) {
+                    Text("Queued (${state.queuedMessages.size})")
+                }
+            if (!tray) bottomActions()
+        }
+    }
+    if (tray) ModalBottomSheet(
+        onDismissRequest = { tray = false },
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+    ) {
+        Column(Modifier.fillMaxWidth().heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.85f).dp)
+            .padding(horizontal = 16.dp).testTag("conversation-tray")) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Conversation", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                IconButton({ tray = false }) { Glyph(R.drawable.ic_close, "Close conversation settings") }
+            }
+            Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                ProjectControl(state, actions, expanded = true)
+                ModelControls(state, actions)
+                ModeControls(state, actions)
+                TextButton(actions::refreshModels, enabled = state.ready && !state.busy && state.modelCatalogStatus != ModelCatalogStatus.Loading) {
+                    Glyph(R.drawable.ic_refresh); Spacer(Modifier.width(8.dp)); Text("Refresh models and settings")
+                }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            bottomActions()
+            Spacer(Modifier.height(8.dp))
+        }
+    }
+}
+
+@Composable
+private fun ComposerActions(
+    state: ScreenState, actions: ConversationActions, settings: ComposerSettings,
+    onSettings: () -> Unit, onPhotos: () -> Unit, onFiles: () -> Unit, onCamera: () -> Unit,
+    onSend: () -> Unit, projectAvailable: Boolean,
+) {
+    var attachments by remember { mutableStateOf(false) }
+    val shortWindow = LocalAppWindowClass.current.let { it.compactHeight && !it.coverScreen }
+    val attachmentControl: @Composable () -> Unit = {
+        Box {
+            OutlinedIconButton({ attachments = true }, Modifier.size(48.dp).testTag("add-menu"),
+                enabled = !state.busy && state.journal == null) { Glyph(R.drawable.ic_attach, "Add attachment") }
+            DropdownMenu(attachments, { attachments = false }) {
+                listOf(Triple("Photos", R.drawable.ic_photo, onPhotos), Triple("Files", R.drawable.ic_file, onFiles),
+                    Triple("Camera", R.drawable.ic_camera, onCamera)).forEach { (label, icon, action) ->
+                    DropdownMenuItem(text = { Text(label) }, leadingIcon = { Glyph(icon) },
+                        onClick = { attachments = false; action() }, modifier = Modifier.testTag("add-${label.lowercase()}"))
                 }
             }
         }
     }
-    if (landscape && optionsOpen)
-        AlertDialog(
-            onDismissRequest = { optionsOpen = false },
-            title = { Text("Message options") },
-            text = {
-                Column(Modifier.verticalScroll(rememberScrollState())) {
-                    taskControls()
-                    ModelControls(state, actions, cover = true)
-                    Text(composerStatus, fontSize = 11.sp)
+    val settingsControl: @Composable (Modifier) -> Unit = { modifier ->
+        OutlinedButton(onSettings, modifier.heightIn(min = 48.dp).testTag("conversation-settings")
+            .semantics { contentDescription = "Conversation settings, ${settings.model}, ${settings.effort}, ${settings.mode}" },
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = if (shortWindow) 4.dp else 8.dp), shape = RoundedCornerShape(28.dp),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSecondaryContainer)) {
+            Glyph(R.drawable.ic_sliders, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(8.dp))
+            Column(Modifier.weight(1f)) {
+                Text("${settings.model} · ${settings.effort}", style = MaterialTheme.typography.labelLarge)
+                Text(settings.mode, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+    val sendControls: @Composable () -> Unit = {
+        if (state.activeTurn != null) IconButton(actions::stop, Modifier.size(48.dp), enabled = state.ready) {
+            Glyph(R.drawable.ic_stop, "Stop")
+        }
+        FilledIconButton(onSend, Modifier.testTag("send").size(48.dp), shape = CircleShape,
+            colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer),
+            enabled = state.ready && !state.busy && !state.merge.blocksTask && !state.waitingToSendMode() &&
+                (state.draft.isNotBlank() || state.attachments.isNotEmpty()) && state.journal == null &&
+                (state.newTaskOptions.collaborationMode == null || state.collaborationModes.any {
+                    it.mode == state.newTaskOptions.collaborationMode && it.turnSetting(state.collaborationModel()) != null
+                }) &&
+                (state.thread == null || state.queueReady) &&
+                (state.thread != null || projectAvailable && state.newTaskOptions.hasExecutionDestination()) &&
+                (state.willQueueMessage() || (state.newTaskOptions.model == null && state.newTaskOptions.reasoningEffort == null) ||
+                    state.modelCatalogStatus == ModelCatalogStatus.Ready)) {
+            Glyph(if (state.willQueueMessage()) R.drawable.ic_queue else R.drawable.ic_send,
+                if (state.willQueueMessage()) "Queue message" else "Send")
+        }    }
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(vertical = if (shortWindow) 2.dp else 6.dp).testTag("composer-actions")) {
+        val stacked = maxWidth < 340.dp || LocalDensity.current.fontScale > 1.3f
+        if (stacked) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            settingsControl(Modifier.fillMaxWidth())
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                attachmentControl()
+                Spacer(Modifier.weight(1f))
+                sendControls()
+            }
+        } else Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            attachmentControl()
+            settingsControl(Modifier.weight(1f))
+            sendControls()
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ProjectControl(state: ScreenState, actions: ConversationActions, expanded: Boolean) {
+    var menu by remember { mutableStateOf(false) }
+    val options = state.newTaskOptions
+    val project = state.projects.firstOrNull { it.id == options.projectId }
+    val label = if (state.thread != null) state.threadCwd?.let { File(it).name } ?: "This chat"
+        else project?.name ?: if (options.projectId == null) "No project" else "Project unavailable"
+    val enabled = state.thread == null && !state.busy && state.journal == null
+    Column {
+        Box {
+            if (expanded) TrayRow("Project", label, if (state.thread != null) "This chat" else null,
+                R.drawable.ic_folder, "project-selector", enabled, { menu = true })
+            else AssistChip(onClick = { menu = true }, label = { Text(label) }, enabled = enabled,
+                leadingIcon = { Glyph(R.drawable.ic_folder, modifier = Modifier.size(18.dp)) },
+                modifier = Modifier.padding(start = 8.dp).heightIn(min = 48.dp).testTag("project-selector"))
+            DropdownMenu(menu, { menu = false }) {
+                DropdownMenuItem(text = { Text("No project") }, leadingIcon = { Glyph(R.drawable.ic_folder) },
+                    onClick = { menu = false; actions.updateNewTaskOptions(options.copy(projectId = null,
+                        workingDirectory = null, executionTarget = ExecutionTarget.Projectless)) })
+                state.projects.forEach { candidate ->
+                    DropdownMenuItem(text = { Column { Text(candidate.name); Text(candidate.primaryRoot ?: "No workspace root",
+                        style = MaterialTheme.typography.bodySmall) } }, leadingIcon = { Glyph(R.drawable.ic_folder) },
+                        enabled = candidate.primaryRoot != null,
+                        onClick = { menu = false; actions.updateNewTaskOptions(options.copy(projectId = candidate.id,
+                            workingDirectory = candidate.primaryRoot, executionTarget = ExecutionTarget.CurrentWorkspace)) })
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = { optionsOpen = false }) { Text("Done") }
-            },
-        )
+            }
+        }
+        if (expanded && state.thread == null && options.projectId != null) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(ExecutionTarget.CurrentWorkspace to "Current", ExecutionTarget.NewWorktree to "New worktree").forEach { (target, title) ->
+                    FilterChip(options.executionTarget == target, { actions.updateNewTaskOptions(options.copy(executionTarget = target)) },
+                        label = { Text(title) }, enabled = enabled,
+                        modifier = Modifier.testTag(if (target == ExecutionTarget.CurrentWorkspace) "workspace-current" else "workspace-new-worktree"))
+                }
+            }
+            Text(if (options.executionTarget == ExecutionTarget.NewWorktree) "Settings resolve after the isolated workspace is created."
+                else options.workingDirectory.orEmpty(), style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+@Composable
+private fun TrayRow(title: String, value: String, source: String?, icon: Int, tag: String, enabled: Boolean, onClick: () -> Unit) {
+    Surface(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth().testTag(tag),
+        shape = RoundedCornerShape(16.dp), color = Color.Transparent,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+        Row(Modifier.padding(16.dp).heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Glyph(icon)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(title, style = MaterialTheme.typography.labelLarge)
+                Text(value, style = MaterialTheme.typography.bodyLarge)
+                source?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            }
+            if (enabled) Glyph(R.drawable.ic_chevron)
+        }
+    }
+}
+
+@Composable
+private fun ModelControls(state: ScreenState, actions: ConversationActions) {
+    var modelMenu by remember { mutableStateOf(false) }
+    var effortMenu by remember { mutableStateOf(false) }
+    val settings = state.composerSettings()
+    val preset = state.collaborationModes.firstOrNull { it.mode == state.newTaskOptions.collaborationMode }
+    val enabled = state.ready && !state.busy && state.journal == null && !state.willQueueMessage() &&
+        state.modelCatalogStatus == ModelCatalogStatus.Ready
+    val efforts = state.models.firstOrNull { it.id == settings.modelId }?.supportedReasoningEfforts.orEmpty()
+    Box {
+        TrayRow("Model", settings.model, settings.modelSource, R.drawable.ic_model, "model-selector",
+            enabled && preset?.model == null, { modelMenu = true })
+        DropdownMenu(modelMenu, { modelMenu = false }) {
+            DropdownMenuItem(text = { Text("Automatic (inherit)") }, modifier = Modifier.testTag("model-automatic"),
+                onClick = { modelMenu = false; actions.updateNewTaskOptions(state.newTaskOptions.copy(model = null, reasoningEffort = null)) })
+            state.models.forEach { model ->
+                DropdownMenuItem(text = { Text(model.displayName ?: model.id) }, onClick = {
+                    modelMenu = false; actions.updateNewTaskOptions(state.newTaskOptions.copy(model = model.id, reasoningEffort = null)) })
+            }
+        }
+    }
+    Box {
+        TrayRow("Reasoning", settings.effort, settings.effortSource, R.drawable.ic_reasoning, "reasoning-selector",
+            enabled && preset == null && efforts.isNotEmpty(), { effortMenu = true })
+        DropdownMenu(effortMenu, { effortMenu = false }) {
+            DropdownMenuItem(text = { Text("Automatic (inherit)") }, modifier = Modifier.testTag("reasoning-automatic"),
+                onClick = { effortMenu = false; actions.updateNewTaskOptions(state.newTaskOptions.copy(reasoningEffort = null)) })
+            efforts.forEach { effort ->
+                DropdownMenuItem(text = { Text(effort.id.replaceFirstChar { it.uppercase() }) }, onClick = {
+                    effortMenu = false; actions.updateNewTaskOptions(state.newTaskOptions.copy(reasoningEffort = effort.id)) })
+            }
+        }
+    }
+    state.modelCatalogMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+}
+
+@Composable
+private fun ModeControls(state: ScreenState, actions: ConversationActions) {
+    val modes = state.collaborationModes.filter { it.turnSetting(state.collaborationModel()) != null }
+    if (modes.isEmpty() && state.newTaskOptions.collaborationMode == null) return
+    val activeMode = state.newTaskOptions.collaborationMode ?: state.threadMode ?: if (state.thread == null) "default" else null
+    val enabled = state.ready && !state.busy && state.journal == null
+    Surface(shape = RoundedCornerShape(16.dp), color = Color.Transparent,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Glyph(R.drawable.ic_code)
+                Text("Mode", style = MaterialTheme.typography.labelLarge)
+            }
+            if (modes.isEmpty()) Text("This mode needs resolved workspace settings. Choose Automatic to inherit.",
+                style = MaterialTheme.typography.bodySmall)
+            BoxWithConstraints(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                if (maxWidth < 280.dp || LocalDensity.current.fontScale > 1.3f) {
+                    Column {
+                        modes.forEach { mode ->
+                            FilterChip(selected = activeMode == mode.mode,
+                                onClick = { actions.updateNewTaskOptions(state.newTaskOptions.copy(collaborationMode = mode.mode)) },
+                                enabled = enabled, label = { Text(mode.name) },
+                                leadingIcon = { Glyph(if (mode.mode == "plan") R.drawable.ic_plan else R.drawable.ic_code) },
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("mode-${mode.mode}"))
+                        }
+                    }
+                } else SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    modes.forEachIndexed { index, mode ->
+                        SegmentedButton(selected = activeMode == mode.mode,
+                            onClick = { actions.updateNewTaskOptions(state.newTaskOptions.copy(collaborationMode = mode.mode)) },
+                            enabled = enabled, shape = SegmentedButtonDefaults.itemShape(index, modes.size),
+                            icon = { Glyph(if (mode.mode == "plan") R.drawable.ic_plan else R.drawable.ic_code) },
+                            modifier = Modifier.heightIn(min = 48.dp).testTag("mode-${mode.mode}")) { Text(mode.name) }
+                    }
+                }
+            }
+            TextButton({ actions.updateNewTaskOptions(state.newTaskOptions.copy(collaborationMode = null)) },
+                enabled = enabled, modifier = Modifier.testTag("mode-server-default")) { Text("Automatic (inherit)") }
+        }
+    }
 }
 
 @Composable
@@ -464,160 +383,5 @@ private fun MessageQueue(state: ScreenState, actions: ConversationActions, cover
             }
         }
         HorizontalDivider(Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant)
-    }
-}
-
-@Composable
-private fun ModelControls(
-    state: ScreenState,
-    actions: ConversationActions,
-    cover: Boolean,
-) {
-    var modelExpanded by remember { mutableStateOf(false) }
-    var effortExpanded by remember { mutableStateOf(false) }
-    val controlsEnabled =
-        state.ready &&
-            !state.busy &&
-            !state.willQueueMessage() &&
-            state.modelCatalogStatus == ModelCatalogStatus.Ready
-    val selectedModel =
-        state.newTaskOptions.model?.let { id -> state.models.firstOrNull { it.id == id } }
-    val effectiveModel =
-        effectiveModel(state.newTaskOptions, state.models, state.threadModel)
-    val efforts = effectiveModel?.supportedReasoningEfforts.orEmpty()
-    val defaultEffort =
-        if (state.newTaskOptions.model == null && state.thread != null)
-            state.threadReasoningEffort
-        else effectiveModel?.defaultReasoningEffort
-    val modelLabel =
-        when (state.modelCatalogStatus) {
-            ModelCatalogStatus.Loading -> "Loading models…"
-            ModelCatalogStatus.Error -> "Models unavailable"
-            ModelCatalogStatus.Unavailable -> "Models offline"
-            ModelCatalogStatus.Ready ->
-                selectedModel?.displayName ?: selectedModel?.id ?: "Server default"
-        }
-
-    Row(
-        Modifier.fillMaxWidth().padding(start = 4.dp, top = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Box(Modifier.weight(1f)) {
-            OutlinedButton(
-                onClick = { modelExpanded = true },
-                modifier = Modifier.fillMaxWidth().testTag("model-selector"),
-                enabled = controlsEnabled,
-                contentPadding = PaddingValues(horizontal = if (cover) 8.dp else 12.dp),
-            ) {
-                Text(modelLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            DropdownMenu(
-                expanded = modelExpanded,
-                onDismissRequest = { modelExpanded = false },
-            ) {
-                DropdownMenuItem(
-                    text = {
-                        Column {
-                            Text("Server default")
-                            effectiveModel
-                                ?.takeIf { state.newTaskOptions.model == null }
-                                ?.let { Text(it.displayName ?: it.id, fontSize = 12.sp) }
-                        }
-                    },
-                    onClick = {
-                        modelExpanded = false
-                        actions.updateNewTaskOptions(
-                            state.newTaskOptions.copy(model = null, reasoningEffort = null)
-                        )
-                    },
-                )
-                state.models.forEach { model ->
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text(model.displayName ?: model.id)
-                                model.description?.let { Text(it, fontSize = 12.sp) }
-                            }
-                        },
-                        onClick = {
-                            modelExpanded = false
-                            actions.updateNewTaskOptions(
-                                state.newTaskOptions.copy(
-                                    model = model.id,
-                                    reasoningEffort = null,
-                                )
-                            )
-                        },
-                    )
-                }
-            }
-        }
-        if (efforts.isNotEmpty() && state.modelCatalogStatus == ModelCatalogStatus.Ready) {
-            Box(Modifier.weight(1f)) {
-                OutlinedButton(
-                    onClick = { effortExpanded = true },
-                    modifier = Modifier.fillMaxWidth().testTag("reasoning-selector"),
-                    enabled = controlsEnabled,
-                    contentPadding = PaddingValues(horizontal = if (cover) 8.dp else 12.dp),
-                ) {
-                    Text(
-                        state.newTaskOptions.reasoningEffort ?: "Default reasoning",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                DropdownMenu(
-                    expanded = effortExpanded,
-                    onDismissRequest = { effortExpanded = false },
-                ) {
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text("Default reasoning")
-                                defaultEffort?.let {
-                                    Text("Server default: $it", fontSize = 12.sp)
-                                }
-                            }
-                        },
-                        onClick = {
-                            effortExpanded = false
-                            actions.updateNewTaskOptions(
-                                state.newTaskOptions.copy(reasoningEffort = null)
-                            )
-                        },
-                    )
-                    efforts.forEach { effort ->
-                        DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text(effort.id)
-                                    effort.description?.let { Text(it, fontSize = 12.sp) }
-                                }
-                            },
-                            onClick = {
-                                effortExpanded = false
-                                actions.updateNewTaskOptions(
-                                    state.newTaskOptions.copy(reasoningEffort = effort.id)
-                                )
-                            },
-                        )
-                    }
-                }
-            }
-        }
-        if (state.modelCatalogStatus == ModelCatalogStatus.Loading) {
-            Box(Modifier.size(if (cover) 40.dp else 48.dp), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-            }
-        }
-    }
-    state.modelCatalogMessage?.let {
-        Text(
-            it,
-            Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
-            fontSize = 11.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }

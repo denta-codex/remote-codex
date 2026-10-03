@@ -119,17 +119,17 @@ internal fun SettingsScreen(
         HorizontalDivider()
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Offer a bug report after screenshots", Modifier.weight(1f))
+                Text("Offer a report after screenshots", Modifier.weight(1f))
                 Switch(checked = screenshotEnabled, onCheckedChange = onScreenshotChanged,
                     modifier = Modifier.testTag("screenshot-report-toggle"))
             }
-            Text("Take a screenshot while the app is open, then tap Report bug to save it with diagnostics.", fontSize = 13.sp)
+            Text("Take a screenshot while the app is open, then tap Report or request to save it with diagnostics.", fontSize = 13.sp)
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Shake to report a bug", Modifier.weight(1f))
+            Text("Shake to report or request", Modifier.weight(1f))
             Switch(checked = shakeEnabled, onCheckedChange = onShakeChanged, modifier = Modifier.testTag("shake-report-toggle"))
         }
-        Text("Off by default because it can trigger the phone's flashlight gesture. You can always use Report a bug in the menu.", fontSize = 13.sp)
+        Text("Off by default because it can trigger the phone's flashlight gesture. You can always use Report or request in the menu.", fontSize = 13.sp)
         HorizontalDivider()
         Text("Assistant shortcut", fontWeight = FontWeight.SemiBold)
         OutlinedButton(

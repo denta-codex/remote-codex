@@ -13,7 +13,7 @@ class BugReportSubmissionTest {
     private val id = "12345678-1234-1234-1234-123456789abc"
     private val host = HostIdentity("test", "Test", "wss://test", "/codex", "/repo")
 
-    @Test fun createsConfiguredProjectTaskAfterSetupAndUploadsWithServerDefaults() = runBlocking {
+    @Test fun createsConfiguredProjectTaskWithTheReviewedPromptAndAdvertisedMode() = runBlocking {
         fixture { rpc, original ->
             val saved = mutableListOf<String>()
             val done = BugReportSubmission(rpc, host).run(original) { saved += it.journal.str("stage") }
@@ -22,12 +22,13 @@ class BugReportSubmissionTest {
             assertEquals("/codex/worktrees/remote-codex-$id/workspace", rpc.startParams!!.str("cwd"))
             assertNull(rpc.startParams!!["model"])
             assertNull(rpc.sendParams!!["model"])
-            assertNull(rpc.sendParams!!["collaborationMode"])
+            assertEquals(original.review.map("collaborationMode"), rpc.sendParams!!["collaborationMode"])
             assertEquals(130_000L, rpc.setupDeadline)
             assertTrue(rpc.operations.indexOf("setup") < rpc.operations.indexOf("start"))
             assertTrue(rpc.operations.indexOf("upload") < rpc.operations.indexOf("send"))
             val text = rpc.sendParams!!.list("input").first().str("text")
-            assertTrue(text.contains("Human-authored bug description"))
+            assertTrue(text.contains("Your request:"))
+            assertTrue(text.contains(original.review.str("prompt")))
             assertTrue(text.contains("The button loses my message"))
             assertTrue(text.contains("/report/"))
             assertTrue(saved.containsAll(listOf("settingUp", "uploading", "creatingTask", "sending", "accepted")))
@@ -45,8 +46,10 @@ class BugReportSubmissionTest {
                 } catch (_: IOException) { }
                 assertNotEquals("accepted", saved.journal.str("stage"))
                 // Reconstruct the runner, as after process death or reconnect.
+                saved = BugReportDraft.from(saved.json())
                 saved = BugReportSubmission(rpc, host).run(saved) { saved = it }
                 assertEquals("accepted after $failure", "accepted", saved.journal.str("stage"))
+                assertTrue(rpc.sendParams!!.list("input").first().str("text").contains(original.review.str("prompt")))
                 for (mutation in listOf("mkdir", "worktree", "setup", "evidence", "upload", "start", "name", "send"))
                     assertEquals("$mutation repeated after $failure", 1, rpc.operations.count { it == mutation })
             }
@@ -89,10 +92,70 @@ class BugReportSubmissionTest {
         fixture { rpc, original ->
             rpc.origin = "https://github.com/another/repo.git"
             try {
-                BugReportSubmission(rpc, host).run(original) { }
+                BugReportSubmission(rpc, host).prepare(original.copy(review = obj()), "default-model")
                 fail("Must reject wrong repository")
             } catch (_: IllegalArgumentException) { }
             assertTrue(rpc.operations.isEmpty())
+        }
+    }
+
+    @Test fun eachIntentHasMatchingTitlePromptAndModeWithoutPreparationMutations() = runBlocking {
+        for (intent in ReportIntent.entries) fixture { rpc, original ->
+            val description = "Research swipe gestures. Don't build it yet.\nKeep my instructions verbatim."
+            val prepared = BugReportSubmission(rpc, host).prepare(
+                original.copy(intent = intent, title = "", description = description, review = obj()), "default-model")
+            assertTrue(rpc.operations.isEmpty())
+            assertEquals("${intent.name}: ${description.lineSequence().first()}", prepared.review.str("name"))
+            assertEquals(intent.mode, prepared.review.map("collaborationMode").str("mode"))
+            assertTrue(prepared.review.str("prompt").contains("Your request:\n$description"))
+            assertTrue(prepared.review.str("prompt").contains("maximum authorized scope"))
+            assertFalse(prepared.review.str("prompt").contains("This is an implementation task"))
+            if (intent != ReportIntent.Implement) assertTrue(prepared.review.str("prompt").contains("Do not implement changes."))
+            BugReportSubmission(rpc, host).run(prepared) { }
+            assertEquals(prepared.review.str("name"), rpc.taskName)
+            assertEquals(prepared.review.map("collaborationMode"), rpc.sendParams!!["collaborationMode"])
+        }
+    }
+
+    @Test fun missingIntentModeOrReviewCannotStartAMutation() = runBlocking {
+        fixture { rpc, original ->
+            for (candidate in listOf(original.copy(intent = null), original.copy(description = " "))) {
+                try { BugReportSubmission(rpc, host).prepare(candidate, "default-model"); fail("Invalid draft") }
+                catch (_: IllegalArgumentException) { }
+            }
+            rpc.modesAvailable = false
+            try { BugReportSubmission(rpc, host).prepare(original, "default-model"); fail("Mode unavailable") }
+            catch (e: IllegalArgumentException) { assertTrue(e.message!!.contains("requires an available")) }
+            try { BugReportSubmission(rpc, host).run(original.copy(review = obj())) { }; fail("Review required") }
+            catch (_: IllegalArgumentException) { }
+            assertTrue(rpc.operations.isEmpty())
+        }
+    }
+
+    @Test fun changedRequestCannotUseAnOldReviewAndFrozenSaveMustPrecedeMutations() = runBlocking {
+        fixture { rpc, original ->
+            for (candidate in listOf(original.copy(description = "Changed"), original.copy(intent = ReportIntent.Implement),
+                original.copy(title = "Changed"), original.copy(attachments = emptyList()))) {
+                try { BugReportSubmission(rpc, host).run(candidate) { }; fail("Stale review") }
+                catch (_: IllegalArgumentException) { }
+            }
+            try { BugReportSubmission(rpc, host).run(original) { throw IOException("Cannot persist") }; fail("Save failure") }
+            catch (_: IOException) { }
+            assertTrue(rpc.operations.isEmpty())
+        }
+    }
+
+    @Test fun legacyInFlightJournalRetainsOriginalPromptAndDefaultMode() = runBlocking {
+        fixture { rpc, original ->
+            val legacy = original.copy(intent = null, title = "", review = obj(),
+                journal = JsonObject(original.review.filterKeys { it !in setOf("submissionVersion", "prompt", "collaborationMode") } +
+                    ("stage" to s("validated")) + ("name" to s("Bug: Original request"))))
+            val v1 = JsonObject(legacy.json().filterKeys { it !in setOf("intent", "title", "review") } + ("version" to JsonPrimitive(1)))
+            val restored = BugReportDraft.from(v1)
+            BugReportSubmission(rpc, host).run(BugReportDraft.from(restored.json())) { }
+            assertEquals("Bug: Original request", rpc.taskName)
+            assertNull(rpc.sendParams!!["collaborationMode"])
+            assertTrue(rpc.sendParams!!.list("input").first().str("text").contains("This is an implementation task."))
         }
     }
 
@@ -101,8 +164,10 @@ class BugReportSubmissionTest {
         try {
             val store = BugReportStore(dir)
             val file = store.attachment(id, "context.txt", "frozen context".toByteArray())
-            block(ReportSession(), BugReportDraft(id, 123, obj("threadReference" to s("codex://threads/source")),
-                "The button loses my message", listOf(file)))
+            val rpc = ReportSession()
+            val draft = BugReportDraft(id, 123, obj("threadReference" to s("codex://threads/source")),
+                "The button loses my message", listOf(file), intent = ReportIntent.Investigate)
+            block(rpc, BugReportSubmission(rpc, host).prepare(draft, "default-model"))
         } finally { dir.deleteRecursively() }
     }
 
@@ -120,6 +185,7 @@ class BugReportSubmissionTest {
         var startParams: JsonObject? = null
         var sendParams: JsonObject? = null
         var setupDeadline = 0L
+        var modesAvailable = true
         override suspend fun connect(url: String, token: String) = obj()
         override fun close() = Unit
         override fun dispose() = Unit
@@ -135,6 +201,8 @@ class BugReportSubmissionTest {
         override suspend fun writeFile(path: String, bytes: ByteArray) { files[path] = bytes; mutation("upload") }
         override suspend fun readFile(path: String) = files[path] ?: throw IOException("Not found")
         override suspend fun call(method: String, params: JsonObject): JsonObject = when (method) {
+            "collaborationMode/list" -> obj("data" to JsonArray(if (modesAvailable)
+                listOf(obj("mode" to s("plan")), obj("mode" to s("default"))) else emptyList()))
             "project/list" -> obj("data" to JsonArray(listOf(project())))
             "project/read" -> obj("project" to project())
             "fs/getMetadata" -> {
