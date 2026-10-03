@@ -19,8 +19,19 @@ and validation record; neither pushes. A detached checkout is attached to
 `codex/release-VERSION` before committing. No forwarder deployment, phone
 installation, or emulator execution is part of these actions.
 
-The automatic version is the next patch above the greatest repository, prepared,
-or published version. The build number is greater than the repository number,
+Versions accept `MAJOR.MINOR.PATCH` and SemVer prereleases such as
+`0.2.11-autofill.1`; build metadata and leading-zero numeric identifiers are not
+accepted. Experimental releases require an explicit `remote_codex_version`.
+Prereleases sort below the corresponding normal release, with numeric suffixes
+ordered numerically. If the greatest known version is a prerelease, automatic
+selection promotes it to its normal version; otherwise it increments the patch.
+The existing private stable channel also distributes explicitly requested test
+versions: a prerelease label does not create a separate distribution channel.
+All publishing branches must have this parser before publishing a prerelease.
+Return from an experiment using a newer build without the experimental changes,
+not by reinstalling an older APK.
+
+The build number is greater than the repository number,
 prepared/published manifest numbers, and numeric release directories in this
 checkout and the private update store. An explicit version must be newer than all
 existing manifest and source versions. The host-wide launcher lock serializes all

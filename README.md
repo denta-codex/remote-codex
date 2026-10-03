@@ -11,6 +11,27 @@ messages appear above the composer; tap **Steer now** to use one in the active
 turn, or **Remove** to cancel it. An idle, interrupted queue offers **Send now**.
 Queue actions preserve anything you are currently drafting.
 
+Take a screenshot while the app is open and tap **Report bug** in the snackbar
+(Android 14+), or use **⋮ → Report a bug**, to save a
+report with a screenshot, recent app logs, available process-exit diagnostics,
+and frozen conversation/task context. Describe the problem, review or remove
+artifacts, and choose **Start fix task**. The report creates an isolated
+remote-codex worktree, runs its environment setup, and starts an ordinary fix task
+on Grace. Settings includes an **Offer a bug report after screenshots** toggle
+(on by default) and an opt-in **Shake to report a bug** toggle, which is off by
+default because shaking can trigger Motorola's flashlight gesture.
+
+Reports remain on the phone while offline and across restarts. Reopening a saved
+report preserves its original evidence. Screenshots are omitted on the Settings
+screen, which contains connection credentials. App logs cover this application's
+UID only; optional full Android bug-report archives can be added as files within
+the existing 20 MiB per-file / 50 MiB total limits. Capture failures are listed
+in the report and do not prevent submission.
+
+Interrupted preparation offers **Check and continue**. It inspects the existing
+worktree, setup receipt, uploaded bytes, task identity, and submitted message;
+uncertain mutations are never replayed. The original chat draft stays intact.
+
 ## Project
 
 - `android/app`: Compose interface, assistant entry point, local storage.

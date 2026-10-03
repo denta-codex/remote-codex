@@ -77,6 +77,35 @@ internal class WorkspaceSetupFailure(
 
 /** Narrow stock-RPC adapter for destination preparation. It does not discover projects. */
 internal class StockWorkspaceAdapter(private val rpc: RemoteSession) {
+    /** Environment preparation is reusable by any task, with its own execution deadline. */
+    suspend fun prepareEnvironment(
+        cwd: String,
+        script: String,
+        completionMarker: String,
+        operation: String,
+        revision: String,
+        timeoutMillis: Long = 120_000,
+    ) {
+        val result = rpc.callWithTimeout(
+            "command/exec",
+            obj(
+                "command" to JsonArray(listOf(
+                    "bash", "-c",
+                    "set -e; cd -- \"\$1\"; bash -- \"\$5\"; printf '%s\\n%s\\n' \"\$3\" \"\$4\" > \"\$2.part\"; mv -- \"\$2.part\" \"\$2\"",
+                    "remote-codex-environment", cwd, completionMarker, operation, revision, script,
+                ).map(::s)),
+                "sandboxPolicy" to obj("type" to s("dangerFullAccess")),
+                "env" to obj("LC_ALL" to s("C")),
+                "timeoutMs" to JsonPrimitive(timeoutMillis),
+                "outputBytesCap" to JsonPrimitive(8192),
+            ),
+            timeoutMillis + 10_000,
+        )
+        if (result.str("exitCode") != "0") throw WorkspaceSetupFailure(
+            "Environment preparation failed. The workspace is retained; inspect it before continuing.",
+        )
+    }
+
     suspend fun validateSelectedProject(plan: WorkspacePlan) {
         val projectId = plan.projectId ?: return
         val source = plan.sourceDirectory ?: throw WorkspaceSetupFailure("Project workspace is missing")
