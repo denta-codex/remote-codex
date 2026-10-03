@@ -152,6 +152,12 @@ internal fun SettingsScreen(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         HorizontalDivider()
+        OutlinedButton(onClick = { context.startActivity(Intent(context, AutofillTestActivity::class.java)) }) {
+            Text("Autofill test · experimental")
+        }
+        OutlinedButton(onClick = { context.startActivity(Intent(context, CredentialRequestsActivity::class.java)) }) {
+            Text("Credential requests")
+        }
         Text("Updates", fontWeight = FontWeight.SemiBold)
         Text(
             "Updates are checked only when you ask. Downloads come from ${st.host.displayName} over your private connection and are verified before Android opens its installer.",

@@ -87,7 +87,9 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
         // resizing. Serial collection lets each animation finish while coalescing
         // new layouts; a token must not cancel and restart the animation.
         snapshotFlow { scroll.layoutInfo }.collect { layout ->
-            if (layout.totalItemsCount > 0) {
+            // On a cover display the IME can temporarily consume the entire
+            // timeline. There is no visible end to follow until it has height again.
+            if (layout.totalItemsCount > 0 && layout.viewportSize.height > 0) {
                 if (!initiallyPositioned) {
                     scroll.scrollToItem(layout.totalItemsCount - 1)
                     initiallyPositioned = true

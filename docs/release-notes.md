@@ -1,2 +1,8 @@
-- Use server recency for recent chat ordering
-- Integrate recency fix with current inbox and correct displayed ages
+- Add direct local main merge control with recovery
+- Publish Android 0.3.0 (26)
+- Merge branch 'main' into feature/direct-merge-main
+- Merge branch 'main' into feature/direct-merge-main
+- Merge branch 'codex/release-0.3.0'
+- Suppress keyboard for phone credential Autofill
+- Integrate main with validated phone approval and keyboard suppression
+- Keep cover-screen composer actions beside the cameras

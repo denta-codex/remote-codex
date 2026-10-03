@@ -268,11 +268,12 @@ class AppTest {
 
     @Before
     fun setup() {
-        reportCoverOverride = testName.methodName in setOf("systemScreenshotOffersReportWithTheCapturedWindow", "commandTrayCoverLargeTextKeepsActionsReachable", "coverChatToolbarAvoidsCutoutWithHiddenStatusBar")
+        reportCoverOverride = testName.methodName in setOf("systemScreenshotOffersReportWithTheCapturedWindow", "commandTrayCoverLargeTextKeepsActionsReachable", "coverCameraDockKeepsActionsLeftAndFunctional", "coverChatToolbarAvoidsCutoutWithHiddenStatusBar")
         if (coverScreen || landscapeScreen || reportCoverOverride) {
             shell(if (landscapeScreen) "wm size 2992x1224" else "wm size 1080x1272")
             shell(when {
                 landscapeScreen -> "wm density 480"
+                testName.methodName == "coverCameraDockKeepsActionsLeftAndFunctional" -> "wm density 420"
                 reportCoverOverride -> "wm density 360"
                 else -> "wm density 420"
             })
@@ -1908,6 +1909,68 @@ class AppTest {
         assertFalse(lastThreadStartParams!!.containsKey("model"))
         assertFalse(lastTurnStartParams!!.containsKey("model"))
         assertFalse(lastTurnStartParams!!.containsKey("effort"))
+    }
+
+    @Test
+    fun coverCameraDockKeepsActionsLeftAndFunctional() {
+        historyOverride = obj("data" to JsonArray(listOf(obj(
+            "id" to s("dock-history"), "status" to s("completed"),
+            "items" to JsonArray(listOf(
+                obj("id" to s("dock-user"), "type" to s("userMessage"),
+                    "content" to JsonArray(listOf(obj("type" to s("text"), "text" to s("How did the build go?"))))),
+                obj("id" to s("dock-reply"), "type" to s("agentMessage"),
+                    "text" to s("Build passed. Ready to review.\n\n3 files changed."))
+            ))
+        ))))
+        compose.onNodeWithText("Fixture task").performClick()
+        compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy && model.state.value.queueReady }
+        compose.runOnUiThread { model.draft("Looks good, thanks!") }
+        val dock = compose.onNodeWithTag("cover-camera-dock").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        val field = compose.onNodeWithTag("composer").fetchSemanticsNode().boundsInRoot
+        assertTrue("Message field must stay above the camera band", field.bottom <= dock.top)
+        val buttons = listOf("send", "add-menu", "conversation-settings").map { tag ->
+            compose.onNodeWithTag(tag).assertIsDisplayed().assertIsEnabled().fetchSemanticsNode().boundsInRoot
+        }
+        buttons.forEach { bounds ->
+            assertTrue("Actions must fit left of the camera/flash area", bounds.right <= dock.left + dock.width * .46f)
+            assertTrue("Actions must be inside the camera-height dock", bounds.top >= dock.top && bounds.bottom <= dock.bottom)
+        }
+        assertTrue(buttons.zipWithNext().all { (left, right) -> left.right <= right.left })
+        captureComposer("cover-camera-dock.png")
+        demoPause(3000)
+        compose.onNodeWithTag("add-menu").performClick()
+        compose.onNodeWithTag("add-photos").assertIsDisplayed()
+        compose.onNodeWithTag("add-files").assertIsDisplayed()
+        compose.onNodeWithTag("add-camera").assertIsDisplayed()
+        shell("input keyevent KEYCODE_BACK")
+        openConversationTray()
+        compose.onNodeWithTag("model-selector").performScrollTo().assertIsDisplayed()
+        closeConversationTray()
+        compose.onNodeWithTag("composer").assertTextContains("Looks good, thanks!")
+        shell("settings put secure show_ime_with_hard_keyboard 1")
+        try {
+            compose.onNodeWithTag("composer").performClick()
+            compose.waitUntil(5000) { compose.onAllNodesWithTag("cover-composer-toolbar", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithTag("send").assertIsDisplayed()
+            compose.onNodeWithTag("add-menu").assertIsDisplayed()
+            compose.onNodeWithTag("conversation-settings").assertIsDisplayed()
+            captureComposer("cover-camera-keyboard.png")
+            shell("input keyevent KEYCODE_BACK")
+            compose.waitUntil(5000) { compose.onAllNodesWithTag("cover-camera-dock").fetchSemanticsNodes().isNotEmpty() }
+        } finally {
+            shell("settings put secure show_ime_with_hard_keyboard 0")
+        }
+        holdTurnOpen = true
+        compose.onNodeWithTag("send").performClick()
+        compose.waitUntil(15000) { model.state.value.activeTurn == "turn-test" && !model.state.value.busy }
+        assertEquals(1, sent.get())
+        compose.onNodeWithContentDescription("Stop").assertIsDisplayed()
+        openConversationTray()
+        compose.onNodeWithContentDescription("Stop").assertIsDisplayed()
+        closeConversationTray()
+        compose.runOnUiThread { model.draft("And run the tests") }
+        compose.onNodeWithContentDescription("Queue message").assertIsDisplayed().performClick()
+        compose.waitUntil(10000) { model.state.value.queuedMessages.any { it.text == "And run the tests" } }
     }
 
     @Test
