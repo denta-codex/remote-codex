@@ -354,7 +354,20 @@ constructor(
         viewModelScope.launch { guarded { refreshList() } }
     }
 
+    override fun refreshTasks() {
+        if (!_state.value.ready || _state.value.refreshingTasks) return
+        _state.update { it.copy(refreshingTasks = true, error = null) }
+        viewModelScope.launch {
+            try {
+                guarded { refreshList() }
+            } finally {
+                _state.update { it.copy(refreshingTasks = false) }
+            }
+        }
+    }
+
     override fun moreTasks() {
+        if (_state.value.refreshingTasks) return
         viewModelScope.launch { guarded { refreshList(true) } }
     }
 

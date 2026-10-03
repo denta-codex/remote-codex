@@ -50,6 +50,9 @@ class AppTest {
     @Volatile private var lastTurnStartParams: JsonObject? = null
     @Volatile private var historyOverride: JsonObject? = null
     @Volatile private var fixtureTitle = "Fixture task"
+    @Volatile private var emptyTaskList = false
+    @Volatile private var holdTaskList = false
+    private val heldTaskLists = CopyOnWriteArrayList<JsonObject>()
     @Volatile private var lastThreadStart: JsonObject? = null
     private val worktreeAdds = AtomicInteger()
     private val threadStarts = AtomicInteger()
@@ -130,6 +133,10 @@ class AppTest {
                                         return
                                     }
                                     if (method == "initialized") return
+                                    if (method == "thread/list" && holdTaskList) {
+                                        heldTaskLists.add(m)
+                                        return
+                                    }
                                     if (method.startsWith("thread/queue/") && method != "thread/queue/list")
                                         queueMutations.add(m)
                                     val result =
@@ -615,6 +622,7 @@ class AppTest {
         )
 
     private fun fixtureTasks(params: JsonObject): List<JsonObject> {
+        if (emptyTaskList) return emptyList()
         val tasks =
             listOf(
                 obj(
@@ -1361,6 +1369,50 @@ class AppTest {
         compose.waitUntil(15000) { model.state.value.ready && !model.state.value.busy }
         assertEquals(0, sent.get())
         compose.onNodeWithTag("send").assertIsNotEnabled()
+    }
+
+    @Test
+    fun pullToRefreshUpdatesStaleTaskList() {
+        compose.onNodeWithText(fixtureTitle).assertIsDisplayed()
+        fixtureTitle = "Task submitted elsewhere"
+        compose.onNodeWithText(fixtureTitle).assertDoesNotExist()
+        compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange)).performTouchInput { swipeDown() }
+        compose.waitUntil(5000) {
+            model.state.value.tasks.any { it.str("name") == fixtureTitle }
+        }
+        compose.onNodeWithText(fixtureTitle).assertIsDisplayed()
+        assertFalse(model.state.value.refreshingTasks)
+    }
+
+    @Test
+    fun pullToRefreshEmptyFilteredListRecoversAfterFailure() {
+        emptyTaskList = true
+        compose.runOnUiThread {
+            model.projectFilter(TaskProjectFilter.Projectless)
+        }
+        compose.waitUntil(5000) { model.state.value.tasks.isEmpty() }
+        compose.onNodeWithText("No tasks found").assertIsDisplayed()
+        holdTaskList = true
+        val list = compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange))
+        list.performTouchInput { swipeDown() }
+        compose.waitUntil(5000) { heldTaskLists.size == 1 && model.state.value.refreshingTasks }
+        compose.runOnUiThread { model.refreshTasks() }
+        compose.waitForIdle()
+        assertEquals(1, heldTaskLists.size)
+        val request = heldTaskLists.single()
+        assertEquals(JsonNull, request.map("params")["projectId"])
+        assertNull(request.map("params")["cursor"])
+        peer!!.send(obj("id" to request["id"], "error" to obj("code" to JsonPrimitive(-32000), "message" to s("Refresh unavailable"))).toString())
+        compose.waitUntil(5000) { !model.state.value.refreshingTasks && model.state.value.error != null }
+        assertTrue(model.state.value.tasks.isEmpty())
+        holdTaskList = false
+        emptyTaskList = false
+        list.performTouchInput { swipeDown() }
+        compose.waitUntil(5000) { model.state.value.tasks.isNotEmpty() && !model.state.value.refreshingTasks }
+        assertEquals(listOf("task-test"), model.state.value.tasks.map { it.str("id") })
+        assertEquals(TaskProjectFilter.Projectless, model.state.value.projectFilter)
+        assertNull(model.state.value.error)
+        compose.onNodeWithText(fixtureTitle).assertIsDisplayed()
     }
 
     @Test

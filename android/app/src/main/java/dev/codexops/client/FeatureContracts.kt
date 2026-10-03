@@ -117,6 +117,7 @@ data class ScreenState(
     val projectFilter: TaskProjectFilter = TaskProjectFilter.All,
     val tasks: List<JsonObject> = emptyList(),
     val listCursor: String? = null,
+    val refreshingTasks: Boolean = false,
     val query: String = "",
     val archived: Boolean = false,
     val thread: String? = null,
@@ -158,6 +159,8 @@ interface AppNavigation {
 }
 
 interface HomeActions {
+    fun refreshTasks()
+
     fun query(value: String)
 
     fun archived(value: Boolean)
