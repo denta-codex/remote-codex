@@ -91,6 +91,10 @@ internal fun App(model: ClientModel) {
             },
             topBar = {
                 TopAppBar(
+                    // Cover displays can hide the status bar while retaining a display cutout.
+                    windowInsets = WindowInsets.safeDrawing.only(
+                        WindowInsetsSides.Top + WindowInsetsSides.Horizontal,
+                    ),
                     title = {
                         Column {
                             Text(
@@ -150,7 +154,7 @@ internal fun App(model: ClientModel) {
             },
             containerColor = MaterialTheme.colorScheme.background,
         ) { padding ->
-            Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
+            Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()) {
                 st.error?.let {
                     Surface(color = MaterialTheme.colorScheme.errorContainer) {
                         Text(
