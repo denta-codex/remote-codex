@@ -35,6 +35,12 @@ import kotlinx.serialization.json.JsonPrimitive
 
 @Composable
 internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: ConversationActions) {
+    if (st.merge.pending != null && !st.merge.visible) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(if (st.merge.working) "Merge in progress…" else "Merge outcome needs review", Modifier.weight(1f))
+            TextButton(actions::inspectMerge, enabled = !st.merge.working) { Text("Review merge") }
+        }
+    }
     val cover = LocalAppWindowClass.current.coverScreen
     var confirmUnlock by remember { mutableStateOf(false) }
     val scroll = rememberLazyListState()
@@ -137,6 +143,7 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
                         entry.key == actionablePlan?.key &&
                             st.ready &&
                             !st.busy &&
+                            !st.merge.blocksTask &&
                             st.activeTurn == null &&
                             st.queuedMessages.isEmpty() &&
                             st.queueReady &&

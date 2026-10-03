@@ -93,6 +93,7 @@ private fun Context.activity(): Activity? = when (this) {
 @Composable
 internal fun BugReportMenu(model: ClientModel) {
     val report by model.reports.state.collectAsStateWithLifecycle()
+    val screen by model.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var menu by remember { mutableStateOf(false) }
     Box {
@@ -100,6 +101,14 @@ internal fun BugReportMenu(model: ClientModel) {
             Text("⋮", fontSize = 26.sp)
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            if (screen.page == "chat" && screen.thread != null) {
+                DropdownMenuItem(
+                    text = { Text(if (screen.merge.pending != null) "Check merge state…" else "Merge into main…") },
+                    enabled = screen.canInspectMerge() || screen.merge.pending != null && !screen.merge.working,
+                    modifier = Modifier.testTag("merge-main-menu"),
+                    onClick = { menu = false; model.inspectMerge() },
+                )
+            }
             DropdownMenuItem(text = { Text(if (report.capturing) "Capturing report…" else "Report or request") },
                 enabled = report.loaded && !report.capturing && (!report.busy || report.draft != null),
                 modifier = Modifier.testTag("report-bug"), onClick = {
