@@ -100,6 +100,8 @@ data class NewTaskOptions(
     val reasoningEffort: String? = null,
     val approvalPolicy: String? = null,
     val collaborationMode: String? = null,
+    // null inherits; default explicitly selects Standard for a new chat.
+    val serviceTier: String? = null,
 ) {
     fun hasExecutionDestination(): Boolean =
         projectId == null && executionTarget == ExecutionTarget.Projectless ||
@@ -162,6 +164,12 @@ data class ScreenState(
     val threadMode: String? = null,
     val threadModel: String? = null,
     val threadReasoningEffort: String? = null,
+    val threadServiceTier: String? = null,
+    val threadServiceTierKnown: Boolean = false,
+    val speedSaving: Boolean = false,
+    val speedUncertain: Boolean = false,
+    val speedError: String? = null,
+    val fastModeAllowed: Boolean? = null,
     val activeTurn: String? = null,
     val queuedMessages: List<QueuedMessage> = emptyList(),
     val queueReady: Boolean = false,
@@ -242,6 +250,7 @@ interface ConversationActions {
     fun dismissMerge()
     fun viewedReply(thread: String, signature: String) {}
     fun refreshModels() {}
+    fun selectSpeed(fast: Boolean) {}
     fun updateNewTaskOptions(options: NewTaskOptions)
 
 

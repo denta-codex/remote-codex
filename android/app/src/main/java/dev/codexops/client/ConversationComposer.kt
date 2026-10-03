@@ -127,6 +127,7 @@ internal fun ConversationComposer(state: ScreenState, actions: ConversationActio
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 ProjectControl(state, actions, expanded = true)
                 ModelControls(state, actions)
+                SpeedControl(state, actions)
                 ModeControls(state, actions)
                 TextButton(actions::refreshModels, enabled = state.ready && !state.busy && state.modelCatalogStatus != ModelCatalogStatus.Loading) {
                     Glyph(R.drawable.ic_refresh); Spacer(Modifier.width(8.dp)); Text("Refresh models and settings")
@@ -160,7 +161,7 @@ private fun ComposerActions(
             }
         }
     }
-    val settingsDescription = listOfNotNull("Conversation settings", settings.model, settings.effort, settings.mode).joinToString(", ")
+    val settingsDescription = listOfNotNull("Conversation settings", settings.model, settings.effort, settings.mode, if (state.composerSpeed().fast) "Fast mode" else null).joinToString(", ")
     val settingsControl: @Composable (Modifier) -> Unit = { modifier ->
         OutlinedButton(onSettings, modifier.heightIn(min = 48.dp).testTag("conversation-settings")
             .semantics {
@@ -171,7 +172,12 @@ private fun ComposerActions(
             Glyph(R.drawable.ic_sliders, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f)) {
-                Text("${settings.model} · ${settings.effort}", style = MaterialTheme.typography.labelLarge)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("${settings.model} · ${settings.effort}", Modifier.weight(1f, fill = false), style = MaterialTheme.typography.labelLarge)
+                    if (state.composerSpeed().fast) Glyph(R.drawable.ic_fast, modifier =
+                        Modifier.size(16.dp).testTag("fast-mode-icon"))
+                }
+
                 settings.mode?.let { mode ->
                     Text(mode, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -185,7 +191,8 @@ private fun ComposerActions(
         FilledIconButton(onSend, Modifier.testTag("send").size(48.dp), shape = CircleShape,
             colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary),
-            enabled = state.ready && !state.busy && !state.merge.blocksTask && !state.waitingToSendMode() &&
+            enabled = state.ready && !state.busy && !state.speedSaving && !state.speedUncertain && !state.merge.blocksTask && !state.waitingToSendMode() &&
+                (state.thread != null || !isFastTier(state.newTaskOptions.serviceTier) || state.canSelectFast()) &&
                 (state.draft.isNotBlank() || state.attachments.isNotEmpty()) && state.journal == null &&
                 (state.newTaskOptions.collaborationMode == null || state.collaborationModes.any {
                     it.mode == state.newTaskOptions.collaborationMode && it.turnSetting(state.collaborationModel()) != null
@@ -420,4 +427,36 @@ private fun MessageQueue(state: ScreenState, actions: ConversationActions, cover
         }
         HorizontalDivider(Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant)
     }
+}
+
+@Composable
+private fun SpeedControl(state: ScreenState, actions: ConversationActions) {
+    var menu by remember(state.thread) { mutableStateOf(false) }
+    val speed = state.composerSpeed()
+    val enabled = state.ready && !state.busy && state.journal == null && !state.speedSaving &&
+        !state.speedUncertain && (state.thread == null || speed.known)
+    val explanation = when {
+        state.speedSaving -> "Saving…"
+        state.speedUncertain -> "Awaiting server confirmation"
+        !state.ready -> "Offline"
+        state.thread == null && state.newTaskOptions.serviceTier == null -> "Inherited for this new chat"
+        state.activeTurn != null -> "Applies to subsequent turns"
+        else -> "This chat"
+    }
+    Box {
+        TrayRow("Speed", speed.label, explanation, R.drawable.ic_fast, "speed-selector", enabled) { menu = true }
+        DropdownMenu(menu, { menu = false }) {
+            DropdownMenuItem(text = { Text("Standard") }, modifier = Modifier.testTag("speed-standard"),
+                trailingIcon = { if (speed.known && speed.label == "Standard") Text("✓") },
+                onClick = { menu = false; actions.selectSpeed(false) })
+            DropdownMenuItem(text = { Column {
+                Text("Fast")
+                Text(if (state.canSelectFast()) "Faster responses, increased usage" else "Unavailable for this model or host",
+                    style = MaterialTheme.typography.bodySmall)
+            } }, enabled = state.canSelectFast(), modifier = Modifier.testTag("speed-fast"),
+                trailingIcon = { if (speed.fast) Text("✓") },
+                onClick = { menu = false; actions.selectSpeed(true) })
+        }
+    }
+    state.speedError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
 }

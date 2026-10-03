@@ -11,6 +11,14 @@ messages appear above the composer; tap **Steer now** to use one in the active
 turn, or **Remove** to cancel it. An idle, interrupted queue offers **Send now**.
 Queue actions preserve anything you are currently drafting.
 
+Open the composer's conversation settings and choose **Speed → Standard / Fast**.
+Fast adds a lightning icon after the reasoning level. Existing chats save the
+choice immediately for subsequent turns; new chats keep it with the draft until
+creation. Fast requires an advertised model tier and permission from the host's
+managed settings. The choice applies to this chat, without changing global defaults.
+If confirmation is lost, reconnect to read the setting; the app never retries
+the uncertain change automatically.
+
 In an idle conversation, use **⋮ → Merge into main…** to review and directly merge
 committed work into the repository's local `main` checkout. The review includes
 all source commits absent from `main`, including work from a detached HEAD.

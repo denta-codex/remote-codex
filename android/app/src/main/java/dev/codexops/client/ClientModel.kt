@@ -59,6 +59,7 @@ constructor(
             activityMonitor.read(thread, signature)
     }
     private var selection = 0
+    private var speedRevision = 0
     private var listSelection = 0
     private var listJob: Job? = null
     private val listCursors = mutableMapOf<Boolean, MutableSet<String>>()
@@ -249,6 +250,9 @@ constructor(
                                 ready = false,
                                 collaborationModes = emptyList(),
                                 connection = "Disconnected",
+                                speedUncertain = it.speedUncertain || it.speedSaving,
+                                speedError = if (it.speedSaving) SPEED_OUTCOME_UNKNOWN else it.speedError,
+                                speedSaving = false,
                                 modelCatalogStatus = ModelCatalogStatus.Unavailable,
                                 error = when {
                                     e is ConnectionFailure && e.httpStatus == 401 ->
@@ -713,6 +717,11 @@ constructor(
                     threadModel = null,
                     threadMode = null,
                     threadReasoningEffort = null,
+                    threadServiceTier = null,
+                    threadServiceTierKnown = false,
+                    speedSaving = false,
+                    speedUncertain = false,
+                    speedError = null,
                     journal = journal,
                     error = null,
                     attention = false,
@@ -771,6 +780,11 @@ constructor(
                 threadModel = null,
                 threadMode = null,
                 threadReasoningEffort = null,
+                threadServiceTier = null,
+                threadServiceTierKnown = false,
+                speedSaving = false,
+                speedUncertain = false,
+                speedError = null,
                 error = null,
                 busy = true,
                 attention = false,
@@ -838,6 +852,8 @@ constructor(
                     threadModel = threadModel,
                     threadReasoningEffort =
                         response.str("reasoningEffort").takeIf(String::isNotBlank),
+                    threadServiceTier = response.str("serviceTier").takeIf(String::isNotBlank),
+                    threadServiceTierKnown = response.containsKey("serviceTier"),
                     threadCwd = thread.str("cwd").takeIf(String::isNotBlank),
                     modelCatalogMessage =
                         if (options.removedUnsupportedChoice)
@@ -910,6 +926,48 @@ constructor(
             }
     }
 
+    override fun selectSpeed(fast: Boolean) {
+        val before = _state.value
+        if (!before.ready || before.busy || before.journal != null || before.speedSaving || before.speedUncertain) return
+        if (fast && !before.canSelectFast()) return
+        val thread = before.thread
+        if (thread == null) {
+            updateNewTaskOptions(before.newTaskOptions.copy(serviceTier = if (fast) "priority" else "default"))
+            return
+        }
+        if (!before.threadServiceTierKnown) return
+        val n = selection
+        val epoch = rpc.generation
+        val revision = speedRevision
+        _state.update { it.copy(speedSaving = true, speedError = null) }
+        viewModelScope.launch {
+            try {
+                rpc.call("thread/settings/update", speedUpdateParams(thread, fast))
+                if (n != selection || epoch != rpc.generation) return@launch
+                _state.update {
+                    if (it.thread != thread) it else it.copy(
+                        speedSaving = false,
+                        // A notification delivered during the request is newer than this acknowledgement.
+                        threadServiceTier = if (revision == speedRevision) if (fast) "priority" else null else it.threadServiceTier,
+                        threadServiceTierKnown = true,
+                    )
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException && e !is TimeoutCancellationException) throw e
+                if (n != selection || epoch != rpc.generation) return@launch
+                _state.update {
+                    if (it.thread != thread) it else it.copy(
+                        speedSaving = false,
+                        speedUncertain = e !is RpcRejected && revision == speedRevision,
+                        speedError = if (e is RpcRejected) "Server: ${e.message}"
+                            else if (revision != speedRevision) null
+                            else SPEED_OUTCOME_UNKNOWN,
+                    )
+                }
+            }
+        }
+    }
+
     override fun refreshModels() {
         if (!_state.value.ready || _state.value.modelCatalogStatus == ModelCatalogStatus.Loading) return
         viewModelScope.launch { refreshModelCatalog() }
@@ -943,9 +1001,16 @@ constructor(
         if (!_state.value.ready) return
         val n = ++modelCatalogSelection
         _state.update {
-            it.copy(modelCatalogStatus = ModelCatalogStatus.Loading, modelCatalogMessage = null)
+            it.copy(modelCatalogStatus = ModelCatalogStatus.Loading, modelCatalogMessage = null, fastModeAllowed = null)
         }
         try {
+            val fastAllowed = try {
+                val requirements = rpc.call("configRequirements/read", obj()).map("requirements")
+                (requirements.map("featureRequirements")["fast_mode"] as? JsonPrimitive)?.booleanOrNull != false
+            } catch (e: Exception) {
+                if (e is CancellationException && e !is TimeoutCancellationException) throw e
+                null
+            }
             val rows = mutableListOf<ServerModelOption>()
             var cursor: String? = null
             val seenCursors = mutableSetOf<String>()
@@ -969,6 +1034,7 @@ constructor(
                     reconcileModelOptions(it.newTaskOptions, catalog, it.threadModel ?: it.inheritedSettings.takeIf { config -> config.cwd == it.settingsCwd() }?.model)
                 it.copy(
                     models = catalog,
+                    fastModeAllowed = fastAllowed,
                     modelCatalogStatus = ModelCatalogStatus.Ready,
                     newTaskOptions = reconciled.options,
                     modelCatalogMessage =
@@ -1382,7 +1448,8 @@ constructor(
                     before.newTaskOptions.reasoningEffort != null)
         if (
             !before.ready ||
-                before.busy ||
+                before.busy || before.speedSaving || before.speedUncertain ||
+                before.thread == null && isFastTier(before.newTaskOptions.serviceTier) && !before.canSelectFast() ||
                 queue && selectedMode != null ||
                 (text.isBlank() && before.attachments.isEmpty()) ||
                 before.journal != null ||
@@ -1425,6 +1492,7 @@ constructor(
                     "projectId" to plan?.projectId?.let(::s),
                     "model" to before.newTaskOptions.model?.let(::s),
                     "reasoningEffort" to before.newTaskOptions.reasoningEffort?.let(::s),
+                    "serviceTier" to before.newTaskOptions.serviceTier?.let(::s),
                     "threadId" to before.thread?.let(::s),
                     "expectedTurnId" to before.activeTurn?.let(::s),
                     "attachments" to JsonArray(before.attachments.map { it.json() }),
@@ -1515,6 +1583,7 @@ constructor(
                             "threadSource" to s("agent_created_thread"),
                             "projectId" to (projectId?.let(::s) ?: JsonNull),
                             "model" to journal.str("model").ifBlank { null }?.let(::s),
+                            "serviceTier" to journal.str("serviceTier").ifBlank { null }?.let(::s),
                         ),
                     )
                 val thread = result.map("thread")
@@ -1553,6 +1622,9 @@ constructor(
                             result.str("model").takeIf(String::isNotBlank),
                         threadReasoningEffort =
                             result.str("reasoningEffort").takeIf(String::isNotBlank),
+                        threadServiceTier = result.str("serviceTier").takeIf(String::isNotBlank),
+                        threadServiceTierKnown = result.containsKey("serviceTier"),
+                        newTaskOptions = it.newTaskOptions.copy(serviceTier = null),
                     )
                 }
                 stage = "taskReady"
@@ -2042,6 +2114,9 @@ constructor(
                     ready = false,
                     queueReady = false,
                     connection = "Disconnected",
+                    speedUncertain = it.speedUncertain || it.speedSaving,
+                    speedError = if (it.speedSaving) SPEED_OUTCOME_UNKNOWN else it.speedError,
+                    speedSaving = false,
                     decisions = emptyList(),
                     modelCatalogStatus = ModelCatalogStatus.Unavailable,
                 )
@@ -2106,6 +2181,7 @@ constructor(
         timeline.event(method, p)
         if (method == "thread/settings/updated") {
             val settings = p.map("threadSettings")
+            if (settings.containsKey("serviceTier")) speedRevision++
             _state.update {
                 val threadModel = settings.str("model").takeIf(String::isNotBlank)
                 val reconciled =
@@ -2113,6 +2189,10 @@ constructor(
                 it.copy(
                     threadModel = threadModel,
                     threadReasoningEffort = settings.str("effort").takeIf(String::isNotBlank),
+                    threadServiceTier = if (settings.containsKey("serviceTier")) settings.str("serviceTier").takeIf(String::isNotBlank) else it.threadServiceTier,
+                    threadServiceTierKnown = it.threadServiceTierKnown || settings.containsKey("serviceTier"),
+                    speedUncertain = if (settings.containsKey("serviceTier")) false else it.speedUncertain,
+                    speedError = if (settings.containsKey("serviceTier")) null else it.speedError,
                     threadCwd = settings.str("cwd").takeIf(String::isNotBlank) ?: it.threadCwd,
                     threadMode = settings.map("collaborationMode").str("mode").takeIf(String::isNotBlank),
                     newTaskOptions = reconciled.options,
@@ -2167,6 +2247,7 @@ constructor(
             "executionTarget" to s(options.executionTarget.name),
             "model" to options.model?.let(::s),
             "reasoningEffort" to options.reasoningEffort?.let(::s),
+            "serviceTier" to options.serviceTier?.let(::s),
             "approvalPolicy" to options.approvalPolicy?.let(::s),
             "collaborationMode" to options.collaborationMode?.let(::s),
         )
@@ -2182,6 +2263,7 @@ constructor(
             executionTarget = target,
             model = saved.str("model").ifBlank { null },
             reasoningEffort = saved.str("reasoningEffort").ifBlank { null },
+            serviceTier = saved.str("serviceTier").ifBlank { null },
             approvalPolicy = saved.str("approvalPolicy").ifBlank { null },
             collaborationMode = saved.str("collaborationMode").ifBlank { null },
         )
@@ -2203,6 +2285,7 @@ constructor(
                 },
             executionTarget = target,
             model = journal.str("model").takeIf(String::isNotBlank) ?: saved.model,
+            serviceTier = journal.str("serviceTier").takeIf(String::isNotBlank),
             reasoningEffort =
                 journal.str("reasoningEffort").takeIf(String::isNotBlank)
                     ?: saved.reasoningEffort,

@@ -232,7 +232,15 @@ class AppTest {
     private val store = ViewModelStore()
     private val browserCalls = CopyOnWriteArrayList<Pair<String, JsonObject>>()
     @Volatile private var browserResponse: ((String, JsonObject) -> JsonObject?)? = null
+    private val speedMutations = CopyOnWriteArrayList<JsonObject>()
+    private val threadResumes = AtomicInteger()
+    @Volatile private var fixtureServiceTier: String? = null
+    @Volatile private var rejectSpeed = false
+    @Volatile private var dropSpeedReply = false
+    @Volatile private var holdSpeedReply = false
+    @Volatile private var heldSpeedRequest: JsonObject? = null
     private val sent = AtomicInteger()
+
     private val mergeCommands = CopyOnWriteArrayList<String>()
     @Volatile private var mergeConflict = false
     @Volatile private var mergeUncommitted = false
@@ -352,6 +360,26 @@ class AppTest {
                                         return
                                     }
                                     if (method == "initialized") return
+                                    if (method == "thread/settings/update") {
+                                        speedMutations.add(params)
+                                        if (rejectSpeed) {
+                                            ws.send(obj("id" to m["id"], "error" to obj("code" to JsonPrimitive(-32000), "message" to s("Fast denied by fixture"))).toString())
+                                            return
+                                        }
+                                        fixtureServiceTier = params.str("serviceTier").ifBlank { null }
+                                        if (dropSpeedReply) {
+                                            dropSpeedReply = false
+                                            ws.close(1011, "fixture speed acknowledgement lost")
+                                            return
+                                        }
+                                        if (holdSpeedReply) {
+                                            heldSpeedRequest = m
+                                            return
+                                        }
+                                        ws.send(obj("id" to m["id"], "result" to obj()).toString())
+                                        return
+                                    }
+
                                     if (method == "thread/list" && holdTaskList) {
                                         heldTaskLists.add(m)
                                         return
@@ -377,6 +405,7 @@ class AppTest {
                                     if (method in listOf("thread/list", "thread/search", "thread/unarchive")) browserCalls.add(method to params)
                                     val result = browserResponse?.invoke(method, params) ?: when (method) {
                                             "initialize" -> obj("codexHome" to s("/fixture"))
+                                            "configRequirements/read" -> obj("requirements" to JsonNull)
                                             "config/read" -> obj(
                                                 "config" to obj("model" to s("gpt-fixture"), "model_reasoning_effort" to s("high")),
                                                 "origins" to obj("model" to obj("name" to obj("type" to s(if (params.str("cwd") == "/fixture/remote-codex") "project" else "user"))),
@@ -483,10 +512,12 @@ class AppTest {
                                                 "id" to params["threadId"],
                                                 "status" to obj("type" to s("idle")),
                                             ))
-                                            "thread/resume" ->
+                                            "thread/resume" -> {
+                                                threadResumes.incrementAndGet()
                                                 obj(
                                                     "model" to s("gpt-fixture"),
                                                     "reasoningEffort" to s("low"),
+                                                    "serviceTier" to (fixtureServiceTier?.let(::s) ?: JsonNull),
                                                     "thread" to
                                                         obj(
                                                             "id" to s(params.str("threadId")),
@@ -502,7 +533,9 @@ class AppTest {
                                                             "cwd" to s("/fixture/remote-codex"),
                                                         )
                                                 )
+                                            }
                                             "thread/start" -> {
+                                                fixtureServiceTier = params.str("serviceTier").ifBlank { null }
                                                 lastThreadStart = params
                                                 lastThreadStartParams = params
                                                 threadStartParams = params
@@ -516,6 +549,7 @@ class AppTest {
                                                 }
                                                 obj(
                                                     "model" to (params["model"] ?: s("gpt-fixture")),
+                                                    "serviceTier" to (fixtureServiceTier?.let(::s) ?: JsonNull),
                                                     "reasoningEffort" to s("low"),
                                                     "thread" to
                                                         obj(
@@ -1012,6 +1046,7 @@ class AppTest {
                             "model" to s("gpt-fixture"),
                             "displayName" to s("Fixture Default"),
                             "description" to s("Default fixture model"),
+                            "serviceTiers" to JsonArray(listOf(obj("id" to s("priority"), "name" to s("Fast")))),
                             "defaultReasoningEffort" to s("low"),
                             "supportedReasoningEfforts" to
                                 JsonArray(
@@ -2139,6 +2174,112 @@ class AppTest {
         assertNull(model.state.value.newTaskOptions.reasoningEffort)
         compose.onNodeWithText("Unsupported overrides were cleared", substring = true).assertExists()
         demoPause(3000)
+    }
+
+    @Test
+    fun speedDropdownSavesImmediatelyAndFollowsServerSettings() {
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.threadServiceTierKnown && model.state.value.canSelectFast() && !model.state.value.busy }
+        openConversationTray()
+        compose.onNodeWithTag("speed-selector").performScrollTo().performClick()
+        compose.onNodeWithTag("speed-fast").performClick()
+        compose.waitUntil(5000) { model.state.value.composerSpeed().fast && !model.state.value.speedSaving }
+        assertEquals(0, sent.get())
+        assertEquals("priority", speedMutations.single().str("serviceTier"))
+        compose.onNodeWithTag("fast-mode-icon", useUnmergedTree = true).assertExists()
+        assertTrue(model.state.value.composerSpeed().fast)
+        closeConversationTray()
+        val resumesBeforeReconnect = threadResumes.get()
+        compose.runOnUiThread { model.connect() }
+        compose.waitUntil(10000) {
+            threadResumes.get() > resumesBeforeReconnect && model.state.value.ready &&
+                !model.state.value.busy && model.state.value.threadServiceTierKnown
+        }
+        assertTrue(model.state.value.composerSpeed().fast)
+        assertEquals(1, speedMutations.size)
+
+        holdTurnOpen = true
+        compose.onNodeWithTag("composer").performTextInput("Keep working while speed changes")
+        compose.onNodeWithTag("send").performClick()
+        compose.waitUntil(10000) { model.state.value.activeTurn == "turn-test" && !model.state.value.busy }
+
+        openConversationTray()
+        compose.onNodeWithTag("speed-selector").performScrollTo().performClick()
+        compose.onNodeWithTag("speed-standard").performClick()
+        compose.waitUntil(5000) { !model.state.value.speedSaving && model.state.value.composerSpeed().label == "Standard" }
+        assertEquals(JsonNull, speedMutations.last()["serviceTier"])
+        assertNotNull(model.state.value.activeTurn)
+        compose.onNodeWithTag("fast-mode-icon", useUnmergedTree = true).assertDoesNotExist()
+
+        emit(peer!!, "thread/settings/updated", obj("threadSettings" to obj("serviceTier" to s("priority"), "model" to s("gpt-fixture"), "effort" to s("low"))))
+        compose.waitUntil(5000) { model.state.value.composerSpeed().fast }
+        compose.onNodeWithTag("fast-mode-icon", useUnmergedTree = true).assertExists()
+        assertTrue(compose.onNodeWithTag("conversation-settings").fetchSemanticsNode()
+            .config[SemanticsProperties.ContentDescription].any { it.contains("Fast mode") })
+        closeConversationTray()
+        val density = compose.activity.resources.displayMetrics.density
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                RemoteTheme {
+                    CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides
+                        androidx.compose.ui.unit.Density(density, fontScale = 1.5f)) {
+                        Box(Modifier.width(320.dp)) { App(model) }
+                    }
+                }
+            }
+        }
+        compose.onNodeWithTag("fast-mode-icon", useUnmergedTree = true).assertIsDisplayed()
+        assertComposerActionFullyVisible(compose.onNodeWithTag("conversation-settings"))
+    }
+
+    @Test
+    fun speedRejectionAndLostAcknowledgementNeverReplayMutation() {
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.threadServiceTierKnown && model.state.value.canSelectFast() && !model.state.value.busy }
+        rejectSpeed = true
+        compose.runOnUiThread { model.selectSpeed(true) }
+        compose.waitUntil(5000) { model.state.value.speedError != null }
+        assertFalse(model.state.value.composerSpeed().fast)
+        assertFalse(model.state.value.speedUncertain)
+        rejectSpeed = false
+        dropSpeedReply = true
+        compose.runOnUiThread { model.selectSpeed(true) }
+        compose.waitUntil(5000) { !model.state.value.ready && model.state.value.speedUncertain }
+        assertFalse(model.state.value.speedSaving)
+        assertFalse(model.state.value.composerSpeed().fast)
+        compose.runOnUiThread { model.selectSpeed(true) }
+        assertEquals(2, speedMutations.size)
+        compose.runOnUiThread { model.connect() }
+        compose.waitUntil(15000) { model.state.value.ready && !model.state.value.busy && model.state.value.composerSpeed().fast }
+        assertEquals(2, speedMutations.size)
+        assertEquals(0, sent.get())
+    }
+
+    @Test
+    fun speedDraftPersistsAndLateAcknowledgementCannotChangeAnotherChat() {
+        compose.runOnUiThread { model.newChat() }
+        compose.waitUntil(10000) { model.state.value.thread == null && model.state.value.canSelectFast() && !model.state.value.busy }
+        compose.runOnUiThread { model.selectSpeed(true); model.newChat() }
+        compose.waitUntil(5000) { model.state.value.newTaskOptions.serviceTier == "priority" }
+        assertEquals(0, speedMutations.size)
+        closeConversationTray()
+        compose.onNodeWithTag("composer").performTextInput("Fast draft")
+        compose.onNodeWithTag("send").performClick()
+        compose.waitUntil(15000) { model.state.value.entries.any { it.text == "Hello from Grace" } && !model.state.value.busy }
+        assertEquals("priority", lastThreadStartParams!!.str("serviceTier"))
+        assertTrue(model.state.value.composerSpeed().fast)
+        holdSpeedReply = true
+        compose.runOnUiThread { model.selectSpeed(false) }
+        compose.waitUntil(5000) { heldSpeedRequest != null }
+        assertTrue(model.state.value.speedSaving)
+        assertTrue(model.state.value.composerSpeed().fast)
+        compose.runOnUiThread { model.newChat() }
+        compose.waitUntil(5000) { model.state.value.thread == null }
+        peer!!.send(obj("id" to heldSpeedRequest!!["id"], "result" to obj()).toString())
+        compose.waitForIdle()
+        assertNull(model.state.value.thread)
+        assertNull(model.state.value.newTaskOptions.serviceTier)
+        assertFalse(model.state.value.speedSaving)
     }
 
     @Test

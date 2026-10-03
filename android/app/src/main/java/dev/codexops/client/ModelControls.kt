@@ -15,6 +15,7 @@ data class ServerModelOption(
     val defaultReasoningEffort: String?,
     val supportedReasoningEfforts: List<ReasoningEffortOption>,
     val isDefault: Boolean,
+    val serviceTiers: List<String> = emptyList(),
 )
 
 enum class ModelCatalogStatus {
@@ -43,6 +44,7 @@ internal fun parseModelCatalog(result: JsonObject): List<ServerModelOption> =
                             )
                         }
                     },
+                serviceTiers = row.list("serviceTiers").mapNotNull { it.str("id").takeIf(String::isNotBlank) },
                 isDefault =
                     (row["isDefault"] as? JsonPrimitive)?.booleanOrNull == true,
             )
@@ -96,6 +98,7 @@ internal fun newThreadParams(cwd: String, options: NewTaskOptions) =
         "threadSource" to s("agent_created_thread"),
         "projectId" to JsonNull,
         "model" to options.model?.let(::s),
+        "serviceTier" to options.serviceTier?.let(::s),
     )
 
 internal fun turnStartParams(
@@ -135,6 +138,7 @@ data class InheritedSettings(
     val effort: String? = null,
     val modelSource: String = "From server",
     val effortSource: String = "From server",
+    val serviceTier: String? = null,
 )
 
 internal fun parseInheritedSettings(result: JsonObject, cwd: String): InheritedSettings {
@@ -147,6 +151,7 @@ internal fun parseInheritedSettings(result: JsonObject, cwd: String): InheritedS
         config.str("model").takeIf(String::isNotBlank),
         config.str("model_reasoning_effort").takeIf(String::isNotBlank),
         source("model"), source("model_reasoning_effort"),
+        config.str("service_tier").takeIf(String::isNotBlank),
     )
 }
 
@@ -204,3 +209,32 @@ internal fun ScreenState.composerSettings(): ComposerSettings {
             ?: if (thread == null) "Default" else null,
     )
 }
+
+internal fun isFastTier(tier: String?): Boolean = tier == "priority" || tier == "fast"
+
+internal const val SPEED_OUTCOME_UNKNOWN =
+    "Speed change outcome unknown. Reconnect to read the chat setting; the change will not be retried."
+
+internal fun speedUpdateParams(thread: String, fast: Boolean): JsonObject =
+    obj("threadId" to s(thread), "serviceTier" to if (fast) s("priority") else JsonNull)
+
+internal data class ComposerSpeed(val tier: String?, val known: Boolean) {
+    val fast: Boolean get() = known && isFastTier(tier)
+    val label: String get() = when {
+        !known -> "Unavailable"
+        fast -> "Fast"
+        tier == null || tier == "default" -> "Standard"
+        else -> "Other ($tier)"
+    }
+}
+
+internal fun ScreenState.composerSpeed(): ComposerSpeed {
+    if (thread != null) return ComposerSpeed(threadServiceTier, threadServiceTierKnown && !speedUncertain)
+    newTaskOptions.serviceTier?.let { return ComposerSpeed(it, true) }
+    val inherited = inheritedSettings.takeIf { it.cwd == settingsCwd() && it.status == ModelCatalogStatus.Ready }
+    return ComposerSpeed(inherited?.serviceTier, inherited != null)
+}
+
+internal fun ScreenState.canSelectFast(): Boolean =
+    fastModeAllowed == true && modelCatalogStatus == ModelCatalogStatus.Ready &&
+        models.firstOrNull { it.id == composerSettings().modelId }?.serviceTiers?.any(::isFastTier) == true

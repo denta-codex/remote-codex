@@ -15,6 +15,7 @@ class ModelControlsTest {
                             "model" to s("gpt-fixture"),
                             "displayName" to s("Fixture"),
                             "description" to s("Server description"),
+                            "serviceTiers" to JsonArray(listOf(obj("id" to s("priority"), "name" to s("Fast")))),
                             "defaultReasoningEffort" to s("low"),
                             "supportedReasoningEfforts" to
                                 JsonArray(
@@ -45,6 +46,7 @@ class ModelControlsTest {
         assertEquals("low", model.defaultReasoningEffort)
         assertEquals(listOf("low", "high"), model.supportedReasoningEfforts.map { it.id })
         assertTrue(model.isDefault)
+        assertEquals(listOf("priority"), model.serviceTiers)
     }
 
     @Test
@@ -160,4 +162,35 @@ class ModelControlsTest {
         assertEquals("High", state.composerSettings().effort)
         assertEquals("Plan", state.composerSettings().mode)
     }
+    @Test fun speedDistinguishesInheritanceStandardFastAndUnknown() {
+        val inherited = parseInheritedSettings(obj("config" to obj("service_tier" to s("priority"))), "/fixture")
+        assertEquals("priority", inherited.serviceTier)
+        assertFalse(newThreadParams("/fixture", NewTaskOptions()).containsKey("serviceTier"))
+        assertEquals("default", newThreadParams("/fixture", NewTaskOptions(serviceTier = "default")).str("serviceTier"))
+        assertEquals("priority", newThreadParams("/fixture", NewTaskOptions(serviceTier = "priority")).str("serviceTier"))
+        assertEquals(JsonNull, speedUpdateParams("thread", false)["serviceTier"])
+        assertEquals("priority", speedUpdateParams("thread", true).str("serviceTier"))
+        assertEquals("Standard", ComposerSpeed(null, true).label)
+        assertEquals("Unavailable", ComposerSpeed(null, false).label)
+        assertTrue(ComposerSpeed("priority", true).fast)
+        assertTrue(ComposerSpeed("fast", true).fast)
+        assertEquals("Other (flex)", ComposerSpeed("flex", true).label)
+        assertFalse(ComposerSpeed("priority", false).fast)
+    }
+
+    @Test fun speedUsesChatAuthorityAndOnlyAdvertisedFastCapability() {
+        val catalog = parseModelCatalog(catalogResult).map { it.copy(serviceTiers = listOf("priority")) }
+        val state = resolvedState().copy(models = catalog, fastModeAllowed = true,
+            inheritedSettings = config().copy(serviceTier = "priority"))
+        assertTrue(state.composerSpeed().fast)
+        assertTrue(state.canSelectFast())
+        assertFalse(state.copy(fastModeAllowed = false).canSelectFast())
+        assertFalse(state.copy(models = catalog.map { it.copy(serviceTiers = emptyList()) }).canSelectFast())
+        assertEquals("Standard", state.copy(newTaskOptions = state.newTaskOptions.copy(serviceTier = "default")).composerSpeed().label)
+        val thread = state.copy(thread = "thread", threadServiceTierKnown = true)
+        assertEquals("Standard", thread.composerSpeed().label)
+        assertFalse(thread.copy(threadServiceTier = "priority", speedUncertain = true).composerSpeed().fast)
+        assertTrue(thread.copy(threadServiceTier = "priority", activeTurn = "working").composerSpeed().fast)
+    }
+
 }
