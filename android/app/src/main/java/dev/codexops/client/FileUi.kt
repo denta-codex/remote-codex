@@ -19,11 +19,13 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.m3.markdownTypography
 import dev.codexops.core.FileRef
 import java.io.File
 import java.net.URI
@@ -41,7 +43,29 @@ internal fun FileAwareMarkdown(text: String, actions: ConversationActions) {
                 }
             }
         }
-    CompositionLocalProvider(LocalUriHandler provides handler) { Markdown(text) }
+    val body = MaterialTheme.typography.bodyLarge.copy(lineHeight = 24.sp)
+    val heading = body.copy(fontWeight = FontWeight.SemiBold)
+    // Material's display headings overwhelm a phone-sized conversation. Use the
+    // same reading scale for messages, plan cards, and the full-screen plan.
+    val typography = markdownTypography(
+        h1 = heading.copy(fontSize = 22.sp, lineHeight = 28.sp),
+        h2 = heading.copy(fontSize = 20.sp, lineHeight = 26.sp),
+        h3 = heading.copy(fontSize = 18.sp, lineHeight = 24.sp),
+        h4 = heading,
+        h5 = heading,
+        h6 = heading,
+        text = body,
+        paragraph = body,
+        ordered = body,
+        bullet = body,
+        list = body,
+        quote = body,
+        code = body.copy(fontFamily = FontFamily.Monospace, fontSize = 14.sp, lineHeight = 20.sp),
+        inlineCode = body.copy(fontFamily = FontFamily.Monospace, fontSize = 14.sp),
+    )
+    CompositionLocalProvider(LocalUriHandler provides handler) {
+        Markdown(text, typography = typography)
+    }
 }
 
 internal fun fileReference(uri: String): FileRef? {
