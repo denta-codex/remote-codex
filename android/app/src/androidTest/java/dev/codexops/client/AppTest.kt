@@ -1283,7 +1283,40 @@ class AppTest {
             compose.onAllNodesWithTag("message-image").fetchSemanticsNodes().isNotEmpty()
         }
         compose.onAllNodesWithTag("message-image")[0].performClick()
+        compose.onNodeWithContentDescription("Expanded conversation image")
+            .performTouchInput { doubleClick() }
+        val viewport = compose.onNodeWithTag("image-viewport")
+        viewport.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "300%"))
+        viewport.performTouchInput { swipe(center, center + androidx.compose.ui.geometry.Offset(80f, 80f)) }
+        viewport.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "300%"))
+        viewport.performTouchInput { doubleClick() }
+        viewport.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "100%"))
+        viewport.performTouchInput {
+            val span = width / 8f
+            down(0, center - androidx.compose.ui.geometry.Offset(span, 0f))
+            down(1, center + androidx.compose.ui.geometry.Offset(span, 0f))
+            for (step in 1..12) {
+                val distance = span * (1f + step / 12f)
+                moveTo(0, center - androidx.compose.ui.geometry.Offset(distance, 0f), delayMillis = 16)
+                moveTo(1, center + androidx.compose.ui.geometry.Offset(distance, 0f), delayMillis = 16)
+            }
+            up(0)
+            up(1)
+        }
+        viewport.assert(SemanticsMatcher("Image is zoomed by pinch") {
+            it.config[SemanticsProperties.StateDescription].removeSuffix("%").toInt() > 150
+        })
+        compose.onNodeWithText("Fit").performClick()
+        viewport.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "100%"))
+        compose.onNodeWithText("Zoom out").assertIsNotEnabled()
+        repeat(4) { compose.onNodeWithText("Zoom in").performClick() }
+        viewport.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "500%"))
+        compose.onNodeWithText("Zoom in").assertIsNotEnabled()
         compose.onNodeWithTag("close-image").assertIsDisplayed().performClick()
+        compose.onAllNodesWithTag("message-image")[0].performClick()
+        viewport.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "100%"))
+        shell("input keyevent KEYCODE_BACK")
+        compose.onNodeWithTag("close-image").assertDoesNotExist()
     }
 
     @Test

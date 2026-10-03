@@ -20,8 +20,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import dev.codexops.core.MediaLocation
 import dev.codexops.core.MediaRef
 import dev.codexops.core.AttachmentKind
@@ -193,35 +191,7 @@ private fun MediaPreview(media: MediaRef, actions: ConversationActions) {
                 contentScale = ContentScale.Fit,
             )
             if (expanded)
-                Dialog(
-                    onDismissRequest = { expanded = false },
-                    properties = DialogProperties(usePlatformDefaultWidth = !cover),
-                ) {
-                    Surface(
-                        (if (cover) Modifier.fillMaxSize().systemBarsPadding()
-                            else Modifier.fillMaxWidth())
-                            .clickable { expanded = false },
-                        shape = if (cover)
-                            androidx.compose.foundation.shape.RoundedCornerShape(0.dp)
-                        else MaterialTheme.shapes.medium,
-                    ) {
-                        Column {
-                            Image(
-                                bitmap.asImageBitmap(),
-                                "Expanded conversation image",
-                                Modifier.fillMaxWidth().weight(1f, fill = false)
-                                    .heightIn(max = 720.dp),
-                                contentScale = ContentScale.Fit,
-                            )
-                            TextButton(
-                                { expanded = false },
-                                Modifier.align(Alignment.End).testTag("close-image"),
-                            ) {
-                                Text("Close")
-                            }
-                        }
-                    }
-                }
+                ImageViewer(bitmap, "Expanded conversation image") { expanded = false }
         }
     }
 }
