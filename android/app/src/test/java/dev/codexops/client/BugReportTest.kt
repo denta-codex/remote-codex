@@ -11,6 +11,22 @@ import org.junit.Test
 class BugReportTest {
     private val id = "12345678-1234-1234-1234-123456789abc"
 
+    @Test fun oldUnsentDraftRequiresIntentAndReviewedDraftSurvivesRecreation() {
+        val original = BugReportDraft(id, 123, obj(), "Research gestures; don't build it.")
+        val legacy = JsonObject(original.json().filterKeys { it !in setOf("intent", "title", "review") } +
+            ("version" to JsonPrimitive(1)))
+        val migrated = BugReportDraft.from(legacy)
+        assertEquals(original.description, migrated.description)
+        assertNull(migrated.intent)
+        assertFalse(migrated.canReview)
+        assertTrue(migrated.review.isEmpty())
+        val reviewed = migrated.copy(intent = ReportIntent.Research, title = "Research: Gestures",
+            review = obj("prompt" to s("Reviewed text"), "collaborationMode" to obj("mode" to s("plan"))))
+        assertEquals(reviewed, BugReportDraft.from(reviewed.json()))
+        assertTrue(reviewed.canReview)
+        assertFalse(reviewed.copy(description = "  ").canReview)
+    }
+
     @Test fun snapshotContainsVisibleEvidenceWithoutRawProtocolOrCredentials() {
         val pending = obj("stage" to s("sending"), "operation" to s("op"), "credential" to s("secret-key"), "rawPayload" to s("hidden"))
         var state = ScreenState(thread = "source", draft = "unsent words", journal = pending,

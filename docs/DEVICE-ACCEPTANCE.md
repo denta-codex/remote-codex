@@ -31,7 +31,7 @@ Record Android version, APK version/code, signer fingerprint, Codex version and 
 - [ ] Higher-version same-signer APK preserves credential/drafts/assistant selection.
 - [ ] Scheduled host restart: user service and persistent Serve route return.
 - [ ] Take a system screenshot on both Razr displays: one "Screenshot taken ·
-      Report bug" snackbar appears and does not hide the system preview's
+      Report or request" snackbar appears and does not hide the system preview's
       actions. Tapping it attaches the app window as it was when the screenshot
       was taken. Ignoring it opens nothing. Confirm the Settings toggle persists.
 - [ ] With the bug-report build installed, deliberately shake on both Razr displays:
@@ -39,9 +39,13 @@ Record Android version, APK version/code, signer fingerprint, Codex version and 
       respect the cooldown. Ordinary handling and the phone's other gestures do
       not open unwanted reports. Confirm disabling the Settings toggle persists.
 - [ ] Save a report offline, reopen after a process restart, and verify the
-      original screenshot, human description, and diagnostic timestamps remain.
+      intent, original screenshot, human description, and diagnostic timestamps remain.
+- [ ] On both displays, choose Research, review its title/message/evidence, edit
+      the request, and return to review. Nothing starts before the explicit final
+      action; reconnecting preserves the draft without submitting it.
 - [ ] Submit the report to Grace and confirm one remote-codex worktree, successful
-      environment setup, attached evidence, and a running fix task on desktop.
+      environment setup, attached evidence, and a task matching the selected intent
+      and mode on desktop. Only Implement authorizes implementation.
 - [ ] Confirm real-device app logcat and available historical crash/ANR evidence;
       unavailable diagnostics are identified without blocking the report.
 

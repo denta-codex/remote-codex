@@ -205,7 +205,7 @@ the repository's setup script; normal new-task UI does not yet expose environmen
 selection. Long commands use operation-specific RPC deadlines rather than the
 ordinary request default.
 
-## User-authored bug reports
+## User-authored reports and requests
 
 Android owns the report UI, collectors, draft persistence, and orchestration; the
 forwarder and stock app-server protocol are unchanged. The menu and a foreground
@@ -227,17 +227,33 @@ five minutes, 2,000 lines, and 512 KiB. Android 11+ supplies abnormal process-ex
 metadata within 24 hours and an available trace up to 2 MiB. Diagnostics are
 report artifacts, never operational log output.
 
+Reports require an explicit Investigate, Research, Plan, or Implement intent.
+The single form preserves the description and attachments when intent changes.
+Read-only review preparation resolves the configured project, repository origin,
+revision, and advertised collaboration mode before showing the complete first
+message, editable task title, destination, and evidence. Investigate, Research,
+and Plan use the stock Plan preset; Implement uses Default. The preset's model
+or the server catalog's default model supplies mode settings. Missing capabilities
+block review; there is no implementation fallback. The description is retained
+verbatim and may narrow the selected scope; evidence is separate diagnostic data.
+
 Report submission has its own persisted journal, independent of the original
-conversation journal. It resolves the configured remote-codex project, verifies
-the repository origin, uses the existing detached-worktree adapter, and executes
+conversation journal. Final submission durably freezes the reviewed input,
+title, intent, mode settings, and selected attachments before any host mutation.
+It uses the existing detached-worktree adapter and executes
 `scripts/setup-worktree` with a two-minute process deadline plus transport grace.
 The setup command atomically writes an operation/revision receipt after success.
-Evidence resides beside the worktree checkout. The first turn uses server-default
-model settings, a human-authored description, artifact references, and explicit
-implementation instructions. Every mutation is journaled before dispatch;
+Evidence resides beside the worktree checkout. The first turn uses the exact
+reviewed message, including the standard attachment context. Every mutation is journaled before dispatch;
 recovery compares authoritative receipts, uploaded bytes, and task/message IDs.
 Missing or conflicting evidence leaves the operation pending instead of replaying
 it. Accepted reports retain the task reference and remove local artifacts.
+
+Draft format v2 preserves v1 text and evidence. Unsent v1 drafts require intent
+selection and review; in-flight v1 journals retain their original implementation
+prompt and default-mode behavior. This legacy path serves only those already
+started operations and can be removed once they have completed. Saved reviews
+survive process recreation; reconnect never submits them automatically.
 
 Limits: no push notifications, directory attachments, terminal emulator, or interactive
 command previews. Activity text is bounded for phone rendering; full output

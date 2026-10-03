@@ -2481,6 +2481,74 @@ class AppTest {
         demoPause(3500)
     }
 
+    private fun reportField(tag: String): SemanticsNodeInteraction {
+        compose.onNodeWithTag("report-content").performScrollToNode(hasTestTag(tag))
+        return compose.onNodeWithTag(tag)
+    }
+
+    @Test
+    fun researchReportReviewsEditsAndFreezesTheRequestAcrossRecreation() {
+        compose.runOnUiThread { model.reports.open() }
+        compose.waitUntil(10000) { model.reports.state.value.visible && !model.reports.state.value.capturing }
+        val description = "Research swipe gestures for the task list. Don't build it; compare options."
+        reportField("report-intent-Research").performClick()
+        reportField("bug-description").performTextInput(description)
+        reportField("report-intent-Plan").performClick()
+        assertEquals(description, model.reports.state.value.draft!!.description)
+        reportField("report-intent-Research").performClick()
+        compose.onNodeWithTag("submit-bug-report").performClick()
+        compose.waitUntil(10000) { model.reports.state.value.draft?.review?.isNotEmpty() == true }
+        assertEquals(0, worktreeAdds.get())
+        assertEquals(0, sent.get())
+        compose.onNodeWithTag("edit-report-request").performClick()
+        reportField("remove-report-context.txt").performClick()
+        compose.waitUntil(5000) { model.reports.state.value.draft?.attachments?.none { it.id == "context.txt" } == true && !model.reports.state.value.busy }
+        compose.onNodeWithTag("submit-bug-report").performClick()
+        compose.waitUntil(10000) { model.reports.state.value.draft?.review?.isNotEmpty() == true }
+        reportField("report-title").performTextReplacement("Research: Task-list gestures")
+        compose.waitUntil(5000) { BugReportStore(File(app.filesDir, "bug-reports")).load()?.title == "Research: Task-list gestures" }
+        val reviewed = model.reports.state.value.draft!!.review
+        assertTrue(reviewed.str("prompt").contains(description))
+        assertTrue(reviewed.str("prompt").contains("Do not implement changes."))
+        assertFalse(reviewed.str("prompt").contains("This is an implementation task."))
+        compose.runOnUiThread {
+            store.clear()
+            model = ClientModel(app, "ws://127.0.0.1:${server.port}/rpc", "/fixture", true, "/fixture/remote-codex")
+            store.put("fixture", model)
+            compose.activity.setContent { RemoteTheme { App(model) } }
+            model.foreground(true)
+        }
+        compose.waitUntil(15000) { model.reports.state.value.loaded && model.state.value.ready }
+        assertEquals(0, threadStarts.get())
+        assertEquals(reviewed, model.reports.state.value.draft!!.review)
+        compose.runOnUiThread { model.reports.open() }
+        reportField("report-title").assertTextContains("Research: Task-list gestures")
+        compose.onNodeWithTag("submit-bug-report").assertTextContains("Start research task")
+        // Two calls in the same UI turn must still dispatch just one submission.
+        compose.runOnUiThread { model.reports.submit(); model.reports.submit() }
+        compose.waitUntil(20000) { model.reports.state.value.lastTask == "task-test" }
+        assertEquals(1, threadStarts.get())
+        assertEquals(1, sent.get())
+        assertEquals("plan", lastTurnStartParams!!.map("collaborationMode").str("mode"))
+        assertTrue(acceptedText.contains(reviewed.str("prompt")))
+        assertFalse(remoteFiles.keys.any { it.contains("/report/") && it.endsWith("context.txt") })
+    }
+
+    @Test
+    fun reportUnavailableModeKeepsDraftWithoutCreatingTask() {
+        compose.runOnUiThread { model.reports.open() }
+        compose.waitUntil(10000) { model.reports.state.value.visible && !model.reports.state.value.capturing }
+        reportField("report-intent-Plan").performClick()
+        reportField("bug-description").performTextInput("Plan better quick actions")
+        browserResponse = { method, _ -> if (method == "collaborationMode/list") obj("data" to JsonArray(emptyList())) else null }
+        compose.onNodeWithTag("submit-bug-report").performClick()
+        compose.waitUntil(10000) { model.reports.state.value.error?.contains("requires an available") == true }
+        assertTrue(model.reports.state.value.draft!!.review.isEmpty())
+        assertEquals(ReportIntent.Plan, model.reports.state.value.draft!!.intent)
+        assertEquals(0, worktreeAdds.get())
+        assertEquals(0, threadStarts.get())
+    }
+
     @Test
     fun bugReportCapturesScreenAndStartsIsolatedFixTask() {
         compose.runOnUiThread { model.newChat() }
@@ -2495,9 +2563,17 @@ class AppTest {
         assertEquals("captured", draft.diagnostics.map("screenshot").str("status"))
         val screenshot = draft.attachments.single { it.id == "screenshot.png" }
         assertNotNull(android.graphics.BitmapFactory.decodeFile(screenshot.localPath))
-        compose.onNodeWithTag("bug-description").performTextInput("The queue button lost my message")
+        compose.onNodeWithTag("submit-bug-report").assertIsNotEnabled()
+        reportField("bug-description").performTextInput("The queue button lost my message")
+        compose.onNodeWithTag("submit-bug-report").assertIsNotEnabled()
+        reportField("report-intent-Implement").performClick()
         compose.onNodeWithTag("submit-bug-report").performClick()
+        compose.waitUntil(10000) { model.reports.state.value.draft?.review?.isNotEmpty() == true }
+        assertEquals(0, threadStarts.get())
+        assertEquals(0, worktreeAdds.get())
+        compose.onNodeWithTag("submit-bug-report").assertTextContains("Start implementation task").performClick()
         compose.waitUntil(20000) { model.reports.state.value.lastTask == "task-test" && model.reports.state.value.draft == null }
+        assertEquals("default", lastTurnStartParams!!.map("collaborationMode").str("mode"))
         assertEquals(1, environmentSetups.get())
         assertEquals(1, worktreeAdds.get())
         assertEquals(1, threadStarts.get())
@@ -2513,7 +2589,7 @@ class AppTest {
         compose.onNodeWithTag("composer").assertTextContains("Keep my original draft")
         // Opening the fix task remains an explicit action.
         compose.onNodeWithTag("app-menu").performClick()
-        compose.onNodeWithText("Last bug report").performClick()
+        compose.onNodeWithText("Last report task").performClick()
         compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy }
     }
 
@@ -2524,12 +2600,12 @@ class AppTest {
         compose.waitUntil(5000) { model.state.value.page == "chat" }
         compose.onNodeWithTag("composer").performTextInput("Screenshot this draft")
         shell("input keyevent KEYCODE_SYSRQ")
-        compose.waitUntil(10000) { compose.onAllNodesWithText("Report bug").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(10000) { compose.onAllNodesWithText("Report or request").fetchSemanticsNodes().isNotEmpty() }
         assertFalse(model.reports.state.value.visible)
-        val actionBounds = compose.onNodeWithText("Report bug").fetchSemanticsNode().boundsInRoot
+        val actionBounds = compose.onNodeWithText("Report or request").fetchSemanticsNode().boundsInRoot
         val messageBounds = compose.onNodeWithText("Screenshot taken").fetchSemanticsNode().boundsInRoot
         assertTrue("Report action should be left of the screenshot message", actionBounds.right <= messageBounds.left)
-        compose.onNodeWithText("Report bug").performClick()
+        compose.onNodeWithText("Report or request").performClick()
         compose.waitUntil(10000) { model.reports.state.value.visible && !model.reports.state.value.capturing }
         val draft = requireNotNull(model.reports.state.value.draft)
         assertEquals("Screenshot this draft", draft.context.str("draft"))
@@ -2551,7 +2627,8 @@ class AppTest {
         val original = requireNotNull(model.reports.state.value.draft)
         val screenshot = original.attachments.single { it.id == "screenshot.png" }
         val originalBytes = File(screenshot.localPath).readBytes()
-        compose.onNodeWithTag("bug-description").performTextInput("Remember this offline")
+        reportField("report-intent-Research").performClick()
+        reportField("bug-description").performTextInput("Remember this offline")
         compose.waitUntil(5000) { BugReportStore(File(app.filesDir, "bug-reports")).load()?.description == "Remember this offline" }
         compose.runOnUiThread {
             store.clear()
@@ -2562,7 +2639,8 @@ class AppTest {
         compose.waitUntil(5000) { model.reports.state.value.loaded }
         var recaptured = false
         compose.runOnUiThread { model.reports.open { recaptured = true; byteArrayOf() } }
-        compose.onNodeWithTag("bug-description").assertTextContains("Remember this offline")
+        reportField("bug-description").assertTextContains("Remember this offline")
+        assertEquals(ReportIntent.Research, model.reports.state.value.draft!!.intent)
         assertFalse(recaptured)
         assertEquals(original.capturedAt, model.reports.state.value.draft!!.capturedAt)
         assertArrayEquals(originalBytes, File(screenshot.localPath).readBytes())
@@ -2574,7 +2652,7 @@ class AppTest {
         compose.runOnUiThread { model.reports.removeAttachment("screenshot.png") }
         compose.waitUntil(5000) { model.reports.state.value.draft!!.attachments.none { it.id == "screenshot.png" } }
         assertFalse(File(screenshot.localPath).exists())
-        compose.onNodeWithTag("discard-bug-report").performClick()
+        reportField("discard-bug-report").performClick()
         compose.waitUntil(5000) { model.reports.state.value.draft == null }
         assertFalse(File(app.filesDir, "bug-reports/${original.id}").exists())
     }
@@ -2604,9 +2682,14 @@ class AppTest {
         compose.runOnUiThread { model.reports.open { error("Fixture capture failure") } }
         compose.waitUntil(10000) { model.reports.state.value.visible && !model.reports.state.value.capturing }
         assertEquals("unavailable", model.reports.state.value.draft!!.diagnostics.map("screenshot").str("status"))
-        compose.onNodeWithTag("bug-description").performTextInput("A cover-screen bug")
+        reportField("report-intent-Investigate").performClick()
+        reportField("bug-description").performTextInput("A cover-screen bug")
         compose.onNodeWithTag("submit-bug-report").assertIsDisplayed().performClick()
+        compose.waitUntil(10000) { model.reports.state.value.draft?.review?.isNotEmpty() == true }
+        reportField("report-title").assertIsDisplayed()
+        compose.onNodeWithTag("submit-bug-report").assertTextContains("Start investigation").assertIsDisplayed().performClick()
         compose.waitUntil(20000) { model.reports.state.value.lastTask == "task-test" }
+        assertEquals("plan", lastTurnStartParams!!.map("collaborationMode").str("mode"))
         assertEquals(1, sent.get())
     }
 

@@ -1,5 +1,45 @@
 # Validation
 
+## 2026-10-03 — Intent-aware reports (unreleased)
+
+- Based on local main `6417fcb`. The report form now requires Investigate,
+  Research, Plan, or Implement, with no default. Description and evidence stay
+  together; a separate review shows the title, destination, attachments, and
+  exact first message before any host mutation. The first three intents use
+  advertised Plan mode; Implement uses Default, with no capability fallback.
+- All 20 focused `BugReportTest` and `BugReportSubmissionTest` unit tests passed.
+  Coverage includes intent/title/mode agreement, verbatim user restrictions,
+  exact reviewed input, preparation without mutations, stale-review rejection,
+  migration of unsent v1 drafts, legacy in-flight submissions, and reconstruction
+  after lost acknowledgements at every mutation stage without replay.
+- Android instrumentation compilation and `:app:lintDebug` passed.
+- A separate selected run passed all three previously unattempted cases:
+  `AppTest#systemScreenshotOffersReportWithTheCapturedWindow`,
+  `AppTest#bugReportScreenshotSurvivesOfflineRecreationAndCanBeRemoved`, and
+  `AppTest#bugReportSettingsExcludesScreenshotAndPersistsShakePreference`.
+  This verifies the renamed screenshot action on the compact display, offline
+  intent/text/evidence retention, evidence removal, and credential-screen capture
+  exclusion. Seven emulator cases have confirmed passing results in total,
+  including the separately approved cover-display check below.
+- The initial four-case managed-device run hit the wrapper's three-minute
+  deadline. Its instrumentation results explicitly confirmed these three passes:
+  `AppTest#reportUnavailableModeKeepsDraftWithoutCreatingTask`,
+  `AppTest#bugReportCapturesScreenAndStartsIsolatedFixTask`, and
+  `AppTest#researchReportReviewsEditsAndFreezesTheRequestAcrossRecreation`.
+  The research case covers edit/review, removing evidence, changing intent,
+  custom titles, recreation, reconnect without submission, and double submission
+  calls producing only one task and turn.
+- After explicit user approval, the isolated
+  `AppTest#bugReportCaptureFailureStillAllowsSubmissionOnCoverDisplay` run passed
+  (one test, zero failures; successful completion in 2m 51s). This confirms that
+  intent selection, review, and Plan-mode submission remain reachable on the
+  compact display even when screenshot capture fails. The earlier batch's result
+  was inconclusive because its final acknowledgement was cut off by the timeout;
+  no automatic retry was performed. Temporary diagnostic copies from that
+  interrupted run were removed after the isolated check passed.
+- All instrumentation uses fixture data. No release, publication, forwarder
+  deployment, or physical-phone installation was performed.
+
 ## Task-row gestures — unreleased
 
 - Integrated with main `9a622a6`, retaining the compact inbox, server recency
