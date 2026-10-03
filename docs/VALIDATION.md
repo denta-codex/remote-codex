@@ -368,6 +368,56 @@
 - No release build, publication, live deployment, Taildrop delivery, or physical-
   phone installation was performed.
 
+## October 3, 2026 — direct merge into main (report 889fad11)
+
+- Implemented on the restored local-main baseline `6417fcb`. The conversation
+  overflow menu now previews and directly merges committed work through stock
+  `command/exec`. The earlier agent-prompt shortcut was discarded. No Rust,
+  forwarder, or Codex server changes were made.
+- Requires an idle synchronized task, clean checkouts, an existing local `main`
+  checkout, related histories, and no submodules or unfinished Git operations.
+  Preflight uses `merge-tree` without touching either checkout. Source and target
+  commit IDs and checkout identity are revalidated after confirmation and after
+  preparation. All source commits absent from main are included; the UI shows
+  up to 100 commit subjects and 200 changed paths, with total counts.
+- Divergent merges are prepared in a disposable detached worktree, then main
+  only receives a fast-forward. Normal merge hooks/signing configuration apply;
+  squash/autostash preferences cannot override the explicit operation. Ignored
+  local files are protected from overwrite. No push or release commands run.
+- Operations use a repository lock, a separate phone journal, and minimal host
+  receipts under `<common-git-dir>/remote-codex-merges/`. Lost replies or restarts
+  expose a state check, never an automatic mutation retry. Missing or unusable
+  recovery evidence remains uncertain. Completed temporary worktrees are removed;
+  unresolved recovery retains its owned worktree and reports its location.
+  The lock serializes this app's operations; independent Git clients still
+  require pre/post state checks, and detected external changes stop the flow or
+  produce an explicit needs-review result without automatic rollback.
+- Passed 14 focused `GitMergeTest` cases with the managed JDK using
+  `:app:testDebugUnitTest --tests dev.codexops.client.GitMergeTest`. Tests run the
+  exact bundled shell logic against disposable repositories: fast-forward and
+  divergent merges, detached and named source branches, conflicts with byte-for-byte
+  index preservation, dirty checkouts, stale snapshots, absent main/checkout,
+  unfinished Git state and locks, unrelated histories, submodules, failing hooks,
+  concurrent commits, ignored files, and recovery before/after advancement.
+  Controller tests cover eligibility, persisted uncertainty, restart, and an
+  unavailable recovery response that must not clear the saved mutation.
+- Passed three selected managed-emulator tests:
+  `AppTest#directMergePreviewsCancelsAndMergesWithoutAnAgentTurn`,
+  `AppTest#directMergeConflictsDisableConfirmation`, and
+  `AppTest#directMergeLostReplySurvivesRestartAndReconcilesWithoutReplay`.
+  They verify draft/attachment preservation, cancellation, blocked conflicts,
+  one merge request, recovery after model restart, and zero agent-turn requests.
+- The first unit iterations exposed a submodule blocker-priority issue and a
+  concurrent-writer fixture inheriting hook-local Git environment variables;
+  corrected both before final validation. Shell syntax and `git diff --check`
+  pass. No full emulator suite or release workflow was run.
+- The final cover-screen fixture recording also passed using
+  `scripts/emulator-record directMergePreviewsCancelsAndMergesWithoutAnAgentTurn --cover`.
+  Demo artifacts are `artifacts/demos/direct-merge-main.mp4` and `.gif`; the
+  recording uses mock RPC results. The owned emulator was stopped afterward.
+  Only disposable test repositories were merged. Nothing was pushed, published,
+  deployed, or installed on the physical phone.
+
 ## September 24, 2026 — Android file support release
 
 - Advanced Android to 0.2.1 / code 11 for generic file attachments and file

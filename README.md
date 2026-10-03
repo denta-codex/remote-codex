@@ -11,6 +11,17 @@ messages appear above the composer; tap **Steer now** to use one in the active
 turn, or **Remove** to cancel it. An idle, interrupted queue offers **Send now**.
 Queue actions preserve anything you are currently drafting.
 
+In an idle conversation, use **⋮ → Merge into main…** to review and directly merge
+committed work into the repository's local `main` checkout. The review includes
+all source commits absent from `main`, including work from a detached HEAD.
+Both checkouts must be clean, `main` must already be checked out, and conflicts
+must be resolved beforehand. This runs Git through the existing stock command
+RPC; it does not ask the agent to merge, push changes, or start a release.
+Normal Git hooks/signing configuration still apply. Drafts and attachments stay
+on the phone. If a reply is lost, **Check merge state…** reconciles the host
+receipt and Git state without resending the merge. Submodules are not supported
+by this control in v1.
+
 Take a screenshot while the app is open and tap **Report bug** in the snackbar
 (Android 14+), or use **⋮ → Report a bug**, to save a
 report with a screenshot, recent app logs, available process-exit diagnostics,

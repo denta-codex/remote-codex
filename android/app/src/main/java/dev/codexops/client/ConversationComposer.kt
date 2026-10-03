@@ -378,6 +378,7 @@ internal fun ConversationComposer(
                     enabled =
                         state.ready &&
                             !state.busy &&
+                            !state.merge.blocksTask &&
                             !state.waitingToSendMode() &&
                             (state.draft.isNotBlank() || state.attachments.isNotEmpty()) &&
                             state.journal == null &&
@@ -418,7 +419,7 @@ internal fun ConversationComposer(
 @Composable
 private fun MessageQueue(state: ScreenState, actions: ConversationActions, cover: Boolean) {
     if (state.queuedMessages.isEmpty() && state.queueError == null) return
-    val enabled = state.ready && state.queueReady && !state.busy && state.journal == null
+    val enabled = state.ready && state.queueReady && !state.busy && state.journal == null && !state.merge.blocksTask
     Column(Modifier.fillMaxWidth().testTag("message-queue")) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp),

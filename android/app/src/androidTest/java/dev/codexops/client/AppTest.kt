@@ -191,6 +191,9 @@ class AppTest {
     private val browserCalls = CopyOnWriteArrayList<Pair<String, JsonObject>>()
     @Volatile private var browserResponse: ((String, JsonObject) -> JsonObject?)? = null
     private val sent = AtomicInteger()
+    private val mergeCommands = CopyOnWriteArrayList<String>()
+    @Volatile private var mergeConflict = false
+    @Volatile private var dropMergeReply = false
     private val archivedTaskIds = ConcurrentHashMap.newKeySet<String>()
     private val archiveMutations = CopyOnWriteArrayList<JsonObject>()
     @Volatile private var dropArchiveReply = false
@@ -475,6 +478,35 @@ class AppTest {
                                             }
                                             "command/exec" -> {
                                                 when {
+                                                    command.getOrNull(3) == "remote-codex-merge" -> {
+                                                        val action = command[4]
+                                                        mergeCommands.add(action)
+                                                        if (action == "merge" && dropMergeReply) {
+                                                            ws.cancel()
+                                                            return
+                                                        }
+                                                        val state = if (action != "inspect") "succeeded" else if (mergeConflict) "blocked" else "ready"
+                                                        val report = obj(
+                                                            "status" to s(state),
+                                                            "reason" to s(when (state) {
+                                                                "succeeded" -> "Merged into local main."
+                                                                "blocked" -> "Merge conflicts must be resolved before this button can be used."
+                                                                else -> "Ready to merge committed changes into local main."
+                                                            }),
+                                                            "source" to s("/fixture/remote-codex"),
+                                                            "destination" to s("/fixture/main"),
+                                                            "common" to s("/fixture/main/.git"),
+                                                            "sourceRef" to s("feature/direct-merge"),
+                                                            "sourceHead" to s("a".repeat(40)),
+                                                            "targetHead" to s("b".repeat(40)),
+                                                            "result" to s(if (state == "succeeded") "a".repeat(40) else ""),
+                                                            "count" to JsonPrimitive(1), "fileCount" to JsonPrimitive(1),
+                                                            "commits" to JsonArray(listOf(s("aaaaaaa Add direct merge control"))),
+                                                            "files" to JsonArray(listOf(s("MergeControl.kt"))),
+                                                            "conflicts" to JsonArray(if (mergeConflict) listOf(s("Conflict.kt")) else emptyList()),
+                                                        )
+                                                        obj("exitCode" to JsonPrimitive(0), "stdout" to s(report.toString()))
+                                                    }
                                                     "get-url" in command -> obj("exitCode" to JsonPrimitive(0), "stdout" to s("git@github.com:denta-codex/remote-codex.git\n"))
                                                     "remote-codex-environment" in command -> {
                                                         environmentSetups.incrementAndGet()
@@ -793,6 +825,7 @@ class AppTest {
                     "attachments/new",
                     "draft/task-test",
                     "journal/task-test",
+                    "git-merge/task-test",
                     "attachments/task-test",
                     "draft/project-task",
                     "journal/project-task",
@@ -1359,6 +1392,91 @@ class AppTest {
         }
         compose.onNodeWithText("Hello from Grace").assertIsDisplayed()
         demoPause(3000)
+    }
+
+    @Test
+    fun directMergePreviewsCancelsAndMergesWithoutAnAgentTurn() {
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.canInspectMerge() }
+        val image = fixtureImage("merge-draft.png")
+        compose.runOnUiThread {
+            model.draft("Keep this draft")
+            model.addAttachments(listOf(Uri.fromFile(image)))
+        }
+        compose.waitUntil(5000) { model.state.value.attachments.size == 1 }
+        demoPause(1800)
+        compose.onNodeWithTag("app-menu").performClick()
+        compose.onNodeWithTag("report-bug").assertExists()
+        demoPause(1500)
+        compose.onNodeWithTag("merge-main-menu").performClick()
+        compose.waitUntil(5000) { model.state.value.merge.report?.str("status") == "ready" }
+        compose.onNodeWithTag("confirm-merge").assertIsDisplayed().assertIsEnabled()
+        compose.onNodeWithText("aaaaaaa Add direct merge control").performScrollTo().assertIsDisplayed()
+        demoPause(4000)
+        compose.onNodeWithText("Close").performClick()
+        assertFalse(mergeCommands.contains("merge"))
+        demoPause(1500)
+        compose.onNodeWithTag("app-menu").performClick()
+        compose.onNodeWithTag("merge-main-menu").performClick()
+        compose.waitUntil(5000) { model.state.value.merge.report?.str("status") == "ready" && !model.state.value.merge.working }
+        demoPause(2500)
+        compose.onNodeWithTag("confirm-merge").performClick()
+        compose.waitUntil(5000) { model.state.value.merge.report?.str("status") == "succeeded" }
+        compose.onNodeWithText("Merged into local main.").assertIsDisplayed()
+        demoPause(3500)
+        compose.onNodeWithText("Close").performClick()
+        assertEquals(1, mergeCommands.count { it == "merge" })
+        assertEquals(0, sent.get())
+        assertTrue(turnRequests.isEmpty())
+        assertEquals("Keep this draft", model.state.value.draft)
+        assertEquals(1, model.state.value.attachments.size)
+        demoPause(2000)
+    }
+
+    @Test
+    fun directMergeConflictsDisableConfirmation() {
+        mergeConflict = true
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.canInspectMerge() }
+        compose.onNodeWithTag("app-menu").performClick()
+        compose.onNodeWithTag("merge-main-menu").performClick()
+        compose.waitUntil(5000) { model.state.value.merge.report?.str("status") == "blocked" }
+        compose.onNodeWithTag("confirm-merge").assertIsNotEnabled()
+        compose.onNodeWithText("Conflict.kt").performScrollTo().assertIsDisplayed()
+        compose.runOnUiThread { model.mergeIntoMain() }
+        assertEquals(listOf("inspect"), mergeCommands.toList())
+        assertEquals(0, sent.get())
+    }
+
+    @Test
+    fun directMergeLostReplySurvivesRestartAndReconcilesWithoutReplay() {
+        dropMergeReply = true
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.canInspectMerge() }
+        compose.runOnUiThread { model.draft("Keep this draft") }
+        compose.onNodeWithTag("app-menu").performClick()
+        compose.onNodeWithTag("merge-main-menu").performClick()
+        compose.waitUntil(5000) { model.state.value.merge.report?.str("status") == "ready" }
+        compose.onNodeWithTag("confirm-merge").performClick()
+        compose.waitUntil(15000) { model.state.value.merge.pending != null && !model.state.value.merge.working }
+        compose.runOnUiThread {
+            store.clear()
+            model = ClientModel(app, "ws://127.0.0.1:${server.port}/rpc", "/fixture", true, "/fixture/remote-codex")
+            store.put("fixture", model)
+            compose.activity.setContent { RemoteTheme { App(model) } }
+            model.connect()
+        }
+        compose.waitUntil(10000) { model.state.value.ready }
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.merge.pending != null && !model.state.value.busy }
+        compose.onNodeWithTag("send").assertIsNotEnabled()
+        compose.onNodeWithTag("app-menu").performClick()
+        compose.onNodeWithTag("merge-main-menu").performClick()
+        compose.waitUntil(5000) { model.state.value.merge.report?.str("status") == "succeeded" }
+        assertEquals(1, mergeCommands.count { it == "merge" })
+        assertEquals(1, mergeCommands.count { it == "reconcile" })
+        assertEquals(0, sent.get())
+        assertEquals("Keep this draft", model.state.value.draft)
     }
 
     @Test
