@@ -1,1 +1,2 @@
-- Show chat activity and persistent phone-local unread indicators
+- Use server recency for recent chat ordering
+- Integrate recency fix with current inbox and correct displayed ages

@@ -1,5 +1,14 @@
 # Validation
 
+## 2026-10-03 — Android 0.2.13 (25)
+
+- Source revision: `a85c2a6bed72c9116353a5bc520ff7c9ff2e3d78`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `b09d7c10efa2a5b4a3e6189318d1f9a693823f2cee71ee105337b95d82823790`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/home/agent/workspaces/remote-codex/artifacts/releases/run-20261003T030034Z-B0WUR6.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
 ## Report 624bbb7a — inactive chat promoted in recents
 
 - The frozen report identifies Android 0.2.11 (23), while the supplied checkout
