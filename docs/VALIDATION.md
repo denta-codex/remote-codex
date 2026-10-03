@@ -1,5 +1,14 @@
 # Validation
 
+## 2026-10-03 — Android 0.2.12 (24)
+
+- Source revision: `04b28aa52ca268705f73108c0e76f05475e8898f`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `b089b61e4218f10ada39449ac0b5cfc986f4ec135c00e4c50973a0e5b66143ba`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/home/agent/.codex/worktrees/remote-codex-b9f642a3-8051-435a-b989-e97600b853f4/workspace/artifacts/releases/run-20261003T023734Z-BcYA7q.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
 ## 2026-10-03 — Android 0.2.11 (23)
 
 - Source revision: `b803471c1a23f3d9165815b9c484977ef9460295`.

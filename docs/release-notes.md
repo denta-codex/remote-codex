@@ -1,16 +1,1 @@
-- docs: clarify personal project and contribution policy
-- Wrap Markdown table cells to preserve complete content
-- Merge branch 'main' into fix/readable-markdown-tables
-- Keep landscape conversation composer compact
-- Merge main and preserve queue controls in landscape composer
-- Merge current main into landscape composer fix
-- Support ordered prerelease versions and normal-release promotion
-- Keep internal reviewer threads out of the conversation feed
-- Preserve current conversation after submitting a bug report
-- Make Plan mode available while tasks are running
-- Merge main and preserve compact layouts with Plan mode controls
-- Keep streaming conversations smooth and preserve reading position
-- Merge main into streaming scroll fix and preserve Markdown rendering
-- Add compact chat inbox with search, sorting, and archives
-- Merge main while preserving compact inbox and reviewer filtering
-- Merge remote-tracking branch 'origin/main' into codex/compact-inbox
+- Show chat activity and persistent phone-local unread indicators
