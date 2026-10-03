@@ -10,6 +10,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
@@ -264,7 +265,7 @@ class AppTest {
 
     @Before
     fun setup() {
-        reportCoverOverride = testName.methodName == "systemScreenshotOffersReportWithTheCapturedWindow"
+        reportCoverOverride = testName.methodName in setOf("systemScreenshotOffersReportWithTheCapturedWindow", "commandTrayCoverLargeTextKeepsActionsReachable")
         if (coverScreen || landscapeScreen || reportCoverOverride) {
             shell(if (landscapeScreen) "wm size 2992x1224" else "wm size 1080x1272")
             shell(when {
@@ -330,6 +331,10 @@ class AppTest {
                                     if (method in listOf("thread/list", "thread/search", "thread/unarchive")) browserCalls.add(method to params)
                                     val result = browserResponse?.invoke(method, params) ?: when (method) {
                                             "initialize" -> obj("codexHome" to s("/fixture"))
+                                            "config/read" -> obj(
+                                                "config" to obj("model" to s("gpt-fixture"), "model_reasoning_effort" to s("high")),
+                                                "origins" to obj("model" to obj("name" to obj("type" to s(if (params.str("cwd") == "/fixture/remote-codex") "project" else "user"))),
+                                                    "model_reasoning_effort" to obj("name" to obj("type" to s("user")))))
                                             "collaborationMode/list" ->
                                                 obj(
                                                     "data" to
@@ -434,6 +439,8 @@ class AppTest {
                                             ))
                                             "thread/resume" ->
                                                 obj(
+                                                    "model" to s("gpt-fixture"),
+                                                    "reasoningEffort" to s("low"),
                                                     "thread" to
                                                         obj(
                                                             "id" to s(params.str("threadId")),
@@ -446,8 +453,6 @@ class AppTest {
                                                                         "Remote Codex project task"
                                                                     else fixtureTitle
                                                                 ),
-                                                            "model" to s("gpt-fixture"),
-                                                            "reasoningEffort" to s("low"),
                                                             "cwd" to s("/fixture/remote-codex"),
                                                         )
                                                 )
@@ -464,6 +469,8 @@ class AppTest {
                                                     return
                                                 }
                                                 obj(
+                                                    "model" to (params["model"] ?: s("gpt-fixture")),
+                                                    "reasoningEffort" to s("low"),
                                                     "thread" to
                                                         obj(
                                                             "id" to s("task-test"),
@@ -1256,8 +1263,7 @@ class AppTest {
         compose.waitUntil(5000) { model.state.value.page == "chat" }
         compose.onNodeWithText("What shall we work on?").assertIsDisplayed()
         compose.onNodeWithTag("composer").assertIsDisplayed()
-        compose.onNodeWithTag("model-selector").assertIsDisplayed()
-        compose.onNodeWithTag("reasoning-selector").assertIsDisplayed()
+        compose.onNodeWithTag("conversation-settings").assertIsDisplayed()
         demoPause(2500)
         compose.onNodeWithTag("add-menu").assertIsDisplayed().performClick()
         compose.onNodeWithText("Photos").assertIsDisplayed()
@@ -1275,7 +1281,7 @@ class AppTest {
         val composerHeight =
             compose.onNodeWithTag("composer-actions").fetchSemanticsNode().boundsInRoot.height / density
         assertTrue("Conversation timeline is only $timelineHeight dp high", timelineHeight >= 100f)
-        assertTrue("Composer actions are $composerHeight dp high", composerHeight <= 56f)
+        assertTrue("Composer actions are $composerHeight dp high", composerHeight <= 90f)
         compose.onNodeWithTag("send").assertIsDisplayed()
         demoPause(3000)
     }
@@ -1296,12 +1302,12 @@ class AppTest {
         assertTrue("Landscape timeline is only $height", height >= 160.dp)
         compose.onNodeWithTag("composer").assertIsDisplayed()
         compose.onNodeWithTag("send").assertIsDisplayed()
-        compose.onNodeWithTag("composer-options").performClick()
-        compose.onNodeWithTag("model-selector").performClick()
+        openConversationTray()
+        compose.onNodeWithTag("model-selector").performScrollTo().performClick()
         compose.onNodeWithText("Fixture Fast").performClick()
-        compose.onNodeWithTag("reasoning-selector").performClick()
-        compose.onNodeWithText("medium").performClick()
-        compose.onNodeWithText("Done").performClick()
+        compose.onNodeWithTag("reasoning-selector").performScrollTo().performClick()
+        compose.onNodeWithText("Medium").performClick()
+        closeConversationTray()
         assertEquals("gpt-fixture-fast", model.state.value.newTaskOptions.model)
         assertEquals("medium", model.state.value.newTaskOptions.reasoningEffort)
         compose.onNodeWithTag("add-menu").performClick()
@@ -1309,6 +1315,7 @@ class AppTest {
         compose.onNodeWithText("Files").assertIsDisplayed()
         compose.onNodeWithText("Camera").assertIsDisplayed()
         shell("input keyevent KEYCODE_BACK")
+        closeConversationTray()
         compose.onNodeWithTag("composer").performTextInput("A landscape draft\nwith several\nlines of text")
         compose.onNodeWithTag("send").assertIsDisplayed().assertIsEnabled()
         assertEquals("A landscape draft\nwith several\nlines of text", model.state.value.draft)
@@ -1316,12 +1323,13 @@ class AppTest {
         compose.waitUntil(5000) {
             model.state.value.thread == null && !model.state.value.busy
         }
-        compose.onNodeWithTag("composer-options").performClick()
+        openConversationTray()
         compose.onNodeWithTag("project-selector").performClick()
         compose.onNodeWithText("Remote Codex").performClick()
+        openConversationTray()
         compose.onNodeWithTag("workspace-new-worktree").performScrollTo().performClick()
         assertEquals(ExecutionTarget.NewWorktree, model.state.value.newTaskOptions.executionTarget)
-        compose.onNodeWithText("Done").performClick()
+        closeConversationTray()
         compose.onNodeWithTag("composer").assertIsDisplayed()
         compose.onNodeWithTag("send").assertIsDisplayed()
     }
@@ -1430,9 +1438,11 @@ class AppTest {
         compose.onNodeWithTag("add-files").assertIsDisplayed()
         compose.onNodeWithTag("add-camera").assertIsDisplayed()
         InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
-        compose.onNodeWithTag("mode-selector").assertIsDisplayed().assertIsEnabled().performClick()
-        compose.onNodeWithTag("mode-plan").performClick()
-        compose.onNodeWithTag("mode-selector").assertTextContains("Plan")
+        openConversationTray()
+        compose.onNodeWithTag("mode-plan").performScrollTo().performClick()
+        closeConversationTray()
+        compose.onNodeWithTag("conversation-settings").assertTextContains("Plan", substring = true)
+        closeConversationTray()
         compose.onNodeWithTag("composer").performTextInput("Plan the next change")
         compose.onNodeWithTag("send").assertIsNotEnabled()
         compose.onNodeWithTag("composer-status")
@@ -1460,15 +1470,17 @@ class AppTest {
         holdTurnOpen = false
         emit(peer!!, "turn/completed", obj("turn" to obj("id" to s("turn-test"), "status" to s("interrupted"))))
         compose.waitUntil(5000) { model.state.value.activeTurn == null }
-        compose.onNodeWithTag("mode-selector").performClick()
-        compose.onNodeWithTag("mode-plan").performClick()
+        openConversationTray()
+        compose.onNodeWithTag("mode-plan").performScrollTo().performClick()
+        closeConversationTray()
         compose.onNodeWithTag("composer").performTextInput("Plan after the queue")
         compose.onNodeWithTag("send").assertIsNotEnabled()
         compose.runOnUiThread { model.send() }
         compose.waitForIdle()
         assertEquals(1, queueMutations.size)
-        compose.onNodeWithTag("mode-selector").performClick()
-        compose.onNodeWithTag("mode-server-default").performClick()
+        openConversationTray()
+        compose.onNodeWithTag("mode-server-default").performScrollTo().performClick()
+        closeConversationTray()
         compose.onNodeWithTag("send").assertIsEnabled().performClick()
         compose.waitUntil(10000) { !model.state.value.busy && model.state.value.queuedMessages.size == 2 }
         assertEquals(1, turnRequests.size)
@@ -1648,6 +1660,7 @@ class AppTest {
         rejectQueueRead = true
         compose.runOnUiThread { model.openTask("task-test") }
         compose.waitUntil(10000) { !model.state.value.busy && model.state.value.queueError != null }
+        closeConversationTray()
         compose.onNodeWithTag("composer").performTextInput("Wait for the queue")
         compose.onNodeWithTag("send").assertIsNotEnabled()
         compose.runOnUiThread { model.send() }
@@ -1664,31 +1677,135 @@ class AppTest {
         assertTrue(queueMutations.isEmpty())
     }
 
+    private fun openConversationTray() {
+        if (compose.onAllNodesWithTag("conversation-tray").fetchSemanticsNodes().isEmpty())
+            compose.onNodeWithTag("conversation-settings").performClick()
+    }
+
+    private fun closeConversationTray() {
+        if (compose.onAllNodesWithTag("conversation-tray").fetchSemanticsNodes().isNotEmpty())
+            compose.onNodeWithContentDescription("Close conversation settings").performClick()
+    }
+
+    private fun captureComposer(name: String) {
+        compose.waitForIdle()
+        // UIAutomation captures the hardware surface, which can lag Compose semantics.
+        if (name.endsWith("expanded.png")) compose.onNodeWithTag("conversation-tray").assertIsDisplayed()
+        compose.mainClock.advanceTimeBy(600)
+        compose.waitForIdle()
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+        SystemClock.sleep(300)
+        val output = InstrumentationRegistry.getArguments().getString("additionalTestOutputDir")
+            ?: app.getExternalFilesDir(null)!!.absolutePath
+        val bitmap = if (name.endsWith("expanded.png"))
+            compose.onNodeWithTag("conversation-tray").captureToImage().asAndroidBitmap()
+        else InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
+        File(output, name).apply { parentFile?.mkdirs() }.outputStream().use {
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
+        }
+    }
+
+    @Test
+    fun commandTrayResolvesInheritanceAndPreservesDraftAndActions() {
+        compose.runOnUiThread { compose.activity.setContent { RemoteTheme(darkTheme = true) { App(model) } } }
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil(5000) { model.state.value.inheritedSettings.status == ModelCatalogStatus.Ready && model.state.value.modelCatalogStatus == ModelCatalogStatus.Ready }
+        compose.onNodeWithTag("conversation-settings").assertTextContains("Fixture Default · High", substring = true)
+        compose.onNodeWithTag("send").assertIsNotEnabled()
+        captureComposer("command-tray-resting.png")
+        compose.onNodeWithTag("composer").performTextInput("Keep my draft")
+        openConversationTray()
+        compose.onNodeWithTag("model-selector").assertTextContains("Fixture Default")
+        compose.onNodeWithTag("reasoning-selector").assertTextContains("High")
+        compose.onNodeWithTag("send").assertIsDisplayed().assertIsEnabled()
+        captureComposer("command-tray-expanded.png")
+        compose.onNodeWithTag("project-selector").performClick()
+        compose.onNodeWithText("Remote Codex").performClick()
+        compose.waitUntil(5000) { model.state.value.inheritedSettings.cwd == "/fixture/remote-codex" }
+        compose.onNodeWithTag("model-selector").assertTextContains("From project")
+        compose.onNodeWithTag("model-selector").performScrollTo().performClick()
+        compose.onNodeWithText("Fixture Fast").performClick()
+        assertEquals("gpt-fixture-fast", model.state.value.newTaskOptions.model)
+        compose.onNodeWithTag("model-selector").performScrollTo().performClick()
+        compose.onNodeWithTag("model-automatic").performClick()
+        assertNull(model.state.value.newTaskOptions.model)
+        compose.onNodeWithTag("mode-plan").performScrollTo().performClick()
+        compose.onNodeWithTag("reasoning-selector").performScrollTo().assertTextContains("From Plan mode")
+        compose.onNodeWithTag("mode-server-default").performScrollTo().performClick()
+        assertNull(model.state.value.newTaskOptions.collaborationMode)
+        compose.onNodeWithTag("add-menu").performClick()
+        compose.onNodeWithTag("add-photos").assertIsDisplayed()
+        compose.onNodeWithTag("add-files").assertIsDisplayed()
+        compose.onNodeWithTag("add-camera").assertIsDisplayed()
+        shell("input keyevent KEYCODE_BACK")
+        closeConversationTray()
+        assertEquals("Keep my draft", model.state.value.draft)
+        assertNull(model.state.value.newTaskOptions.reasoningEffort)
+        compose.onNodeWithTag("send").performClick()
+        compose.waitUntil(15000) { lastTurnStartParams != null }
+        assertFalse(lastThreadStartParams!!.containsKey("model"))
+        assertFalse(lastTurnStartParams!!.containsKey("model"))
+        assertFalse(lastTurnStartParams!!.containsKey("effort"))
+    }
+
+    @Test
+    fun commandTrayCoverLargeTextKeepsActionsReachable() {
+        val density = compose.activity.resources.displayMetrics.density
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                RemoteTheme {
+                    CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides
+                        androidx.compose.ui.unit.Density(density, fontScale = 1.5f)) { App(model) }
+                }
+            }
+        }
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil(5000) { model.state.value.inheritedSettings.status == ModelCatalogStatus.Ready && model.state.value.modelCatalogStatus == ModelCatalogStatus.Ready }
+        compose.onNodeWithTag("composer").performTextInput("Cover draft")
+        compose.onNodeWithTag("send").assertIsDisplayed().assertIsEnabled()
+        captureComposer("command-tray-cover-keyboard.png")
+        openConversationTray()
+        compose.onNodeWithTag("send").assertIsDisplayed()
+        compose.onNodeWithTag("add-menu").assertIsDisplayed()
+        compose.onNodeWithTag("model-selector").performScrollTo().assertTextContains("Fixture Default")
+        captureComposer("command-tray-cover-large-text.png")
+        compose.onNodeWithTag("mode-plan").performScrollTo().performClick()
+        compose.onNodeWithTag("send").assertIsDisplayed()
+        closeConversationTray()
+        assertEquals("Cover draft", model.state.value.draft)
+    }
+
     @Test
     fun modelControlsUseCatalogAndReconcileOnReconnect() {
+        compose.runOnUiThread { compose.activity.setContent { RemoteTheme(darkTheme = true) { App(model) } } }
         compose.onNodeWithContentDescription("New chat").performClick()
         compose.waitUntil(5000) { model.state.value.page == "chat" }
         demoPause()
 
-        // The catalog loads on connection; neither the composer nor the picker
-        // should expose a manual catalog refresh action.
+        compose.waitUntil(5000) { model.state.value.inheritedSettings.status == ModelCatalogStatus.Ready }
+        captureComposer("command-tray-resting.png")
+        openConversationTray()
+        captureComposer("command-tray-expanded.png")
+        // Refresh is available inside settings, never in the resting composer.
         compose.onNodeWithContentDescription("Refresh models").assertDoesNotExist()
         compose.onNodeWithText("Refresh models").assertDoesNotExist()
-        compose.onNodeWithTag("model-selector").performClick()
+        openConversationTray()
+        compose.onNodeWithTag("model-selector").performScrollTo().performClick()
         compose.onNodeWithText("Refresh models").assertDoesNotExist()
         demoPause()
         compose.onNodeWithText("Fixture Fast").performClick()
         assertEquals("gpt-fixture-fast", model.state.value.newTaskOptions.model)
         demoPause()
 
-        compose.onNodeWithTag("reasoning-selector").performClick()
-        compose.onNodeWithText("medium").assertExists()
-        compose.onNodeWithText("low").assertDoesNotExist()
+        compose.onNodeWithTag("reasoning-selector").performScrollTo().performClick()
+        compose.onNodeWithText("Medium").assertExists()
+        compose.onNodeWithText("Low").assertDoesNotExist()
         demoPause()
-        compose.onNodeWithText("medium").performClick()
+        compose.onNodeWithText("Medium").performClick()
         assertEquals("medium", model.state.value.newTaskOptions.reasoningEffort)
         demoPause()
 
+        closeConversationTray()
         compose.onNodeWithTag("composer").performTextInput("Use the selected model")
         demoPause()
         compose.onNodeWithTag("send").performClick()
@@ -1704,10 +1821,11 @@ class AppTest {
         compose.waitUntil(5000) { !model.state.value.busy }
         compose.runOnUiThread { model.newChat() }
         compose.waitUntil(5000) { model.state.value.thread == null && !model.state.value.busy }
-        compose.onNodeWithTag("model-selector").performClick()
+        openConversationTray()
+        compose.onNodeWithTag("model-selector").performScrollTo().performClick()
         compose.onNodeWithText("Fixture Fast").performClick()
-        compose.onNodeWithTag("reasoning-selector").performClick()
-        compose.onNodeWithText("medium").performClick()
+        compose.onNodeWithTag("reasoning-selector").performScrollTo().performClick()
+        compose.onNodeWithText("Medium").performClick()
         assertEquals("gpt-fixture-fast", model.state.value.newTaskOptions.model)
         assertEquals("medium", model.state.value.newTaskOptions.reasoningEffort)
         val previousLists = modelLists.get()
@@ -1728,15 +1846,17 @@ class AppTest {
     fun modelCatalogFailureRecoversOnReconnect() {
         compose.onNodeWithContentDescription("New chat").performClick()
         compose.waitUntil(5000) { model.state.value.page == "chat" }
+        closeConversationTray()
         compose.onNodeWithTag("composer").performTextInput("Keep this draft")
         rejectModelList = true
         compose.runOnUiThread { model.connect() }
         compose.waitUntil(5000) {
             model.state.value.modelCatalogStatus == ModelCatalogStatus.Error
         }
+        openConversationTray()
         compose.onNodeWithTag("model-selector").assertIsNotEnabled()
         compose.onNodeWithText("Refresh models").assertDoesNotExist()
-        compose.onNodeWithText("Reconnect to try again.", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("Refresh models to try again.", substring = true).assertIsDisplayed()
         val previousLists = modelLists.get()
         rejectModelList = false
         compose.waitUntil(5000) { !model.state.value.busy }
@@ -2707,11 +2827,15 @@ class AppTest {
                 )
             )
         }
+        openConversationTray()
         compose.onNodeWithTag("workspace-current").assertIsSelected()
         demoPause(2200)
-        compose.onNodeWithTag("workspace-new-worktree").performClick()
+        openConversationTray()
+        compose.onNodeWithTag("workspace-new-worktree").performScrollTo().performClick()
+        openConversationTray()
         compose.onNodeWithTag("workspace-new-worktree").assertIsSelected()
         demoPause(1800)
+        closeConversationTray()
         compose.onNodeWithTag("composer").performTextInput("Change this in isolation")
         demoPause(2200)
         compose.onNodeWithTag("send").performClick()
@@ -2745,7 +2869,9 @@ class AppTest {
                 )
             )
         }
+        openConversationTray()
         compose.onNodeWithTag("workspace-current").assertIsSelected()
+        closeConversationTray()
         compose.onNodeWithTag("composer").performTextInput("Use the selected checkout")
         compose.onNodeWithTag("send").performClick()
 
@@ -2899,8 +3025,9 @@ class AppTest {
         compose.waitUntil(5000) {
             model.state.value.page == "chat" && model.state.value.collaborationModes.size == 2
         }
-        compose.onNodeWithTag("mode-selector").performClick()
-        compose.onNodeWithTag("mode-plan").performClick()
+        openConversationTray()
+        compose.onNodeWithTag("mode-plan").performScrollTo().performClick()
+        closeConversationTray()
         compose.onNodeWithTag("composer").performTextInput("Propose a safe change")
         compose.onNodeWithTag("send").performClick()
         compose.waitUntil(10000) {
@@ -2939,9 +3066,11 @@ class AppTest {
         compose.waitUntil(5000) {
             model.state.value.page == "chat" && model.state.value.collaborationModes.size == 2
         }
-        compose.onNodeWithTag("mode-selector").assertTextContains("Mode").performClick()
-        compose.onNodeWithTag("mode-plan").performClick()
-        compose.onNodeWithTag("mode-selector").assertTextContains("Plan")
+        openConversationTray()
+        compose.onNodeWithTag("mode-plan").performScrollTo().performClick()
+        closeConversationTray()
+        compose.onNodeWithTag("conversation-settings").assertTextContains("Plan", substring = true)
+        closeConversationTray()
         compose.onNodeWithTag("composer").performTextInput("Propose a safe change")
         compose.onNodeWithTag("send").performClick()
 
@@ -2995,8 +3124,9 @@ class AppTest {
         compose.waitUntil(5000) {
             model.state.value.page == "chat" && model.state.value.collaborationModes.size == 2
         }
-        compose.onNodeWithTag("mode-selector").performClick()
-        compose.onNodeWithTag("mode-plan").performClick()
+        openConversationTray()
+        compose.onNodeWithTag("mode-plan").performScrollTo().performClick()
+        closeConversationTray()
         compose.onNodeWithTag("composer").performTextInput("Plan after clarifying the scope")
         compose.onNodeWithTag("send").performClick()
 

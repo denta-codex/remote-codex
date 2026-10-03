@@ -56,7 +56,7 @@ internal fun effectiveModel(
 ): ServerModelOption? {
     val id = options.model ?: threadModel
     return if (id != null) catalog.firstOrNull { it.id == id }
-    else catalog.firstOrNull(ServerModelOption::isDefault)
+    else null
 }
 
 internal data class ReconciledModelOptions(
@@ -78,7 +78,7 @@ internal fun reconcileModelOptions(
     val model = effectiveModel(options, catalog, threadModel)
     if (
         options.reasoningEffort != null &&
-            model?.supportedReasoningEfforts?.none { it.id == options.reasoningEffort } != false
+            model?.supportedReasoningEfforts?.none { it.id == options.reasoningEffort } == true
     ) {
         return ReconciledModelOptions(
             options.copy(reasoningEffort = null),
@@ -126,3 +126,81 @@ internal fun turnSteerParams(
         "clientUserMessageId" to s(operation),
         "expectedTurnId" to s(expectedTurnId),
     )
+
+/** Read-only config/read snapshot. Values never become outgoing overrides. */
+data class InheritedSettings(
+    val cwd: String? = null,
+    val status: ModelCatalogStatus = ModelCatalogStatus.Unavailable,
+    val model: String? = null,
+    val effort: String? = null,
+    val modelSource: String = "From server",
+    val effortSource: String = "From server",
+)
+
+internal fun parseInheritedSettings(result: JsonObject, cwd: String): InheritedSettings {
+    val config = result.map("config")
+    fun source(key: String) =
+        if (result.map("origins").map(key).map("name").str("type") == "project")
+            "From project" else "From server"
+    return InheritedSettings(
+        cwd, ModelCatalogStatus.Ready,
+        config.str("model").takeIf(String::isNotBlank),
+        config.str("model_reasoning_effort").takeIf(String::isNotBlank),
+        source("model"), source("model_reasoning_effort"),
+    )
+}
+
+internal fun ScreenState.settingsCwd(): String? = when {
+    thread != null -> threadCwd
+    newTaskOptions.executionTarget == ExecutionTarget.NewWorktree -> null // Destination not created yet.
+    newTaskOptions.projectId != null -> newTaskOptions.workingDirectory
+    else -> "/home/agent/Documents/RemoteCodex"
+}
+
+internal data class ComposerSettings(
+    val modelId: String?, val model: String, val modelSource: String,
+    val effort: String, val effortSource: String, val mode: String,
+)
+
+internal fun ScreenState.composerSettings(): ComposerSettings {
+    val inherited = inheritedSettings.takeIf { it.cwd == settingsCwd() }
+    val options = newTaskOptions
+    val preset = collaborationModes.firstOrNull { it.mode == options.collaborationMode }
+    val queued = willQueueMessage() && !waitingToSendMode()
+    val modelId = if (queued) threadModel else
+        preset?.model ?: options.model ?: if (thread != null) threadModel else inherited?.model
+    val catalogModel = models.firstOrNull { it.id == modelId }
+    val effort = if (queued) threadReasoningEffort else when {
+        preset != null -> preset.reasoningEffort // Mode settings take precedence over turn effort.
+        options.reasoningEffort != null -> options.reasoningEffort
+        thread != null -> threadReasoningEffort
+        else -> inherited?.effort ?: catalogModel?.defaultReasoningEffort
+            .takeIf { inherited?.status == ModelCatalogStatus.Ready }
+    }
+    val unknown = when {
+        !ready -> "Offline"
+        settingsCwd() == null && thread == null -> "Not resolved"
+        inherited == null || inherited.status == ModelCatalogStatus.Loading -> "Loading…"
+        else -> "Unavailable"
+    }
+    return ComposerSettings(
+        modelId, catalogModel?.displayName ?: modelId ?: unknown,
+        when {
+            queued || thread != null && options.model == null && preset?.model == null -> "This chat"
+            preset?.model != null -> "From ${preset.name} mode"
+            options.model != null -> "This chat"
+            settingsCwd() == null -> "After workspace creation"
+            else -> inherited?.modelSource ?: "From server"
+        },
+        effort?.replaceFirstChar { it.uppercase() } ?: unknown,
+        when {
+            queued -> "This chat"
+            preset != null -> "From ${preset.name} mode"
+            options.reasoningEffort != null || thread != null -> "This chat"
+            settingsCwd() == null -> "After workspace creation"
+            else -> inherited?.effortSource ?: "From server"
+        },
+        preset?.name ?: threadMode?.replaceFirstChar { it.uppercase() }
+            ?: if (thread == null) "Default" else "Mode unavailable",
+    )
+}
