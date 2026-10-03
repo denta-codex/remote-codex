@@ -268,7 +268,7 @@ class AppTest {
 
     @Before
     fun setup() {
-        reportCoverOverride = testName.methodName in setOf("systemScreenshotOffersReportWithTheCapturedWindow", "commandTrayCoverLargeTextKeepsActionsReachable")
+        reportCoverOverride = testName.methodName in setOf("systemScreenshotOffersReportWithTheCapturedWindow", "commandTrayCoverLargeTextKeepsActionsReachable", "coverChatToolbarAvoidsCutoutWithHiddenStatusBar")
         if (coverScreen || landscapeScreen || reportCoverOverride) {
             shell(if (landscapeScreen) "wm size 2992x1224" else "wm size 1080x1272")
             shell(when {
@@ -1272,6 +1272,50 @@ class AppTest {
         if (coverScreen || landscapeScreen || reportCoverOverride) {
             shell("wm size reset")
             shell("wm density reset")
+        }
+    }
+
+    @Test
+    fun coverChatToolbarAvoidsCutoutWithHiddenStatusBar() {
+        compose.runOnUiThread {
+            model.openTask("task-test")
+            compose.activity.setContent {
+                RemoteTheme {
+                    val density = androidx.compose.ui.platform.LocalDensity.current
+                    CompositionLocalProvider(
+                        androidx.compose.ui.platform.LocalDensity provides
+                            androidx.compose.ui.unit.Density(density.density, fontScale = 1.15f),
+                    ) { App(model) }
+                }
+            }
+        }
+        compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy }
+        val cutoutTop = 96
+        compose.runOnUiThread {
+            val insets = androidx.core.view.WindowInsetsCompat.Builder()
+                .setInsets(androidx.core.view.WindowInsetsCompat.Type.statusBars(), androidx.core.graphics.Insets.NONE)
+                .setVisible(androidx.core.view.WindowInsetsCompat.Type.statusBars(), false)
+                .setDisplayCutout(androidx.core.view.DisplayCutoutCompat(
+                    android.graphics.Rect(0, cutoutTop, 0, 0),
+                    listOf(android.graphics.Rect(0, 0, 100, cutoutTop)),
+                ))
+                .build()
+            androidx.core.view.ViewCompat.dispatchApplyWindowInsets(compose.activity.window.decorView, insets)
+        }
+        compose.waitForIdle()
+        for (node in listOf(
+            compose.onNodeWithText("Fixture task", useUnmergedTree = true),
+            compose.onNodeWithText(model.state.value.connection, useUnmergedTree = true),
+            compose.onNodeWithContentDescription("Back"),
+            compose.onNodeWithContentDescription("Copy deeplink"),
+            compose.onNodeWithContentDescription("Settings"),
+        )) {
+            node.assertIsDisplayed()
+            val visible = node.fetchSemanticsNode().boundsInRoot
+            val full = node.getUnclippedBoundsInRoot()
+            val density = compose.activity.resources.displayMetrics.density
+            assertTrue("Toolbar overlaps the cutout: $visible", visible.top >= cutoutTop)
+            assertEquals("Toolbar content is clipped", (full.bottom - full.top).value * density, visible.height, 1f)
         }
     }
 
