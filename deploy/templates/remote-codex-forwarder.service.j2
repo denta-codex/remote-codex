@@ -7,6 +7,7 @@ ExecStart=/home/agent/.local/libexec/remote-codex-forwarder
 Environment=CODEX_SOCKET=/home/agent/.codex/app-server-control/app-server-control.sock
 Environment=REMOTE_CODEX_LISTEN=127.0.0.1:8787
 Environment=REMOTE_CODEX_UPDATE_ROOT=/home/agent/.local/share/remote-codex/updates
+Environment=REMOTE_CODEX_APPROVAL_SOCKET=/run/user/{{ user_id.stdout }}/op-bridge-phone/approval.sock
 LoadCredentialEncrypted=connection-token:/home/agent/.local/share/remote-codex/connection-token.cred
 Restart=on-failure
 RestartSec=3
