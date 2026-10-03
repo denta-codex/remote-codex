@@ -1,5 +1,14 @@
 # Validation
 
+## 2026-10-03 — Android 0.2.11 (23)
+
+- Source revision: `b803471c1a23f3d9165815b9c484977ef9460295`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `163fba96dfb9d93743763d39cd47850b695c8b3371df8ae72507840f90a2f6ab`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/home/agent/.codex/worktrees/remote-codex-b9f642a3-8051-435a-b989-e97600b853f4/workspace/artifacts/releases/run-20261003T021438Z-7Gy98I.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
 ## 2026-10-02 — Plan mode composer report a9ba2621
 
 - The frozen report shows a connected task with an active turn. Reproduced the
