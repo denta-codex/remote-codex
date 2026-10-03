@@ -1516,6 +1516,18 @@ class AppTest {
         assertEquals("medium", lastTurnStartParams!!.str("effort"))
         demoPause(2500)
 
+        // Existing tasks reset per-turn overrides when resumed. Reconcile the
+        // saved new-chat preferences so this checks catalog changes rather than
+        // racing that independent reset during reconnect.
+        compose.waitUntil(5000) { !model.state.value.busy }
+        compose.runOnUiThread { model.newChat() }
+        compose.waitUntil(5000) { model.state.value.thread == null && !model.state.value.busy }
+        compose.onNodeWithTag("model-selector").performClick()
+        compose.onNodeWithText("Fixture Fast").performClick()
+        compose.onNodeWithTag("reasoning-selector").performClick()
+        compose.onNodeWithText("medium").performClick()
+        assertEquals("gpt-fixture-fast", model.state.value.newTaskOptions.model)
+        assertEquals("medium", model.state.value.newTaskOptions.reasoningEffort)
         val previousLists = modelLists.get()
         fastModelAvailable = false
         compose.waitUntil(5000) { !model.state.value.busy }
