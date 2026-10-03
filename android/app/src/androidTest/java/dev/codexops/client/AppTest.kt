@@ -1371,32 +1371,52 @@ class AppTest {
         }
         compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy }
         val cutoutTop = 96
+        fun assertToolbar(title: String, action: String) {
+            compose.waitForIdle()
+            compose.runOnUiThread {
+                val insets = androidx.core.view.WindowInsetsCompat.Builder()
+                    .setInsets(androidx.core.view.WindowInsetsCompat.Type.statusBars(), androidx.core.graphics.Insets.NONE)
+                    .setVisible(androidx.core.view.WindowInsetsCompat.Type.statusBars(), false)
+                    .setDisplayCutout(androidx.core.view.DisplayCutoutCompat(
+                        android.graphics.Rect(0, cutoutTop, 0, 0),
+                        listOf(android.graphics.Rect(0, 0, 100, cutoutTop)),
+                    ))
+                    .build()
+                androidx.core.view.ViewCompat.dispatchApplyWindowInsets(compose.activity.window.decorView, insets)
+            }
+            compose.waitForIdle()
+            for (node in listOf(
+                compose.onNodeWithText(title, useUnmergedTree = true),
+                compose.onNodeWithText(model.state.value.connection, useUnmergedTree = true),
+                compose.onNodeWithContentDescription(action),
+                compose.onNodeWithContentDescription("Settings"),
+            )) {
+                node.assertIsDisplayed()
+                val visible = node.fetchSemanticsNode().boundsInRoot
+                val full = node.getUnclippedBoundsInRoot()
+                val density = compose.activity.resources.displayMetrics.density
+                assertTrue("Toolbar overlaps the cutout: $visible", visible.top >= cutoutTop)
+                assertEquals("Toolbar content is clipped", (full.bottom - full.top).value * density, visible.height, 1f)
+            }
+        }
+        assertToolbar("Fixture task", "Copy deeplink")
+        compose.onNodeWithContentDescription("Back").performClick()
+        assertToolbar("Chats", "New chat")
+        // The cover display can be entered while the app is already running.
+        // Exercise remeasurement with larger text on the same home toolbar.
         compose.runOnUiThread {
-            val insets = androidx.core.view.WindowInsetsCompat.Builder()
-                .setInsets(androidx.core.view.WindowInsetsCompat.Type.statusBars(), androidx.core.graphics.Insets.NONE)
-                .setVisible(androidx.core.view.WindowInsetsCompat.Type.statusBars(), false)
-                .setDisplayCutout(androidx.core.view.DisplayCutoutCompat(
-                    android.graphics.Rect(0, cutoutTop, 0, 0),
-                    listOf(android.graphics.Rect(0, 0, 100, cutoutTop)),
-                ))
-                .build()
-            androidx.core.view.ViewCompat.dispatchApplyWindowInsets(compose.activity.window.decorView, insets)
+            compose.activity.setContent {
+                RemoteTheme {
+                    val density = androidx.compose.ui.platform.LocalDensity.current
+                    CompositionLocalProvider(
+                        androidx.compose.ui.platform.LocalDensity provides
+                            androidx.compose.ui.unit.Density(density.density, fontScale = 2f),
+                    ) { App(model) }
+                }
+            }
         }
         compose.waitForIdle()
-        for (node in listOf(
-            compose.onNodeWithText("Fixture task", useUnmergedTree = true),
-            compose.onNodeWithText(model.state.value.connection, useUnmergedTree = true),
-            compose.onNodeWithContentDescription("Back"),
-            compose.onNodeWithContentDescription("Copy deeplink"),
-            compose.onNodeWithContentDescription("Settings"),
-        )) {
-            node.assertIsDisplayed()
-            val visible = node.fetchSemanticsNode().boundsInRoot
-            val full = node.getUnclippedBoundsInRoot()
-            val density = compose.activity.resources.displayMetrics.density
-            assertTrue("Toolbar overlaps the cutout: $visible", visible.top >= cutoutTop)
-            assertEquals("Toolbar content is clipped", (full.bottom - full.top).value * density, visible.height, 1f)
-        }
+        assertToolbar("Chats", "New chat")
     }
 
     @Test
