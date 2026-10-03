@@ -103,7 +103,12 @@ class CredentialRequestsTest {
             ActivityScenario.launch<CredentialRequestsActivity>(fixture(server)).use { scenario ->
                 assertTrue(connected.await(10, TimeUnit.SECONDS))
                 scenario.onActivity {
-                    it.selectRequest(request()); it.secret.setText("FAKE_PICKER_VALUE")
+                    it.selectRequest(request())
+                    button(it.window.decorView, "Choose in 1Password")!!.performClick()
+                    assertTrue(it.secret.hasFocus())
+                    assertFalse(it.secret.showSoftInputOnFocus)
+                    it.secret.autofill(android.view.autofill.AutofillValue.forText("FAKE_PICKER_VALUE"))
+                    assertEquals("FAKE_PICKER_VALUE", it.secret.text.toString())
                     assertFalse(it.secret.isSaveEnabled)
                     assertFalse(it.secret.isSaveFromParentEnabled)
                     assertTrue(it.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)

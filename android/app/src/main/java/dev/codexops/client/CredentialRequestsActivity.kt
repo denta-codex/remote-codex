@@ -67,6 +67,8 @@ class CredentialRequestsActivity : ComponentActivity() {
             hint = "Requested secret"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             isSingleLine = true
+            // Keep focus available to Autofill without opening the typing keyboard.
+            showSoftInputOnFocus = false
             setAutofillHints(View.AUTOFILL_HINT_PASSWORD)
             importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_YES
             isSaveEnabled = false
