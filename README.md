@@ -6,6 +6,21 @@
 Codex on a remote host. Native Android text client for Grace's existing stock
 Codex app server, over WSS and Tailscale.
 
+Tap **Todo** on the Chats screen for the native task board. Switch between
+To Do, In Progress, and Done with tabs or a swipe. **Add** creates a task;
+open a row to edit its title and Markdown description or change its status.
+Save text edits before changing status. Existing work notes can be expanded.
+Refresh pulls the latest changes from Grace; opening or returning to Todo also
+refreshes. This first version is online-only and does not cache tasks on disk.
+
+Todo uses `/home/agent/.local/bin/todo` (CLI JSON schema 1) and
+`/home/agent/.local/share/todo/tasks.sqlite3` on Grace, through the existing
+authenticated connection. Each command exits when finished; there is no board
+server, preview, or background Todo worker. If a save response is lost, refresh
+and inspect the task before choosing **I've checked · unlock edits**. That action
+only clears the phone's pending-save record and discards the old editor; it never
+repeats the save. Archive management and adding work notes remain CLI operations.
+
 Choose **Remote Codex** in Android's share menu to add text, links, images, or
 files to the new-chat draft. Existing draft content is preserved. Review the
 message and tap Send when ready; sharing never sends it automatically.

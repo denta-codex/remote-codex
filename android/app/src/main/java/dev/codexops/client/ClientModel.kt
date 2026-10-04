@@ -36,6 +36,24 @@ constructor(
     private val remoteFileRepository = RemoteFileRepository(app)
     private val _state = MutableStateFlow(ScreenState(host = host))
     val state = _state.asStateFlow()
+    private val todoController = TodoController(viewModelScope, local, StockTodoOperations(rpc),
+        { _state.value }, { todo -> _state.update { it.copy(todo = todo) } })
+    override fun openTodo() {
+        cancelList(); saveList()
+        _state.update { it.copy(page = "todo", error = null) }
+    }
+    override fun refreshTodo() = todoController.refresh()
+    override fun selectTodoStatus(status: String) = todoController.select(status)
+    override fun newTodo() = todoController.new()
+    override fun openTodoTask(id: Long) = todoController.open(id)
+    override fun todoTitle(value: String) = todoController.title(value)
+    override fun todoDescription(value: String) = todoController.description(value)
+    override fun saveTodo() = todoController.save()
+    override fun moveTodo(status: String) = todoController.move(status)
+    override fun closeTodoEditor() = todoController.close()
+    override fun discardTodoEditor() = todoController.discard()
+    override fun keepTodoEditor() = todoController.keep()
+    override fun acknowledgeTodoOutcome() = todoController.acknowledge()
     private var gitChangesJob: Job? = null
     override fun refreshGitChanges() {
         val st = _state.value
@@ -154,6 +172,13 @@ constructor(
         }
 
     init {
+        viewModelScope.launch {
+            state.map { Triple(it.page == "todo", it.ready, it.appForeground) }.distinctUntilChanged()
+                .collect { (visible, ready, foreground) ->
+                    if (!ready) todoController.disconnected()
+                    else if (visible && foreground) todoController.refresh()
+                }
+        }
         viewModelScope.launch {
             state.map { Triple(it.ready, it.page, it.thread) }.distinctUntilChanged().collect { (ready, page, thread) ->
                 if (!ready) projectAddition.disconnected()
@@ -465,11 +490,12 @@ constructor(
     override fun back() {
         if (_state.value.busy) return
         when (_state.value.page) {
+            "todo" -> if (_state.value.todo.editor != null) todoController.close() else home()
             "archives" -> {
                 cancelList(); saveList()
                 _state.update { it.copy(page = "settings", error = null) }
             }
-            "settings" -> if (settingsOrigin == "chat") _state.update { it.copy(page = "chat") } else home()
+            "settings" -> if (settingsOrigin in setOf("chat", "todo")) _state.update { it.copy(page = settingsOrigin) } else home()
             "chat" -> if (chatOrigin == "archives") showList(true) else home()
             else -> home()
         }

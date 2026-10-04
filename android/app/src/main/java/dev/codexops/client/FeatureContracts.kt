@@ -133,6 +133,7 @@ data class ScreenState(
     val configured: Boolean = false,
     val projects: List<CodexProject> = emptyList(),
     val projectAddition: ProjectAdditionState = ProjectAdditionState(),
+    val todo: TodoState = TodoState(),
     val projectFilter: TaskProjectFilter = TaskProjectFilter.All,
     val tasks: List<JsonObject> = emptyList(),
     val chatActivity: Map<String, ChatActivity> = emptyMap(),
@@ -311,4 +312,4 @@ interface ConversationActions {
     fun answer(decision: Decision, result: JsonObject)
 }
 
-interface ClientActions : AppNavigation, HomeActions, SettingsActions, ConversationActions
+interface ClientActions : AppNavigation, HomeActions, SettingsActions, ConversationActions, TodoActions

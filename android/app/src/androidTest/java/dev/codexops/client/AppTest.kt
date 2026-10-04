@@ -44,27 +44,38 @@ import org.junit.Assert.*
 
 class AppTest {
     @Test
-    fun homeNavigationHasNoTodoDestination() {
-        fun assertNoTodo() {
-            compose.onNodeWithText("Todo").assertDoesNotExist()
-            compose.onNodeWithContentDescription("Todo").assertDoesNotExist()
+    fun nativeTodoOpensWithoutPreviewAndReturnsToChats() {
+        val todoCommands = CopyOnWriteArrayList<List<String>>()
+        browserResponse = { method, params ->
+            val command = (params["command"] as? JsonArray)?.map { it.jsonPrimitive.content }.orEmpty()
+            if (method == "command/exec" && command.firstOrNull() == StockTodoOperations.PROGRAM) {
+                todoCommands += command
+                obj("exitCode" to JsonPrimitive(0), "stdout" to s(obj("schema_version" to JsonPrimitive(1),
+                    "ok" to JsonPrimitive(true), "kind" to s("task-list"), "tasks" to JsonArray(emptyList())).toString()))
+            } else null
         }
-        assertNoTodo()
+        compose.runOnUiThread { model.foreground(true) }
+        compose.onNodeWithText("Todo").assertIsDisplayed().performClick()
+        compose.waitUntil(5000) { model.state.value.todo.loaded }
+        compose.onNodeWithTag("todo-screen").assertIsDisplayed()
+        compose.onNodeWithText("No tasks to do.").assertIsDisplayed()
+        compose.onNodeWithText("Start board").assertDoesNotExist()
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithText("Scan setup QR").assertIsDisplayed()
-        assertNoTodo()
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.onNodeWithTag("todo-screen").assertIsDisplayed()
         compose.onNodeWithContentDescription("Back").performClick()
         compose.onNodeWithContentDescription("New chat").assertIsDisplayed().performClick()
         compose.waitUntil(5000) { model.state.value.page == "chat" }
         compose.onNodeWithTag("composer").assertIsDisplayed()
-        assertNoTodo()
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithContentDescription("Back").performClick()
         compose.waitUntil(5000) { model.state.value.page == "chat" }
         compose.onNodeWithTag("composer").assertIsDisplayed()
         compose.onNodeWithContentDescription("Back").performClick()
         compose.onNodeWithContentDescription("New chat").assertIsDisplayed()
-        assertNoTodo()
+        assertTrue(todoCommands.isNotEmpty())
+        assertTrue(todoCommands.all { it == listOf(StockTodoOperations.PROGRAM, "--db", StockTodoOperations.DATABASE, "--json", "list") })
     }
 
     @Test

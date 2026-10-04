@@ -303,6 +303,39 @@ keeps narrow Ansible backups of the old binary and unit until live acceptance
 succeeds. If deployment fails, retain the reported backup paths for explicit
 recovery; remove them once recovery and verification are complete.
 
+## Native Todo
+
+The Todo destination is a Compose board, independent of Codex chat tasks. It
+invokes the installed `todo` CLI using argv through authenticated stock
+`command/exec`, with explicit database and working-directory paths. Reads use
+the stock read-only sandbox; writes use the existing command transport's
+`dangerFullAccess` sandbox. No shell, HTTP endpoint, preview, or WebView is used.
+The Grace database must already be initialized by CLI installation.
+
+The adapter validates JSON schema 1, result kind, task IDs, revisions, status,
+and mutation results. All edits/moves carry the revision last read. A malformed
+or truncated result, an output-delivery error, a transport failure, or a changed
+connection generation leaves the mutation outcome uncertain. Documented CLI
+validation/not-found/conflict/database errors prove the transaction did not
+commit. The adapter does not log task content or raw errors.
+
+Before sending a write, the controller persists a human-readable pending intent
+in Room, scoped by endpoint and Codex home. It removes the record only after a
+confirmed result or a definitive rejection. An uncertain outcome locks writes
+across restarts. Read-only refresh and task inspection remain available. After a
+successful board refresh, the user can explicitly acknowledge review to unlock;
+this does not infer success or replay the command. Creation cannot be reconciled
+automatically because the CLI has no idempotency keys or mutation receipts.
+
+Task snapshots and ordinary editor text are memory-only. Disconnecting hides
+the board and disables saves while retaining an open draft in memory. A pending
+intent is a recovery record, not an offline queue. Opening/foregrounding Todo,
+reconnecting while it is visible, pull-to-refresh, and confirmed mutations trigger
+reads; there is no periodic Todo polling. Dirty text requires explicit discard
+before closing, and a revision conflict retains it for comparison. This first
+version provides add/edit/move and read-only work notes; archives and note writes
+remain in the CLI.
+
 ## Inbox activity and phone-local unread
 
 Inbox/archive rows show one accessible indicator: a spinner for active work, a

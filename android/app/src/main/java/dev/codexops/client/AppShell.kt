@@ -112,6 +112,7 @@ internal fun App(model: ClientModel) {
                                     "chat" -> st.title
                                     "settings" -> "Settings"
                                     "archives" -> "Archived chats"
+                                    "todo" -> "Todo"
                                     else -> "Chats"
                                 },
                                 fontSize = 18.sp,
@@ -137,8 +138,9 @@ internal fun App(model: ClientModel) {
                                 )
                             }
                         }
-                        if (st.page == "home") IconButton(onClick = model::newChat) {
-                            Glyph(R.drawable.ic_compose, "New chat")
+                        if (st.page == "home") {
+                            TextButton(onClick = model::openTodo) { Text("Todo") }
+                            IconButton(onClick = model::newChat) { Glyph(R.drawable.ic_compose, "New chat") }
                         }
                         if (st.page == "chat")
                             st.thread?.let { threadId ->
@@ -172,7 +174,7 @@ internal fun App(model: ClientModel) {
                         Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text("Drafts stay on this phone.", Modifier.weight(1f), fontSize = 12.sp)
+                        Text(if (st.page == "todo") "Todo requires Grace." else "Drafts stay on this phone.", Modifier.weight(1f), fontSize = 12.sp)
                         TextButton(onClick = model::connect) {
                             Glyph(R.drawable.ic_refresh)
                             Spacer(Modifier.width(8.dp))
@@ -180,6 +182,7 @@ internal fun App(model: ClientModel) {
                         }
                     }
                 when (st.page) {
+                    "todo" -> TodoScreen(st, model)
                     "settings" -> SettingsScreen(st, model, report.shakeEnabled, model.reports::shakeEnabled,
                         report.screenshotEnabled, model.reports::screenshotEnabled)
                     "chat" -> key(st.thread) { ConversationScreen(st, model) }
