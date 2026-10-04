@@ -192,7 +192,7 @@ private fun ComposerActions(
         FilledIconButton(onSend, Modifier.testTag("send").size(48.dp), shape = CircleShape,
             colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary),
-            enabled = state.ready && !state.busy && !state.speedSaving && !state.speedUncertain && !state.merge.blocksTask && !state.waitingToSendMode() &&
+            enabled = state.ready && !state.busy && !state.speedSaving && !state.speedUncertain && !state.waitingToSendMode() &&
                 (state.thread != null || !isFastTier(state.newTaskOptions.serviceTier) || state.canSelectFast()) &&
                 (state.draft.isNotBlank() || state.attachments.isNotEmpty()) && state.journal == null &&
                 (state.newTaskOptions.collaborationMode == null || state.collaborationModes.any {
@@ -384,7 +384,7 @@ private fun ModeControls(state: ScreenState, actions: ConversationActions) {
 @Composable
 private fun MessageQueue(state: ScreenState, actions: ConversationActions, cover: Boolean) {
     if (state.queuedMessages.isEmpty() && state.queueError == null) return
-    val enabled = state.ready && state.queueReady && !state.busy && state.journal == null && !state.merge.blocksTask
+    val enabled = state.ready && state.queueReady && !state.busy && state.journal == null
     Column(Modifier.fillMaxWidth().testTag("message-queue")) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp),
