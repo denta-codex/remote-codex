@@ -110,12 +110,6 @@ internal fun BugReportMenu(model: ClientModel) {
                     modifier = Modifier.testTag("archive-chat-menu"),
                     onClick = { menu = false; model.archiveCurrentTask() },
                 )
-                DropdownMenuItem(
-                    text = { Text(if (screen.merge.pending != null) "Check merge state…" else "Merge into main…") },
-                    enabled = screen.canInspectMerge() || screen.merge.pending != null && !screen.merge.working,
-                    modifier = Modifier.testTag("merge-main-menu"),
-                    onClick = { menu = false; model.inspectMerge() },
-                )
             }
             DropdownMenuItem(text = { Text(if (report.capturing) "Capturing report…" else "Report or request") },
                 enabled = report.loaded && !report.capturing && (!report.busy || report.draft != null),

@@ -108,7 +108,8 @@ internal fun ConversationComposer(state: ScreenState, actions: ConversationActio
             if (!tray && !(window.coverScreen && typing)) bottomActions(window.coverScreen)
         }
     }
-    if (tray) ModalBottomSheet(
+    ProjectAdditionSheet(state, actions)
+    if (tray && !state.projectAddition.visible) ModalBottomSheet(
         onDismissRequest = { tray = false },
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = MaterialTheme.colorScheme.surfaceVariant,
@@ -160,7 +161,7 @@ private fun ComposerActions(
             }
         }
     }
-    val settingsDescription = listOfNotNull("Conversation settings", settings.model, settings.effort, settings.mode, if (state.composerSpeed().fast) "Fast mode" else null).joinToString(", ")
+    val settingsDescription = listOfNotNull("Conversation settings", settings.model, settings.effort.takeIf { it.isNotBlank() }, settings.mode, if (state.composerSpeed().fast) "Fast mode" else null).joinToString(", ")
     val settingsControl: @Composable (Modifier) -> Unit = { modifier ->
         OutlinedButton(onSettings, modifier.heightIn(min = 48.dp).testTag("conversation-settings")
             .semantics {
@@ -172,7 +173,7 @@ private fun ComposerActions(
             Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("${settings.model} · ${settings.effort}", Modifier.weight(1f, fill = false), style = MaterialTheme.typography.labelLarge)
+                    Text(listOf(settings.model, settings.effort).filter { it.isNotBlank() }.joinToString(" · "), Modifier.weight(1f, fill = false), style = MaterialTheme.typography.labelLarge)
                     if (state.composerSpeed().fast) Glyph(R.drawable.ic_fast, modifier =
                         Modifier.size(16.dp).testTag("fast-mode-icon"))
                 }
@@ -190,7 +191,7 @@ private fun ComposerActions(
         FilledIconButton(onSend, Modifier.testTag("send").size(48.dp), shape = CircleShape,
             colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary),
-            enabled = state.ready && !state.busy && !state.speedSaving && !state.speedUncertain && !state.merge.blocksTask && !state.waitingToSendMode() &&
+            enabled = state.ready && !state.busy && !state.speedSaving && !state.speedUncertain && !state.waitingToSendMode() &&
                 (state.thread != null || !isFastTier(state.newTaskOptions.serviceTier) || state.canSelectFast()) &&
                 (state.draft.isNotBlank() || state.attachments.isNotEmpty()) && state.journal == null &&
                 (state.newTaskOptions.collaborationMode == null || state.collaborationModes.any {
@@ -253,12 +254,14 @@ private fun ProjectControl(state: ScreenState, actions: ConversationActions, exp
                 leadingIcon = { Glyph(R.drawable.ic_folder, modifier = Modifier.size(18.dp)) },
                 modifier = Modifier.padding(start = 8.dp).heightIn(min = 48.dp).testTag("project-selector"))
             DropdownMenu(menu, { menu = false }) {
+                DropdownMenuItem(text = { Text("Add project") },
+                    onClick = { menu = false; actions.openAddProject() },
+                    modifier = Modifier.testTag("add-project"))
                 DropdownMenuItem(text = { Text("No project") }, leadingIcon = { Glyph(R.drawable.ic_folder) },
                     onClick = { menu = false; actions.updateNewTaskOptions(options.copy(projectId = null,
                         workingDirectory = null, executionTarget = ExecutionTarget.Projectless)) })
                 state.projects.forEach { candidate ->
-                    DropdownMenuItem(text = { Column { Text(candidate.name); Text(candidate.primaryRoot ?: "No workspace root",
-                        style = MaterialTheme.typography.bodySmall) } }, leadingIcon = { Glyph(R.drawable.ic_folder) },
+                    DropdownMenuItem(text = { Text(candidate.name) }, leadingIcon = { Glyph(R.drawable.ic_folder) },
                         enabled = candidate.primaryRoot != null,
                         onClick = { menu = false; actions.updateNewTaskOptions(options.copy(projectId = candidate.id,
                             workingDirectory = candidate.primaryRoot, executionTarget = ExecutionTarget.CurrentWorkspace)) })
@@ -378,7 +381,7 @@ private fun ModeControls(state: ScreenState, actions: ConversationActions) {
 @Composable
 private fun MessageQueue(state: ScreenState, actions: ConversationActions, cover: Boolean) {
     if (state.queuedMessages.isEmpty() && state.queueError == null) return
-    val enabled = state.ready && state.queueReady && !state.busy && state.journal == null && !state.merge.blocksTask
+    val enabled = state.ready && state.queueReady && !state.busy && state.journal == null
     Column(Modifier.fillMaxWidth().testTag("message-queue")) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp),
