@@ -181,7 +181,6 @@ data class ScreenState(
     val busy: Boolean = false,
     val error: String? = null,
     val journal: JsonObject? = null,
-    val gitChanges: GitChangesState = GitChangesState(),
     val attention: Boolean = false,
     val update: UpdateState = UpdateState(),
     val filePreview: FilePreviewState? = null,
@@ -247,7 +246,6 @@ interface SettingsActions {
 }
 
 interface ConversationActions {
-    fun refreshGitChanges() {}
     fun openAddProject()
     fun dismissAddProject()
     fun projectPath(value: String)

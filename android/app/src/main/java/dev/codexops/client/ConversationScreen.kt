@@ -35,16 +35,6 @@ import kotlinx.serialization.json.JsonPrimitive
 
 @Composable
 internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: ConversationActions) {
-    LaunchedEffect(st.thread, st.threadCwd, st.ready, st.busy, st.activeTurn) {
-        actions.refreshGitChanges()
-    }
-    if (st.thread != null && st.threadCwd != null) {
-        GitChangesBar(
-            if (st.gitChanges.thread == st.thread) st.gitChanges else GitChangesState(),
-            enabled = st.ready && !st.busy && st.activeTurn == null,
-            refresh = actions::refreshGitChanges,
-        )
-    }
     val cover = LocalAppWindowClass.current.coverScreen
     var confirmUnlock by remember { mutableStateOf(false) }
     val scroll = rememberLazyListState()
@@ -68,6 +58,10 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
     val rows = remember(st.entries, st.activeTurn, st.ready, st.turnStatuses, st.decisions, st.attention) {
         conversationRows(st.entries, st.activeTurn, st.ready, st.turnStatuses,
             st.decisions.isNotEmpty() || st.attention)
+    }
+    var changesTurn by rememberSaveable(st.host.endpoint, st.thread) { mutableStateOf<String?>(null) }
+    rows.filterIsInstance<ConversationRow.Changes>().firstOrNull { it.turn == changesTurn }?.let {
+        TurnChangesViewer(it, onDismiss = { changesTurn = null })
     }
     val activityRepresentsTurn = rows.filterIsInstance<ConversationRow.Activity>().any { it.representsActiveTurn }
     val actionablePlan =
@@ -148,6 +142,7 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
             items(rows, key = { it.key }) { row ->
                 if (row is ConversationRow.Activity) ToolActivityRow(row,
                     "${st.host.endpoint}/${st.thread}", actions, st.appForeground)
+                else if (row is ConversationRow.Changes) TurnChangesRow(row) { changesTurn = row.turn }
                 else if (row is ConversationRow.Message) {
                     val entry = row.entry
                     Message(

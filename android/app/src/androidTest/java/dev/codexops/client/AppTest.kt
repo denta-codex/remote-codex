@@ -10,6 +10,8 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -43,6 +45,118 @@ import org.junit.rules.TestName
 import org.junit.Assert.*
 
 class AppTest {
+    private fun recordedEdit(id: String = "edit", status: String = "completed") = obj(
+        "id" to s(id), "type" to s("fileChange"), "status" to s(status),
+        "changes" to JsonArray(listOf(
+            obj("path" to s("src/main.kt"), "kind" to obj("type" to s("update")),
+                "diff" to s("@@ -1 +1 @@\n-old content\n+new content")),
+            obj("path" to s("image.png"), "kind" to obj("type" to s("add")), "diff" to s("")),
+        )),
+    )
+
+    @Test
+    fun recordedChangesAppearAfterFinishedReply() {
+        historyOverride = obj("data" to JsonArray(emptyList()))
+        compose.runOnUiThread { model.foreground(true); model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy }
+        compose.onNodeWithTag("git-changes").assertDoesNotExist()
+        emit(peer!!, "turn/started", obj("turn" to obj("id" to s("edits-turn"), "status" to s("inProgress"))))
+        emit(peer!!, "item/completed", obj("turnId" to s("edits-turn"), "item" to recordedEdit()))
+        emit(peer!!, "item/completed", obj("turnId" to s("edits-turn"), "item" to obj(
+            "id" to s("reply"), "type" to s("agentMessage"), "text" to s("Updated the files."))))
+        compose.waitUntil(5000) { model.state.value.entries.size == 2 }
+        compose.onNodeWithTag("turn-changes-edits-turn").assertDoesNotExist()
+        emit(peer!!, "turn/completed", obj("turn" to obj("id" to s("edits-turn"), "status" to s("completed"))))
+        compose.waitUntil(5000) { model.state.value.turnStatuses["edits-turn"] == "completed" }
+        val changes = compose.onNodeWithTag("turn-changes-edits-turn")
+        changes.assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp)
+        compose.onNodeWithText("2 files changed").assertIsDisplayed()
+        assertTrue(changes.fetchSemanticsNode().boundsInRoot.top >=
+            compose.onNodeWithText("Updated the files.").fetchSemanticsNode().boundsInRoot.bottom)
+        compose.onNodeWithTag("tool-call-toggle-edits-turn/edit").assertDoesNotExist()
+        changes.performClick()
+        compose.onNodeWithTag("turn-changes-fullscreen").assertIsDisplayed()
+        captureComposer("recorded-changes-files.png")
+        compose.onNodeWithTag("changed-file-src/main.kt").performClick()
+        compose.onNodeWithTag("recorded-diff").assertIsDisplayed()
+        compose.onNodeWithText("@@ -1 +1 @@\n-old content\n+new content").assertIsDisplayed()
+        captureComposer("recorded-changes-diff.png")
+        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        compose.onNodeWithTag("changed-files").assertIsDisplayed()
+        compose.onNodeWithTag("changed-file-image.png").performClick()
+        compose.onNodeWithText("No text diff recorded").assertIsDisplayed()
+        compose.onNodeWithTag("changes-back").performClick()
+        compose.onNodeWithTag("changes-back").performClick()
+        compose.onNodeWithTag("turn-changes-fullscreen").assertDoesNotExist()
+        compose.onNodeWithTag("timeline").assertIsDisplayed()
+    }
+
+    @Test
+    fun discussionHasNoChangesChrome() {
+        val gitReads = AtomicInteger()
+        browserResponse = { method, params ->
+            if (method == "command/exec" && params.toString().contains("remote-codex-changes")) gitReads.incrementAndGet()
+            null
+        }
+        historyOverride = obj("data" to JsonArray(listOf(obj("id" to s("discussion"), "status" to s("completed"),
+            "items" to JsonArray(listOf(obj("id" to s("reply"), "type" to s("agentMessage"), "text" to s("Here is the explanation."))))))))
+        compose.runOnUiThread { model.foreground(true); model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.entries.size == 1 && !model.state.value.busy }
+        compose.waitUntil(5000) {
+            runCatching { compose.onNodeWithText("Here is the explanation.").assertIsDisplayed() }.isSuccess
+        }
+        captureComposer("recorded-changes-discussion.png")
+        compose.onNodeWithTag("git-changes").assertDoesNotExist()
+        compose.onNodeWithTag("refresh-git-changes").assertDoesNotExist()
+        compose.onNodeWithTag("turn-changes-discussion").assertDoesNotExist()
+        assertEquals(0, gitReads.get())
+    }
+
+    @Test
+    fun recordedChangesSurviveHistoryReload() {
+        historyOverride = obj("data" to JsonArray(listOf(obj("id" to s("saved-turn"), "status" to s("completed"),
+            "items" to JsonArray(listOf(recordedEdit(), obj("id" to s("reply"), "type" to s("agentMessage"),
+                "text" to s("Saved changes."))))))))
+        fun open() {
+            compose.runOnUiThread { model.foreground(true); model.openTask("task-test") }
+            compose.waitUntil(10000) { model.state.value.entries.size == 2 && !model.state.value.busy }
+        }
+        open()
+        compose.onNodeWithTag("turn-changes-saved-turn").assertIsDisplayed()
+        compose.runOnUiThread { model.home() }
+        compose.waitUntil(5000) { model.state.value.page == "home" }
+        open()
+        compose.onAllNodesWithTag("turn-changes-saved-turn").assertCountEquals(1)
+        compose.onNodeWithTag("turn-changes-saved-turn").performClick()
+        compose.onNodeWithTag("changed-file-src/main.kt").performClick()
+        compose.onNodeWithText("@@ -1 +1 @@\n-old content\n+new content").assertIsDisplayed()
+    }
+
+    @Test
+    fun recordedChangesSupportCompactLargeText() {
+        val path = "src/a long directory/a very long filename.kt"
+        val changes = ConversationRow.Changes("compact", listOf(RecordedFileChanges(path,
+            listOf(obj("diff" to s("-old\n+new"))))))
+        val density = compose.activity.resources.displayMetrics.density
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(density, 1.8f)) {
+                    RemoteTheme(darkTheme = true) {
+                        var open by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+                        Box(Modifier.size(240.dp, 440.dp)) { TurnChangesRow(changes) { open = true } }
+                        if (open) TurnChangesViewer(changes) { open = false }
+                    }
+                }
+            }
+        }
+        compose.onNodeWithTag("turn-changes-compact").assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
+        compose.onNodeWithText(path).assertIsDisplayed()
+        compose.onNodeWithTag("changed-file-$path").assertHeightIsAtLeast(56.dp).performClick()
+        compose.onNodeWithText("-old\n+new").assertIsDisplayed()
+        compose.onNodeWithTag("changes-back").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Changed files").assertIsDisplayed()
+    }
+
     @Test
     fun nativeTodoOpensWithoutPreviewAndReturnsToChats() {
         val todoCommands = CopyOnWriteArrayList<List<String>>()
@@ -76,17 +190,6 @@ class AppTest {
         compose.onNodeWithContentDescription("New chat").assertIsDisplayed()
         assertTrue(todoCommands.isNotEmpty())
         assertTrue(todoCommands.all { it == listOf(StockTodoOperations.PROGRAM, "--db", StockTodoOperations.DATABASE, "--json", "list") })
-    }
-
-    @Test
-    fun chatShowsGitTotalsAndRefreshes() {
-        compose.onNodeWithText("Fixture task").performClick()
-        compose.waitUntil(10000) { model.state.value.gitChanges.report != null }
-        compose.onNodeWithText("3 files · +42 / −7 lines").assertIsDisplayed()
-        compose.onNodeWithText("Since branch point with main").assertIsDisplayed()
-        compose.onNodeWithTag("refresh-git-changes").assertIsEnabled().performClick()
-        compose.waitUntil(5000) { !model.state.value.gitChanges.loading }
-        compose.onNodeWithText("3 files · +42 / −7 lines").assertIsDisplayed()
     }
 
     @Test
@@ -604,11 +707,6 @@ class AppTest {
                                             }
                                             "command/exec" -> {
                                                 when {
-                                                    command.getOrNull(3) == "remote-codex-changes" ->
-                                                        obj("exitCode" to JsonPrimitive(0), "stdout" to s(
-                                                            obj("status" to s("ready"), "baseline" to s("main"),
-                                                                "files" to JsonPrimitive(3), "added" to JsonPrimitive(42),
-                                                                "removed" to JsonPrimitive(7), "binary" to JsonPrimitive(0)).toString()))
                                                     "get-url" in command -> obj("exitCode" to JsonPrimitive(0), "stdout" to s("git@github.com:denta-codex/remote-codex.git\n"))
                                                     "remote-codex-environment" in command -> {
                                                         environmentSetups.incrementAndGet()

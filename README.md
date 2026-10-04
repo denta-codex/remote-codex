@@ -30,6 +30,13 @@ messages appear above the composer; tap **Steer now** to use one in the active
 turn, or **Remove** to cancel it. An idle, interrupted queue offers **Send now**.
 Queue actions preserve anything you are currently drafting.
 
+After a turn completes, recorded file edits appear beneath its reply as
+**N files changed**. Tap that row for the fullscreen file list, then a filename
+for its recorded patches. Back returns to the file list, then the conversation.
+Replies without recorded edits have no changes row. These are Codex's recorded
+file edits, including repeated edits to a file, rather than current Git totals;
+shell edits without a file-change record are not included.
+
 Open the composer's conversation settings and choose **Speed → Standard / Fast**.
 Fast adds a lightning icon after the reasoning level. Existing chats save the
 choice immediately for subsequent turns; new chats keep it with the draft until

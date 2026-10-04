@@ -54,25 +54,6 @@ constructor(
     override fun discardTodoEditor() = todoController.discard()
     override fun keepTodoEditor() = todoController.keep()
     override fun acknowledgeTodoOutcome() = todoController.acknowledge()
-    private var gitChangesJob: Job? = null
-    override fun refreshGitChanges() {
-        val st = _state.value
-        val thread = st.thread ?: return
-        val cwd = st.threadCwd ?: return
-        if (!st.ready || st.busy || st.activeTurn != null) return
-        gitChangesJob?.cancel()
-        val selected = selection
-        _state.update { it.copy(gitChanges = GitChangesState(thread, loading = true)) }
-        gitChangesJob = viewModelScope.launch {
-            val result = try {
-                GitChangesState(thread, report = GitChanges.read(rpc, cwd))
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-                GitChangesState(thread, error = true)
-            }
-            _state.update { if (selection == selected && it.thread == thread) it.copy(gitChanges = result) else it }
-        }
-    }
     private val projectAddition = ProjectAdditionController(viewModelScope, local, rpc,
         { _state.value }, { addition -> _state.update { it.copy(projectAddition = addition) } },
         { projects, project, root, current ->

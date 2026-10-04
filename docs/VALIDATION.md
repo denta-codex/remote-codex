@@ -1120,3 +1120,33 @@ gesture are still pending user-authorized live deployment and delivery.
   `scripts/emulator-test --tests AppTest#systemScreenshotOffersReportWithTheCapturedWindow`
   passed (one test, managed Android 16). No release workflow, deployment, or
   phone installation was performed.
+
+## Completed-turn recorded changes and fullscreen diffs — 2026-10-04
+
+- Started from local main `bcce5d0` (Android 0.4.1), which contains the reported
+  Git banner and grouped activity. Removed the persistent banner and its automatic
+  Git commands. Successful recorded file edits now produce one feed row only
+  after their turn reports `completed`; discussion, failed, interrupted, and
+  unfinished turns do not produce that row.
+- Unit coverage verifies distinct paths, ordered repeated patches, failed and
+  declined edits, missing patch text, chronological placement, and consistent
+  live/history projection. `:core:test` and `:app:testDebugUnitTest` passed.
+- Four new managed Android 16 tests passed in two bounded batches:
+  `recordedChangesAppearAfterFinishedReply`, `discussionHasNoChangesChrome`,
+  `recordedChangesSurviveHistoryReload`, and
+  `recordedChangesSupportCompactLargeText`. Coverage includes fullscreen file
+  selection, stored diff content, hardware Back returning to the file list,
+  absent binary text, reload without duplication, and compact large-text access.
+- `groupedToolActivityStreamsAndPreservesExpandedDetails` passed in the initial
+  five-test batch. That batch exhausted its three-minute bound during the final
+  test after first-build/startup overhead. The discussion assertion was corrected
+  to await rendered Markdown and layout, rather than only model hydration; the
+  affected tests passed in the subsequent smaller batches.
+- Final `:app:lintDebug` passed with the existing managed JDK and a command-local
+  `-Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8 -XX:+UseSerialGC"` override.
+  The preceding lint attempt crashed in the JDK's
+  `G1ParScanThreadState::trim_queue_to_threshold`; no shared JVM configuration or
+  toolchain was changed. `git diff --check` passed.
+- Fixture screenshots of the fullscreen file list and highlighted diff were
+  inspected and retained under ignored `artifacts/completed-turn-changes/`.
+  No release, deployment, or phone installation was performed.

@@ -11,6 +11,10 @@ internal sealed interface ConversationRow {
         override val key = entry.key
     }
 
+    data class Changes(val turn: String, val files: List<RecordedFileChanges>) : ConversationRow {
+        override val key = "changes/$turn"
+    }
+
     data class Activity(val calls: List<ToolCall>, val summary: String, val working: Boolean,
         val representsActiveTurn: Boolean) : ConversationRow {
         override val key = "tools/${calls.first().entry.key}"
@@ -56,7 +60,16 @@ private val messageKinds = setOf("userMessage", "agentMessage", "plan", "imageVi
 
 internal fun conversationRows(entries: List<Entry>, activeTurn: String?, connected: Boolean,
     turnStatuses: Map<String, String> = emptyMap(), waitingForUser: Boolean = false): List<ConversationRow> {
+    val changes = completedTurnChanges(entries, turnStatuses)
+    val representedEdits = changes.keys.let { turns ->
+        entries.filter { it.turn in turns && it.isRecordedFileChange() }.map { it.key }.toSet()
+    }
     val visible = entries.filter { it.kind != "reasoning" }
+    // Attach to the last reply, or the last item for turns without a reply.
+    val anchors = changes.mapValues { (turn, _) ->
+        visible.lastOrNull { it.turn == turn && it.kind in setOf("agentMessage", "plan") }?.key
+            ?: visible.lastOrNull { it.turn == turn }?.key
+    }
     val rows = mutableListOf<ConversationRow>()
     var group = mutableListOf<Entry>()
     fun flush(trailing: Boolean) {
@@ -89,12 +102,18 @@ internal fun conversationRows(entries: List<Entry>, activeTurn: String?, connect
         group = mutableListOf()
     }
     visible.forEach { entry ->
-        if (entry.kind in messageKinds) {
+        if (entry.key in representedEdits) {
+            // Completed patches are presented once, through the changes row.
+        } else if (entry.kind in messageKinds) {
             flush(false)
             rows += ConversationRow.Message(entry)
         } else {
             if (group.isNotEmpty() && group.first().turn != entry.turn) flush(false)
             group += entry
+        }
+        if (anchors[entry.turn] == entry.key) {
+            flush(false)
+            rows += changes.getValue(entry.turn)
         }
     }
     flush(true)
