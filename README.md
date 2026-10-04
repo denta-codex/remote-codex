@@ -6,6 +6,10 @@
 Codex on a remote host. Native Android text client for Grace's existing stock
 Codex app server, over WSS and Tailscale.
 
+Choose **Remote Codex** in Android's share menu to add text, links, images, or
+files to the new-chat draft. Existing draft content is preserved. Review the
+message and tap Send when ready; sharing never sends it automatically.
+
 Sending while Codex is working adds a follow-up to its server queue. Queued
 messages appear above the composer; tap **Steer now** to use one in the active
 turn, or **Remove** to cancel it. An idle, interrupted queue offers **Send now**.
