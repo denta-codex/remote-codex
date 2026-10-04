@@ -1,15 +1,2 @@
-- Keep cover screen toolbar clear of display cutouts
-- Merge main into cover toolbar fix
-- Remove retired Autofill playground
-- Merge branch 'cleanup/retired-autofill-playground'
-- Default reports to implementation and support committing task changes before merge
-- Add archive action to conversation overflow menu
-- Merge branch 'main' into fix/conversation-archive-menu
-- Hide unknown mode labels in conversation composer
-- Merge branch 'main' into fix/hide-unknown-mode
-- Fix full-screen keyboard text synchronization
-- Make composer send button use primary colors
-- Merge branch 'main' into fix/report-default-and-commit-merge-main
-- Omit unknown mode from cover-screen accessibility
-- Merge branch 'main' into fix/hide-unknown-mode
-- Merge branch 'fix/conversation-archive-menu'
+- Verify Todo-free Android navigation at the requested base
+- Add native Todo board using the local task CLI

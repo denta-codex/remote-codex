@@ -132,6 +132,8 @@ data class ScreenState(
     val appForeground: Boolean = false,
     val configured: Boolean = false,
     val projects: List<CodexProject> = emptyList(),
+    val projectAddition: ProjectAdditionState = ProjectAdditionState(),
+    val todo: TodoState = TodoState(),
     val projectFilter: TaskProjectFilter = TaskProjectFilter.All,
     val tasks: List<JsonObject> = emptyList(),
     val chatActivity: Map<String, ChatActivity> = emptyMap(),
@@ -152,6 +154,7 @@ data class ScreenState(
     val threadCwd: String? = null,
     val title: String = "New chat",
     val entries: List<Entry> = emptyList(),
+    val turnStatuses: Map<String, String> = emptyMap(),
     val historyCursor: String? = null,
     val draft: String = "",
     val attachments: List<DraftAttachment> = emptyList(),
@@ -178,7 +181,7 @@ data class ScreenState(
     val busy: Boolean = false,
     val error: String? = null,
     val journal: JsonObject? = null,
-    val merge: GitMergeState = GitMergeState(),
+    val gitChanges: GitChangesState = GitChangesState(),
     val attention: Boolean = false,
     val update: UpdateState = UpdateState(),
     val filePreview: FilePreviewState? = null,
@@ -244,10 +247,16 @@ interface SettingsActions {
 }
 
 interface ConversationActions {
-    fun inspectMerge()
-    fun mergeIntoMain()
-    fun reconcileMerge()
-    fun dismissMerge()
+    fun refreshGitChanges() {}
+    fun openAddProject()
+    fun dismissAddProject()
+    fun projectPath(value: String)
+    fun browseProjectFolder(path: String)
+    fun useProjectFolder()
+    fun projectName(value: String)
+    fun addProject()
+    fun checkProjectRegistration()
+    fun chooseMatchingProject(id: String)
     fun viewedReply(thread: String, signature: String) {}
     fun refreshModels() {}
     fun selectSpeed(fast: Boolean) {}
@@ -303,4 +312,4 @@ interface ConversationActions {
     fun answer(decision: Decision, result: JsonObject)
 }
 
-interface ClientActions : AppNavigation, HomeActions, SettingsActions, ConversationActions
+interface ClientActions : AppNavigation, HomeActions, SettingsActions, ConversationActions, TodoActions

@@ -6,6 +6,25 @@
 Codex on a remote host. Native Android text client for Grace's existing stock
 Codex app server, over WSS and Tailscale.
 
+Tap **Todo** on the Chats screen for the native task board. Switch between
+To Do, In Progress, and Done with tabs or a swipe. **Add** creates a task;
+open a row to edit its title and Markdown description or change its status.
+Save text edits before changing status. Existing work notes can be expanded.
+Refresh pulls the latest changes from Grace; opening or returning to Todo also
+refreshes. This first version is online-only and does not cache tasks on disk.
+
+Todo uses `/home/agent/.local/bin/todo` (CLI JSON schema 1) and
+`/home/agent/.local/share/todo/tasks.sqlite3` on Grace, through the existing
+authenticated connection. Each command exits when finished; there is no board
+server, preview, or background Todo worker. If a save response is lost, refresh
+and inspect the task before choosing **I've checked · unlock edits**. That action
+only clears the phone's pending-save record and discards the old editor; it never
+repeats the save. Archive management and adding work notes remain CLI operations.
+
+Choose **Remote Codex** in Android's share menu to add text, links, images, or
+files to the new-chat draft. Existing draft content is preserved. Review the
+message and tap Send when ready; sharing never sends it automatically.
+
 Sending while Codex is working adds a follow-up to its server queue. Queued
 messages appear above the composer; tap **Steer now** to use one in the active
 turn, or **Remove** to cancel it. An idle, interrupted queue offers **Send now**.
@@ -18,17 +37,6 @@ creation. Fast requires an advertised model tier and permission from the host's
 managed settings. The choice applies to this chat, without changing global defaults.
 If confirmation is lost, reconnect to read the setting; the app never retries
 the uncertain change automatically.
-
-In an idle conversation, use **⋮ → Merge into main…** to review and directly merge
-committed work into the repository's local `main` checkout. The review includes
-all source commits absent from `main`, including work from a detached HEAD.
-Both checkouts must be clean, `main` must already be checked out, and conflicts
-must be resolved beforehand. This runs Git through the existing stock command
-RPC; it does not ask the agent to merge, push changes, or start a release.
-Normal Git hooks/signing configuration still apply. Drafts and attachments stay
-on the phone. If a reply is lost, **Check merge state…** reconciles the host
-receipt and Git state without resending the merge. Submodules are not supported
-by this control in v1.
 
 Take a screenshot while the app is open and tap **Report or request** in the snackbar
 (Android 14+), or use **⋮ → Report or request**, to save a
