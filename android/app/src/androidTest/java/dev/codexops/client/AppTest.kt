@@ -295,6 +295,8 @@ class AppTest {
     @Volatile private var rejectSteer = false
     @Volatile private var rejectQueueRead = false
     private val userInputResponses = CopyOnWriteArrayList<JsonObject>()
+    @Volatile private var holdHistoryReply = false
+    private val heldHistoryRequests = CopyOnWriteArrayList<JsonElement>()
     private val app
         get() = ApplicationProvider.getApplicationContext<Application>()
     private val demo by lazy {
@@ -355,11 +357,15 @@ class AppTest {
                                             ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
                                             ?: emptyList()
                                     if (method.isEmpty()) {
-                                        if (m["id"] == JsonPrimitive(88))
+                                        if (m["id"] in setOf(JsonPrimitive(88), JsonPrimitive(89)))
                                             userInputResponses.add(m.map("result"))
                                         return
                                     }
                                     if (method == "initialized") return
+                                    if (method == "thread/turns/list" && holdHistoryReply) {
+                                        heldHistoryRequests.add(m.getValue("id"))
+                                        return
+                                    }
                                     if (method == "thread/settings/update") {
                                         speedMutations.add(params)
                                         if (rejectSpeed) {
@@ -3564,6 +3570,55 @@ class AppTest {
     }
 
     @Test
+    fun unsupportedToolsFailOnHomeAndDuringHistoryLoading() {
+        val failure = obj("success" to JsonPrimitive(false), "contentItems" to JsonArray(listOf(obj(
+            "type" to s("inputText"), "text" to s("This client does not support client-executed tools. The tool was not executed.")
+        ))))
+        fun request(id: Int) = obj("id" to JsonPrimitive(id), "method" to s("item/tool/call"),
+            "params" to obj("threadId" to s("task-test"), "namespace" to s("arbitrary"), "tool" to s("any_tool"), "arguments" to JsonNull))
+        assertEquals("home", model.state.value.page)
+        peer!!.send(request(88).toString())
+        peer!!.send(request(88).toString())
+        compose.waitUntil(5000) { userInputResponses.size == 1 }
+        assertEquals(failure, userInputResponses.single())
+        assertTrue(model.state.value.decisions.isEmpty())
+        assertEquals("home", model.state.value.page)
+
+        holdHistoryReply = true
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { heldHistoryRequests.isNotEmpty() }
+        assertTrue(model.state.value.busy)
+        peer!!.send(request(89).toString())
+        compose.waitUntil(5000) { userInputResponses.size == 2 }
+        assertEquals(failure, userInputResponses.last())
+        assertTrue(model.state.value.busy)
+        assertTrue(model.state.value.decisions.isEmpty())
+        holdHistoryReply = false
+        heldHistoryRequests.forEach { peer!!.send(obj("id" to it, "result" to history()).toString()) }
+        compose.waitUntil(10000) { !model.state.value.busy }
+        emit(peer!!, "turn/completed", obj("turnId" to s("turn-test"), "turn" to obj("id" to s("turn-test"), "status" to s("completed"))))
+        compose.waitForIdle()
+        assertEquals(2, userInputResponses.size)
+        assertTrue(model.state.value.decisions.isEmpty())
+        compose.onNodeWithText("Your input is needed").assertDoesNotExist()
+    }
+
+    @Test
+    fun approvalStillWaitsForPhoneDecision() {
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy }
+        peer!!.send(obj("id" to JsonPrimitive(88), "method" to s("item/commandExecution/requestApproval"), "params" to obj(
+            "threadId" to s("task-test"), "turnId" to s("turn-test"), "itemId" to s("command"), "command" to s("printf fixture")
+        )).toString())
+        compose.waitUntil(5000) { model.state.value.decisions.size == 1 }
+        assertTrue(userInputResponses.isEmpty())
+        compose.onNodeWithText("Approve once").performScrollTo().performClick()
+        compose.waitUntil(5000) { userInputResponses.size == 1 }
+        assertEquals(obj("decision" to s("accept")), userInputResponses.single())
+        assertTrue(model.state.value.decisions.isEmpty())
+    }
+
+    @Test
     fun planModeQuestionCanBeAnswered() {
         askPlanQuestion = true
         compose.onNodeWithContentDescription("New chat").performClick()
@@ -3581,7 +3636,7 @@ class AppTest {
             compose.onNodeWithTag("composer").assertDoesNotExist()
         } else {
             compose.onNodeWithTag("composer-status")
-                .assertTextContains("Follow-up guides the active turn")
+                .assertTextContains("Plan selected · send when the task is idle")
             val actionHeight =
                 compose.onNodeWithTag("composer-actions").fetchSemanticsNode().boundsInRoot.height
             val maxActionHeight = 64 * compose.activity.resources.displayMetrics.density

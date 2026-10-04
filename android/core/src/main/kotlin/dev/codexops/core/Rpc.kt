@@ -73,6 +73,7 @@ class Rpc(private val allowLoopbackTest: Boolean = false) {
     val events = Channel<JsonObject>(1024)
     private val next = AtomicLong()
     private val pending = ConcurrentHashMap<String, CompletableDeferred<JsonObject>>()
+    private val rejectedToolRequests = mutableSetOf<JsonElement>()
     @Volatile private var socket: WebSocketClient? = null
     private var opened = CompletableDeferred<Unit>()
     private val guard = Any()
@@ -120,6 +121,26 @@ class Rpc(private val allowLoopbackTest: Boolean = false) {
                         val message = wire.parseToJsonElement(text).jsonObject
                         // Request IDs are independent in the two directions.
                         if (message.str("method").isNotEmpty()) {
+                            if (message.str("method") == "item/tool/call" && message.containsKey("id")) {
+                                synchronized(guard) {
+                                    if (generation != epoch) return
+                                    val id = message.getValue("id")
+                                    // Reserve before sending; uncertain delivery must never be replayed.
+                                    if (!rejectedToolRequests.add(id)) return
+                                    respond(
+                                        id,
+                                        obj(
+                                            "success" to JsonPrimitive(false),
+                                            "contentItems" to JsonArray(listOf(obj(
+                                                "type" to s("inputText"),
+                                                "text" to s("This client does not support client-executed tools. The tool was not executed."),
+                                            ))),
+                                        ),
+                                        epoch,
+                                    )
+                                }
+                                return
+                            }
                             if (
                                 !events
                                     .trySend(
@@ -280,6 +301,7 @@ class Rpc(private val allowLoopbackTest: Boolean = false) {
             opened.completeExceptionally(ConnectionLost())
             pending.values.forEach { it.completeExceptionally(ConnectionLost()) }
             pending.clear()
+            rejectedToolRequests.clear()
         }
     }
 
