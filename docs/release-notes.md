@@ -1,15 +1,15 @@
-- Keep cover screen toolbar clear of display cutouts
-- Merge main into cover toolbar fix
-- Remove retired Autofill playground
-- Merge branch 'cleanup/retired-autofill-playground'
-- Default reports to implementation and support committing task changes before merge
-- Add archive action to conversation overflow menu
-- Merge branch 'main' into fix/conversation-archive-menu
-- Hide unknown mode labels in conversation composer
-- Merge branch 'main' into fix/hide-unknown-mode
-- Fix full-screen keyboard text synchronization
-- Make composer send button use primary colors
-- Merge branch 'main' into fix/report-default-and-commit-merge-main
-- Omit unknown mode from cover-screen accessibility
-- Merge branch 'main' into fix/hide-unknown-mode
-- Merge branch 'fix/conversation-archive-menu'
+- Add per-chat Fast mode controls and reasoning indicator
+- Show only project names in the project picker
+- Group tool activity under shimmering expandable summaries
+- Merge grouped tool activity summaries
+- Hide unknown reasoning effort in conversation controls
+- Add existing host projects from Android
+- Let cover toolbar grow with enlarged text
+- Merge branch 'main' into fix/cover-toolbar-height
+- Show Git change totals on the chat page
+- Remove direct merge into main feature
+- Merge branch 'main' into feat/chat-git-summary
+- Merge branch 'main' into fix/cover-toolbar-height
+- Merge branch 'main' into feat/chat-git-summary
+- Accept Android shares into the new-chat draft
+- Merge branch 'main' into feat/chat-git-summary

@@ -1,5 +1,14 @@
 # Validation
 
+## 2026-10-04 — Android 0.4.0 (32)
+
+- Source revision: `030e67043c4a617f508b331dd686e6ca1e16ecfd`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `58ea4b65ed4df584e09bc0e64e6c840bf7cc8d930e02a35b5d675c3f27f41af7`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/home/agent/workspaces/remote-codex/artifacts/releases/run-20261004T170035Z-VT3VBY.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
 ## 2026-10-03 — Add existing host projects from Android
 
 - Added a folder-only browser and pasted-path entry to the new-task project
