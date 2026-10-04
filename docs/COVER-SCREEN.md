@@ -11,6 +11,30 @@ and nearly square (height / width below 1.35). The decision uses the current app
 window, not a device model or fold state, so it also handles equivalent split-screen
 and freeform windows.
 
+The app uses the current window's `WindowInsets.safeDrawing` for camera cutouts,
+system bars, and keyboard clearance. Scaffold reserves these insets once and the
+conversation consumes that padding before applying keyboard padding. The compact
+composer action row stays at a 48 dp touch-target height; it does not add a fixed
+camera-height spacer on top of Android's reserved area. A system-excluded camera
+band therefore does not cause a second reservation inside the usable app window.
+
+For cover-screen UX, keep the conversation as the primary pane and the composer
+as its consistent action anchor. Reveal model, mode, attachments, and other
+secondary controls through the conversation sheet. During typing, reduce the
+resting controls to give the keyboard and message field priority. Keep these
+decisions responsive to available width, height, and font scale, including when
+the user changes the external display mode. Avoid scaling down the entire phone
+UI or forcing a device-specific full-screen mode.
+
+Full-screen image, file, plan, visualization, and merge dialogs own their window
+insets independently of the app shell. Their backgrounds fill the window while
+their content uses safe-drawing padding; full-screen dialog windows explicitly
+disable decor fitting so clearance is applied once. The project/sort and
+conversation settings sheets use their parent's available height instead of a
+percentage of the device configuration height, with scrollable options and
+persistent actions. The separate credential-request screen also includes display
+cutouts when combining system-bar and keyboard padding.
+
 The implementation follows these Android recommendations:
 
 - [Adapt layouts](https://developer.android.com/design/ui/mobile/guides/layout-and-content/adapt-layout)
@@ -22,6 +46,9 @@ The implementation follows these Android recommendations:
 - [Foldable postures and orientation](https://developer.android.com/design/ui/mobile/guides/layout-and-content/postures-and-orientation)
   notes that flip-phone cover displays can be square and that primary content should
   take priority when vertical room is constrained.
+- [Compose window insets](https://developer.android.com/develop/ui/compose/system/insets)
+  documents system bars, keyboard, display-cutout, and safe-drawing insets; these
+  provide the platform geometry for keeping content visible.
 - [Android virtual devices](https://developer.android.com/studio/run/managing-avds)
   supports custom hardware profiles with explicit resolution and screen size.
 - [Motorola's published specification](https://motorola-global-en-uk--tst5.custhelp.com/app/answers/detail/a_id/192853)

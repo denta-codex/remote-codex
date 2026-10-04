@@ -316,9 +316,57 @@ class AppTest {
         if (demo) SystemClock.sleep(milliseconds)
     }
 
+    private fun assertCoverDialogAvoidsCutouts(vararg controls: androidx.compose.ui.test.SemanticsNodeInteraction) {
+        if (!coverScreen) return
+        val top = 96
+        val bottom = 160
+        var height = 0
+        // Dialog focus arrives after composition. Inject into that window, and
+        // keep the fixture insets when Android sends its subsequent update.
+        try {
+            compose.waitUntil(5000) {
+                android.view.inspector.WindowInspector.getGlobalWindowViews().any {
+                    it !== compose.activity.window.decorView && it.isShown && it.hasWindowFocus()
+                }
+            }
+        } catch (e: androidx.compose.ui.test.ComposeTimeoutException) {
+            val windows = android.view.inspector.WindowInspector.getGlobalWindowViews().map {
+                "${it.javaClass.simpleName}:shown=${it.isShown},focus=${it.hasWindowFocus()},size=${it.width}x${it.height}"
+            }
+            val nodes = controls.map { runCatching { it.fetchSemanticsNode().boundsInRoot.toString() }.getOrDefault("absent") }
+            throw AssertionError("Dialog did not gain focus: windows=$windows controls=$nodes", e)
+        }
+        compose.runOnUiThread {
+            val view = android.view.inspector.WindowInspector.getGlobalWindowViews()
+                .last { it.isShown && it.hasWindowFocus() }
+            height = view.height
+            val insets = androidx.core.view.WindowInsetsCompat.Builder()
+                .setInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars(), androidx.core.graphics.Insets.NONE)
+                .setInsets(androidx.core.view.WindowInsetsCompat.Type.ime(), androidx.core.graphics.Insets.NONE)
+                .setVisible(androidx.core.view.WindowInsetsCompat.Type.statusBars(), false)
+                .setDisplayCutout(androidx.core.view.DisplayCutoutCompat(
+                    android.graphics.Rect(0, top, 0, bottom),
+                    listOf(android.graphics.Rect(0, 0, 100, top),
+                        android.graphics.Rect(view.width - 200, height - bottom, view.width, height)),
+                ))
+                .build()
+            androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(view) { _, _ -> insets }
+            androidx.core.view.ViewCompat.dispatchApplyWindowInsets(view, insets)
+        }
+        compose.waitForIdle()
+        controls.forEach { control ->
+            val bounds = control.assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            assertTrue("Dialog control overlaps the top cutout: $bounds", bounds.top >= top)
+            assertTrue("Dialog control overlaps the bottom cutout: $bounds", bounds.bottom <= height - bottom)
+            val full = control.getUnclippedBoundsInRoot()
+            val density = compose.activity.resources.displayMetrics.density
+            assertEquals("Dialog control is clipped", (full.bottom - full.top).value * density, bounds.height, 1f)
+        }
+    }
+
     @Before
     fun setup() {
-        reportCoverOverride = testName.methodName in setOf("systemScreenshotOffersReportWithTheCapturedWindow", "commandTrayCoverLargeTextKeepsActionsReachable", "coverCameraDockKeepsActionsLeftAndFunctional", "coverChatToolbarAvoidsCutoutWithHiddenStatusBar")
+        reportCoverOverride = testName.methodName in setOf("systemScreenshotOffersReportWithTheCapturedWindow", "commandTrayCoverLargeTextKeepsActionsReachable", "coverCameraDockKeepsActionsLeftAndFunctional", "coverChatToolbarAvoidsCutoutWithHiddenStatusBar", "coverComposerUsesAvailableHeightAboveBottomCutout")
         if (coverScreen || landscapeScreen || reportCoverOverride) {
             shell(if (landscapeScreen) "wm size 2992x1224" else "wm size 1080x1272")
             shell(when {
@@ -1400,6 +1448,38 @@ class AppTest {
     }
 
     @Test
+    fun coverComposerUsesAvailableHeightAboveBottomCutout() {
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy }
+        val density = compose.activity.resources.displayMetrics.density
+        val rootHeight = compose.onRoot().fetchSemanticsNode().boundsInRoot.height
+        // Both cover-screen modes: full height and the camera band excluded by Android.
+        for (bottom in listOf(0, 272)) {
+            compose.runOnUiThread {
+                val insets = androidx.core.view.WindowInsetsCompat.Builder()
+                    .setInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars(), androidx.core.graphics.Insets.NONE)
+                    .setVisible(androidx.core.view.WindowInsetsCompat.Type.statusBars(), false)
+                    .setInsets(androidx.core.view.WindowInsetsCompat.Type.ime(), androidx.core.graphics.Insets.NONE)
+                    .setDisplayCutout(androidx.core.view.DisplayCutoutCompat(
+                        android.graphics.Rect(0, 0, 0, bottom),
+                        if (bottom == 0) emptyList() else listOf(
+                            android.graphics.Rect(600, rootHeight.toInt() - bottom, 1080, rootHeight.toInt()),
+                        ),
+                    ))
+                    .build()
+                androidx.core.view.ViewCompat.dispatchApplyWindowInsets(compose.activity.window.decorView, insets)
+            }
+            compose.waitForIdle()
+            val dock = compose.onNodeWithTag("cover-camera-dock").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            assertEquals("Use the available height without a second camera reservation",
+                rootHeight - bottom - 16 * density, dock.bottom, 2f)
+            assertEquals("Keep the action row at its touch-target height", 48 * density, dock.height, 1f)
+            compose.onNodeWithTag("timeline").assertIsDisplayed()
+            compose.onNodeWithTag("composer").assertIsDisplayed()
+        }
+    }
+
+    @Test
     fun coverScreenDestinationsRemainReachable() {
         Assume.assumeTrue("Run this test with scripts/emulator-test --cover", coverScreen)
         val configuration = compose.activity.resources.configuration
@@ -1543,6 +1623,7 @@ class AppTest {
         compose.onNodeWithTag("merge-main-menu").performClick()
         compose.waitUntil(5000) { model.state.value.merge.report?.str("status") == "ready" }
         compose.onNodeWithTag("confirm-merge").assertIsDisplayed().assertIsEnabled()
+        assertCoverDialogAvoidsCutouts(compose.onNodeWithTag("confirm-merge"), compose.onNodeWithText("Close"))
         compose.onNodeWithText("aaaaaaa Add direct merge control").performScrollTo().assertIsDisplayed()
         demoPause(4000)
         compose.onNodeWithText("Close").performClick()
@@ -2363,6 +2444,7 @@ class AppTest {
             compose.onAllNodesWithTag("message-image").fetchSemanticsNodes().isNotEmpty()
         }
         compose.onAllNodesWithTag("message-image")[0].performClick()
+        assertCoverDialogAvoidsCutouts(compose.onNodeWithTag("close-image"))
         compose.onNodeWithContentDescription("Expanded conversation image")
             .performTouchInput { doubleClick() }
         val viewport = compose.onNodeWithTag("image-viewport")
@@ -2433,8 +2515,11 @@ class AppTest {
         compose.waitUntil(15000) { compose.onAllNodesWithTag("visualization-webview").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Before the chart.").assertExists()
         compose.onNodeWithText("After the chart.").assertExists()
-        compose.onNodeWithTag("expand-visualization").performClick()
-        compose.onNodeWithTag("visualization-fullscreen").assertIsDisplayed()
+        compose.onNodeWithTag("expand-visualization").performScrollTo().assertIsDisplayed().performClick()
+        assertCoverDialogAvoidsCutouts(compose.onNodeWithTag("close-visualization"))
+        compose.waitUntil(5000) {
+            runCatching { compose.onNodeWithTag("visualization-fullscreen").assertIsDisplayed() }.isSuccess
+        }
         compose.onNodeWithTag("close-visualization").performClick()
         compose.onNodeWithTag("visualization-fullscreen").assertDoesNotExist()
         compose.runOnUiThread { model.home() }
@@ -2464,6 +2549,7 @@ class AppTest {
         assertEquals(FilePreviewKind.TEXT, model.state.value.filePreview?.kind)
         assertEquals("hello from remote one", model.state.value.filePreview?.text)
         compose.onNodeWithTag("file-preview").assertIsDisplayed()
+        assertCoverDialogAvoidsCutouts(compose.onNodeWithText("Close"))
         compose.onNodeWithText("hello from remote one").assertIsDisplayed()
         compose.onNodeWithText("Close").performClick()
         compose.onNodeWithTag("file-preview").assertDoesNotExist()
@@ -3502,6 +3588,7 @@ class AppTest {
         compose.onNodeWithTag("plan-fullscreen").assertIsDisplayed()
         assertCompactTitle("plan-fullscreen")
         compose.onNodeWithTag("implement-plan-fullscreen").assertIsDisplayed()
+        assertCoverDialogAvoidsCutouts(compose.onNodeWithTag("close-plan-fullscreen"), compose.onNodeWithTag("implement-plan-fullscreen"))
         compose.onNodeWithTag("close-plan-fullscreen").performClick()
         compose.onNodeWithTag("plan-fullscreen").assertDoesNotExist()
     }
@@ -3515,7 +3602,7 @@ class AppTest {
         openConversationTray()
         compose.onNodeWithTag("mode-plan").performScrollTo().performClick()
         closeConversationTray()
-        compose.onNodeWithTag("conversation-settings").assertTextContains("Plan", substring = true)
+        compose.onNodeWithTag("conversation-settings").assert(hasContentDescription("Plan", substring = true))
         closeConversationTray()
         compose.onNodeWithTag("composer").performTextInput("Propose a safe change")
         compose.onNodeWithTag("send").performClick()

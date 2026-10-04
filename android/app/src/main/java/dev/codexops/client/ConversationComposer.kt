@@ -18,7 +18,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -115,7 +114,7 @@ internal fun ConversationComposer(state: ScreenState, actions: ConversationActio
         containerColor = MaterialTheme.colorScheme.surfaceVariant,
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
     ) {
-        Column(Modifier.fillMaxWidth().heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.85f).dp)
+        Column(Modifier.fillMaxWidth()
             .padding(horizontal = 16.dp).testTag("conversation-tray")) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("Conversation", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
@@ -207,11 +206,9 @@ private fun ComposerActions(
     BoxWithConstraints(Modifier.fillMaxWidth().padding(vertical = if (shortWindow) 2.dp else 6.dp).testTag("composer-actions")) {
         val stacked = maxWidth < 340.dp || LocalDensity.current.fontScale > 1.3f
         if (LocalAppWindowClass.current.coverScreen) {
-            // The Razr's lenses and flash occupy the lower right. Keep the text field
-            // above that band and all three 48dp touch targets in its left-hand pocket.
-            // Only the IME lifts this row above the hardware; the settings sheet
-            // keeps the same camera clearance as the resting composer.
-            Row(Modifier.fillMaxWidth().heightIn(min = if (cameraDock) 80.dp else 48.dp)
+            // AppShell already reserves the system-reported camera cutout. An
+            // additional camera-height dock would waste the remaining usable height.
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
                 .testTag(if (cameraDock) "cover-camera-dock" else "cover-composer-toolbar"),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)) {

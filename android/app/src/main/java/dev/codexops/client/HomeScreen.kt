@@ -1,7 +1,6 @@
 package dev.codexops.client
 
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.foundation.layout.*
@@ -193,7 +192,7 @@ private fun ChatBrowser(st: ScreenState, actions: HomeActions) {
         ModalBottomSheet(onDismissRequest = { sheet = false },
             containerColor = MaterialTheme.colorScheme.surface,
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-            Column(Modifier.fillMaxWidth().heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.9f).padding(horizontal = 20.dp)) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Project & sort", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
                     TextButton(onClick = { project = TaskProjectFilter.All; sort = ChatSort.Recent }) { Text("Reset") }

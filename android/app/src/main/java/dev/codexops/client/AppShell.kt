@@ -69,6 +69,9 @@ internal fun App(model: ClientModel) {
     BackHandler(st.page != "home") { model.back() }
     AdaptiveWindow {
         Scaffold(
+            // The system owns the usable cover-screen bounds. Reserve cutouts and
+            // system bars once, including when the camera band is at the bottom.
+            contentWindowInsets = WindowInsets.safeDrawing,
             snackbarHost = {
                 SnackbarHost(snackbar) { data ->
                     Snackbar {

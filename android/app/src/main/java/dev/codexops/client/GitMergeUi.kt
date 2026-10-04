@@ -22,10 +22,10 @@ internal fun GitMergeDialog(st: ScreenState, actions: ConversationActions) {
     val status = report?.str("status")
     val commitsTaskChanges = (report?.get("uncommittedCount") as? JsonPrimitive)?.intOrNull?.let { it > 0 } == true
     val cover = LocalAppWindowClass.current.coverScreen
-    Dialog(onDismissRequest = actions::dismissMerge, properties = DialogProperties(usePlatformDefaultWidth = !cover)) {
-        Surface(Modifier.fillMaxWidth().then(if (cover) Modifier.fillMaxHeight().systemBarsPadding() else Modifier.heightIn(max = 720.dp)),
+    Dialog(onDismissRequest = actions::dismissMerge, properties = DialogProperties(usePlatformDefaultWidth = !cover, decorFitsSystemWindows = !cover)) {
+        Surface(Modifier.fillMaxWidth().then(if (cover) Modifier.fillMaxHeight() else Modifier.heightIn(max = 720.dp)),
             shape = MaterialTheme.shapes.large) {
-            Column(Modifier.padding(20.dp).testTag("merge-dialog")) {
+            Column((if (cover) Modifier.safeDrawingPadding() else Modifier).padding(if (cover) 12.dp else 20.dp).testTag("merge-dialog")) {
                 Text("Merge into main", style = MaterialTheme.typography.titleLarge)
                 Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)) {

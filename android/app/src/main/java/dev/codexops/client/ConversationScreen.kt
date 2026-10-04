@@ -459,13 +459,13 @@ private fun FullscreenPlan(
     val cover = LocalAppWindowClass.current.coverScreen
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
         Surface(
             modifier = Modifier.fillMaxSize().testTag("plan-fullscreen"),
             color = MaterialTheme.colorScheme.background,
         ) {
-            Column(Modifier.fillMaxSize().systemBarsPadding()) {
+            Column(Modifier.fillMaxSize().safeDrawingPadding()) {
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
