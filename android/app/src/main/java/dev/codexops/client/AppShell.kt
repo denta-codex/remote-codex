@@ -188,7 +188,6 @@ internal fun App(model: ClientModel) {
             }
         }
         BugReportHost(model, st, snackbar)
-        GitMergeDialog(st, model)
     }
 }
 

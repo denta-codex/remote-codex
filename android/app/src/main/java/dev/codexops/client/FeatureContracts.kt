@@ -180,7 +180,6 @@ data class ScreenState(
     val busy: Boolean = false,
     val error: String? = null,
     val journal: JsonObject? = null,
-    val merge: GitMergeState = GitMergeState(),
     val attention: Boolean = false,
     val update: UpdateState = UpdateState(),
     val filePreview: FilePreviewState? = null,
@@ -255,10 +254,6 @@ interface ConversationActions {
     fun addProject()
     fun checkProjectRegistration()
     fun chooseMatchingProject(id: String)
-    fun inspectMerge()
-    fun mergeIntoMain()
-    fun reconcileMerge()
-    fun dismissMerge()
     fun viewedReply(thread: String, signature: String) {}
     fun refreshModels() {}
     fun selectSpeed(fast: Boolean) {}

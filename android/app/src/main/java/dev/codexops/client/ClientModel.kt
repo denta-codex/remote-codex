@@ -56,14 +56,6 @@ constructor(
     override fun addProject() = projectAddition.add()
     override fun checkProjectRegistration() = projectAddition.checkAgain()
     override fun chooseMatchingProject(id: String) = projectAddition.choose(id)
-    private val gitMerge = GitMergeController(viewModelScope, local, StockGitMergeOperations(rpc),
-        { _state.value }, { thread, merge ->
-            _state.update { if (it.thread == thread) it.copy(merge = merge) else it }
-        })
-    override fun inspectMerge() = gitMerge.inspect()
-    override fun mergeIntoMain() = gitMerge.merge()
-    override fun reconcileMerge() = gitMerge.reconcile()
-    override fun dismissMerge() = gitMerge.dismiss()
     internal val reports = BugReportController(app, viewModelScope, local, rpc, host, { _state.value })
     private var connectionJob: Job? = null
     private var updateJob: Job? = null
@@ -698,7 +690,6 @@ constructor(
                     page = "chat",
                     thread = null,
                     threadCwd = null,
-                    merge = GitMergeState(),
                     title = "New chat",
                     entries = emptyList(),
                     turnStatuses = emptyMap(),
@@ -764,7 +755,6 @@ constructor(
                 page = "chat",
                 thread = id,
                 threadCwd = null,
-                merge = if (it.thread == id) it.merge else GitMergeState(working = true),
                 title = "Conversation",
                 entries = emptyList(),
                 turnStatuses = emptyMap(),
@@ -862,7 +852,6 @@ constructor(
             }
             readQueue(id)
             if (n == selection) {
-                gitMerge.restore(id)
                 activityMonitor.opened(id)
             }
         } finally {
@@ -1336,7 +1325,6 @@ constructor(
     }
 
     private fun mutateQueued(id: String, sendNow: Boolean) {
-        if (_state.value.merge.blocksTask) return
         val before = _state.value
         val thread = before.thread ?: return
         if (!before.ready || !before.queueReady || before.busy || before.journal != null) return
@@ -1437,7 +1425,6 @@ constructor(
     }
 
     private fun submit(text: String, selectedMode: String?, clearDraft: Boolean) {
-        if (_state.value.merge.blocksTask) return
         val before = _state.value
         val queue = clearDraft && before.thread != null && before.willQueueMessage()
         val hasTurnStartOverrides =
@@ -2042,7 +2029,6 @@ constructor(
     }
 
     override fun recoverPreparation() {
-        if (_state.value.merge.blocksTask) return
         reports.actions.add("recoverPreparation", _state.value.thread)
         val before = _state.value
         if (!before.ready || before.busy || before.journal == null) return
