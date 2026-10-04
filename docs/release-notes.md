@@ -1,15 +1,2 @@
-- Add per-chat Fast mode controls and reasoning indicator
-- Show only project names in the project picker
-- Group tool activity under shimmering expandable summaries
-- Merge grouped tool activity summaries
-- Hide unknown reasoning effort in conversation controls
-- Add existing host projects from Android
-- Let cover toolbar grow with enlarged text
-- Merge branch 'main' into fix/cover-toolbar-height
-- Show Git change totals on the chat page
-- Remove direct merge into main feature
-- Merge branch 'main' into feat/chat-git-summary
-- Merge branch 'main' into fix/cover-toolbar-height
-- Merge branch 'main' into feat/chat-git-summary
-- Accept Android shares into the new-chat draft
-- Merge branch 'main' into feat/chat-git-summary
+- Verify Todo-free Android navigation at the requested base
+- Add native Todo board using the local task CLI

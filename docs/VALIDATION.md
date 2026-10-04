@@ -1,5 +1,14 @@
 # Validation
 
+## 2026-10-04 — Android 0.4.1 (33)
+
+- Source revision: `e806ce0280b1058fb9bd44caffa1a0ea3db40492`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `8fb48cf547412d85e6657517f9ac9b2c439e475befd771b4b764c468f9830c88`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/home/agent/.codex/worktrees/remote-codex-native-todo/artifacts/releases/run-20261004T175305Z-QB12gk.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
 ## 2026-10-04 — Backlog replacement step 1 audit
 
 - The requested base `f815d49` already has no Todo integration. The integration
