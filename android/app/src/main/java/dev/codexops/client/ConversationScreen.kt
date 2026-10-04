@@ -35,21 +35,15 @@ import kotlinx.serialization.json.JsonPrimitive
 
 @Composable
 internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: ConversationActions) {
-    LaunchedEffect(st.thread, st.threadCwd, st.ready, st.busy, st.activeTurn, st.merge.working) {
-        if (!st.merge.working) actions.refreshGitChanges()
+    LaunchedEffect(st.thread, st.threadCwd, st.ready, st.busy, st.activeTurn) {
+        actions.refreshGitChanges()
     }
     if (st.thread != null && st.threadCwd != null) {
         GitChangesBar(
             if (st.gitChanges.thread == st.thread) st.gitChanges else GitChangesState(),
-            enabled = st.ready && !st.busy && st.activeTurn == null && !st.merge.working,
+            enabled = st.ready && !st.busy && st.activeTurn == null,
             refresh = actions::refreshGitChanges,
         )
-    }
-    if (st.merge.pending != null && !st.merge.visible) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(if (st.merge.working) "Merge in progress…" else "Merge outcome needs review", Modifier.weight(1f))
-            TextButton(actions::inspectMerge, enabled = !st.merge.working) { Text("Review merge") }
-        }
     }
     val cover = LocalAppWindowClass.current.coverScreen
     var confirmUnlock by remember { mutableStateOf(false) }
@@ -164,7 +158,6 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
                             entry.key == actionablePlan?.key &&
                                 st.ready &&
                                 !st.busy &&
-                                !st.merge.blocksTask &&
                                 st.activeTurn == null &&
                                 st.queuedMessages.isEmpty() &&
                                 st.queueReady &&
