@@ -179,6 +179,7 @@ data class ScreenState(
     val error: String? = null,
     val journal: JsonObject? = null,
     val merge: GitMergeState = GitMergeState(),
+    val gitChanges: GitChangesState = GitChangesState(),
     val attention: Boolean = false,
     val update: UpdateState = UpdateState(),
     val filePreview: FilePreviewState? = null,
@@ -244,6 +245,7 @@ interface SettingsActions {
 }
 
 interface ConversationActions {
+    fun refreshGitChanges() {}
     fun inspectMerge()
     fun mergeIntoMain()
     fun reconcileMerge()

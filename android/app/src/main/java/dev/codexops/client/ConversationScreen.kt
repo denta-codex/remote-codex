@@ -35,6 +35,16 @@ import kotlinx.serialization.json.JsonPrimitive
 
 @Composable
 internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: ConversationActions) {
+    LaunchedEffect(st.thread, st.threadCwd, st.ready, st.busy, st.activeTurn, st.merge.working) {
+        if (!st.merge.working) actions.refreshGitChanges()
+    }
+    if (st.thread != null && st.threadCwd != null) {
+        GitChangesBar(
+            if (st.gitChanges.thread == st.thread) st.gitChanges else GitChangesState(),
+            enabled = st.ready && !st.busy && st.activeTurn == null && !st.merge.working,
+            refresh = actions::refreshGitChanges,
+        )
+    }
     if (st.merge.pending != null && !st.merge.visible) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(if (st.merge.working) "Merge in progress…" else "Merge outcome needs review", Modifier.weight(1f))

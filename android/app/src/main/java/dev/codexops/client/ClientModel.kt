@@ -35,6 +35,25 @@ constructor(
     private val remoteFileRepository = RemoteFileRepository(app)
     private val _state = MutableStateFlow(ScreenState(host = host))
     val state = _state.asStateFlow()
+    private var gitChangesJob: Job? = null
+    override fun refreshGitChanges() {
+        val st = _state.value
+        val thread = st.thread ?: return
+        val cwd = st.threadCwd ?: return
+        if (!st.ready || st.busy || st.activeTurn != null) return
+        gitChangesJob?.cancel()
+        val selected = selection
+        _state.update { it.copy(gitChanges = GitChangesState(thread, loading = true)) }
+        gitChangesJob = viewModelScope.launch {
+            val result = try {
+                GitChangesState(thread, report = GitChanges.read(rpc, cwd))
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                GitChangesState(thread, error = true)
+            }
+            _state.update { if (selection == selected && it.thread == thread) it.copy(gitChanges = result) else it }
+        }
+    }
     private val gitMerge = GitMergeController(viewModelScope, local, StockGitMergeOperations(rpc),
         { _state.value }, { thread, merge ->
             _state.update { if (it.thread == thread) it.copy(merge = merge) else it }

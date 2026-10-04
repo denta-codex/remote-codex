@@ -44,6 +44,17 @@ import org.junit.Assert.*
 
 class AppTest {
     @Test
+    fun chatShowsGitTotalsAndRefreshes() {
+        compose.onNodeWithText("Fixture task").performClick()
+        compose.waitUntil(10000) { model.state.value.gitChanges.report != null }
+        compose.onNodeWithText("3 files · +42 / −7 lines").assertIsDisplayed()
+        compose.onNodeWithText("Since branch point with main").assertIsDisplayed()
+        compose.onNodeWithTag("refresh-git-changes").assertIsEnabled().performClick()
+        compose.waitUntil(5000) { !model.state.value.gitChanges.loading }
+        compose.onNodeWithText("3 files · +42 / −7 lines").assertIsDisplayed()
+    }
+
+    @Test
     fun conversationMenuArchivesAndUnarchives() {
         // Opening directly must work even when the task is absent from the loaded list.
         browserResponse = { method, _ ->
@@ -562,6 +573,11 @@ class AppTest {
                                             }
                                             "command/exec" -> {
                                                 when {
+                                                    command.getOrNull(3) == "remote-codex-changes" ->
+                                                        obj("exitCode" to JsonPrimitive(0), "stdout" to s(
+                                                            obj("status" to s("ready"), "baseline" to s("main"),
+                                                                "files" to JsonPrimitive(3), "added" to JsonPrimitive(42),
+                                                                "removed" to JsonPrimitive(7), "binary" to JsonPrimitive(0)).toString()))
                                                     command.getOrNull(3) == "remote-codex-merge" -> {
                                                         val action = command[4]
                                                         mergeCommands.add(action)
