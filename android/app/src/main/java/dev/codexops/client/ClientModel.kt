@@ -29,6 +29,7 @@ constructor(
     private val rpc: RemoteSession = StockRemoteSession(allowLoopbackTest)
     private val updater = AppUpdater(app, endpoint, allowLoopbackTest)
     private val workspaces = StockWorkspaceAdapter(rpc)
+    private val projectRepository = ProjectRepository(rpc)
     private val timeline = Timeline()
     private val attachmentStore = AttachmentStore(app)
     private val mediaRepository = MediaRepository(app)
@@ -54,6 +55,26 @@ constructor(
             _state.update { if (selection == selected && it.thread == thread) it.copy(gitChanges = result) else it }
         }
     }
+    private val projectAddition = ProjectAdditionController(viewModelScope, local, rpc,
+        { _state.value }, { addition -> _state.update { it.copy(projectAddition = addition) } },
+        { projects, project, root, current ->
+            val options = _state.value.newTaskOptions.copy(projectId = project.id,
+                workingDirectory = root, executionTarget = ExecutionTarget.CurrentWorkspace)
+            local.put("options/new", newTaskOptionsJson(options).toString())
+            if (current()) {
+                _state.update { it.copy(projects = projects, newTaskOptions = options) }
+                true
+            } else false
+        })
+    override fun openAddProject() = projectAddition.open()
+    override fun dismissAddProject() = projectAddition.dismiss()
+    override fun projectPath(value: String) = projectAddition.editPath(value)
+    override fun browseProjectFolder(path: String) = projectAddition.browse(path)
+    override fun useProjectFolder() = projectAddition.confirmFolder()
+    override fun projectName(value: String) = projectAddition.name(value)
+    override fun addProject() = projectAddition.add()
+    override fun checkProjectRegistration() = projectAddition.checkAgain()
+    override fun chooseMatchingProject(id: String) = projectAddition.choose(id)
     private val gitMerge = GitMergeController(viewModelScope, local, StockGitMergeOperations(rpc),
         { _state.value }, { thread, merge ->
             _state.update { if (it.thread == thread) it.copy(merge = merge) else it }
@@ -141,6 +162,12 @@ constructor(
         }
 
     init {
+        viewModelScope.launch {
+            state.map { Triple(it.ready, it.page, it.thread) }.distinctUntilChanged().collect { (ready, page, thread) ->
+                if (!ready) projectAddition.disconnected()
+                if (page != "chat" || thread != null) projectAddition.dismiss()
+            }
+        }
         viewModelScope.launch {
             state.map { Triple(it.ready && it.page == "chat", it.thread, it.settingsCwd()) }
                 .distinctUntilChanged().collectLatest { (active, _, cwd) ->
@@ -590,38 +617,7 @@ constructor(
 
     private suspend fun refreshProjects() {
         if (!_state.value.ready) return
-        val projects = linkedMapOf<String, CodexProject>()
-        val cursors = mutableSetOf<String>()
-        var cursor: String? = null
-        var requests = 0
-        do {
-            check(requests++ < 100) { "Project loading exceeded its request limit" }
-            val result =
-                rpc.call(
-                    "project/list",
-                    obj(
-                        "cursor" to cursor?.let(::s),
-                        "limit" to JsonPrimitive(50),
-                        "sortKey" to s("position"),
-                        "sortDirection" to s("asc"),
-                    ),
-                )
-            result.list("data").forEach { row ->
-                val id = row.str("id")
-                if (id.isNotEmpty()) {
-                    projects[id] =
-                        CodexProject(
-                            id = id,
-                            name = row.str("name").ifBlank { "Untitled project" },
-                            roots = row.list("roots").map { it.str("path") }.filter(String::isNotBlank),
-                        )
-                }
-            }
-            check(projects.size <= 5000) { "Project loading exceeded its catalog limit" }
-            cursor = result.cursor()
-            check(cursor == null || cursors.add(cursor!!)) { "Project loading repeated a page" }
-        } while (cursor != null)
-        val values = projects.values.toList()
+        val values = projectRepository.list()
         _state.update { before ->
             val filter = before.projectFilter
             val availableFilter =
@@ -632,7 +628,7 @@ constructor(
             val options =
                 if (before.thread == null && selected?.primaryRoot != null)
                     before.newTaskOptions.copy(
-                        workingDirectory = selected.primaryRoot,
+                        workingDirectory = before.newTaskOptions.workingDirectory?.takeIf { it in selected.roots } ?: selected.primaryRoot,
                         executionTarget = ExecutionTarget.CurrentWorkspace,
                     )
                 else before.newTaskOptions
@@ -724,6 +720,7 @@ constructor(
                     merge = GitMergeState(),
                     title = "New chat",
                     entries = emptyList(),
+                    turnStatuses = emptyMap(),
                     activeTurn = null,
                     queuedMessages = emptyList(),
                     queueReady = false,
@@ -789,6 +786,7 @@ constructor(
                 merge = if (it.thread == id) it.merge else GitMergeState(working = true),
                 title = "Conversation",
                 entries = emptyList(),
+                turnStatuses = emptyMap(),
                 activeTurn = null,
                 queuedMessages = emptyList(),
                 queueReady = false,
@@ -2234,6 +2232,7 @@ constructor(
         _state.update { st ->
             st.copy(
                 entries = timeline.values(),
+                turnStatuses = timeline.turnStatuses,
                 activeTurn = timeline.activeTurn,
                 decisions = requests.values.filter { it.thread == st.thread },
             )

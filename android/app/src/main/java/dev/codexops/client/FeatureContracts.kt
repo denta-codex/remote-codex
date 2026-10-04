@@ -132,6 +132,7 @@ data class ScreenState(
     val appForeground: Boolean = false,
     val configured: Boolean = false,
     val projects: List<CodexProject> = emptyList(),
+    val projectAddition: ProjectAdditionState = ProjectAdditionState(),
     val projectFilter: TaskProjectFilter = TaskProjectFilter.All,
     val tasks: List<JsonObject> = emptyList(),
     val chatActivity: Map<String, ChatActivity> = emptyMap(),
@@ -152,6 +153,7 @@ data class ScreenState(
     val threadCwd: String? = null,
     val title: String = "New chat",
     val entries: List<Entry> = emptyList(),
+    val turnStatuses: Map<String, String> = emptyMap(),
     val historyCursor: String? = null,
     val draft: String = "",
     val attachments: List<DraftAttachment> = emptyList(),
@@ -246,6 +248,15 @@ interface SettingsActions {
 
 interface ConversationActions {
     fun refreshGitChanges() {}
+    fun openAddProject()
+    fun dismissAddProject()
+    fun projectPath(value: String)
+    fun browseProjectFolder(path: String)
+    fun useProjectFolder()
+    fun projectName(value: String)
+    fun addProject()
+    fun checkProjectRegistration()
+    fun chooseMatchingProject(id: String)
     fun inspectMerge()
     fun mergeIntoMain()
     fun reconcileMerge()

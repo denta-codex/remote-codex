@@ -1,5 +1,30 @@
 # Validation
 
+## 2026-10-03 — Add existing host projects from Android
+
+- Added a folder-only browser and pasted-path entry to the new-task project
+  picker. Canonical roots reuse existing host registrations; ambiguous matches
+  require a choice. New registrations use stock project/create with a durable
+  host/account-scoped operation record. Desktop records and workspace files are
+  not changed.
+- All 106 app unit tests passed, including 17 new project-addition tests covering
+  pagination, canonical aliases, unavailable roots, duplicate taps, explicit
+  rejection, lost replies, persistence failures, restart recovery, and stale
+  navigation/connection results. Draft text and attachments are preserved.
+- Android debug lint and instrumentation APK assembly passed.
+- All five selected Android 16 emulator tests passed in bounded batches:
+  AppTest#addProjectBrowsesAndPersistsWithoutStartingTask,
+  AppTest#addProjectPasteReusesHostProjectAndReportsInvalidPath,
+  AppTest#addProjectLostReplyRecoversAfterRestartWithoutReplay,
+  AppTest#addProjectCoverPickerKeepsActionsReachable, and
+  AppTest#selectedProjectSurvivesDraftRecreationAndStartsInItsRoot.
+- An earlier emulator run was interrupted externally. A subsequent five-test
+  batch hit the existing three-minute limit after a Kotlin incremental compiler
+  fallback consumed startup time; the final runs used smaller batches and
+  completed successfully without changing test timeouts.
+- No live projects were registered, no release was published, and no phone
+  installation or forwarder deployment was performed.
+
 ## 2026-10-03 — Android 0.3.2 (29)
 
 - Source revision: `b07340d7dd07b2faa7ac1efbd04a483f7937b5b0`.
