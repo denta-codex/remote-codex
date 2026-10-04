@@ -1,5 +1,34 @@
 # Validation
 
+## 2026-10-04 — Backlog replacement step 1 audit
+
+- The requested base `f815d49` already has no Todo integration. The integration
+  commit `dbdf40b` is not its ancestor; their merge base is `769f46a`.
+  Kept the requested base and all unrelated source changes intact.
+- Inspected the original integration and viewport fix against the current tree:
+  the Todo entry point, board WebView, controller, state/actions, preview commands,
+  operation journal handling, fixtures, dedicated tests, and feature documentation
+  are absent. No production removal was necessary at this revision.
+- Added `AppTest#homeNavigationHasNoTodoDestination` to assert Todo is absent
+  while Home, Settings, New chat, and return navigation remain functional.
+- Passed `:core:test`, `:app:testDebugUnitTest`, `:app:lintDebug`, and
+  `:app:assembleDebugAndroidTest` using the existing managed JDK and Android SDK.
+- Focused Android 16 emulator tests passed:
+  `compactArchivesRestoreAndNavigation`,
+  `visualizationLoadsFromHistoryExpandsAndShowsMissingFileRecovery`, and
+  `remoteTextFileUsesMetadataAndOpensAReadablePreview`.
+  A second focused run passed `homeNavigationHasNoTodoDestination` and
+  `coverScreenDestinationsRemainReachable`, both in cover-screen mode:
+  `env 'ORG_GRADLE_PROJECT_android.testInstrumentationRunnerArguments.coverScreen=true' scripts/emulator-test --tests AppTest#homeNavigationHasNoTodoDestination AppTest#coverScreenDestinationsRemainReachable`.
+- Remaining validation limitation: the existing
+  `coverChatToolbarAvoidsCutoutWithHiddenStatusBar` failed on the unchanged base
+  instrumentation APK at its first chat-toolbar assertion. The title bounds began
+  at y=90 px, above the simulated 96 px cutout boundary. The broader destination
+  layout test passed; the separate cutout issue remains outside this change.
+- Left the host Todo workspace/data, installed Backlog CLI, shared preview
+  tooling, and live previews untouched. No replacement board, CLI, database,
+  import, release, deployment, phone installation, push, or shared-main merge.
+
 ## 2026-10-04 — Android 0.4.0 (32)
 
 - Source revision: `030e67043c4a617f508b331dd686e6ca1e16ecfd`.

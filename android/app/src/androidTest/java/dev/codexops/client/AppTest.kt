@@ -44,6 +44,30 @@ import org.junit.Assert.*
 
 class AppTest {
     @Test
+    fun homeNavigationHasNoTodoDestination() {
+        fun assertNoTodo() {
+            compose.onNodeWithText("Todo").assertDoesNotExist()
+            compose.onNodeWithContentDescription("Todo").assertDoesNotExist()
+        }
+        assertNoTodo()
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.onNodeWithText("Scan setup QR").assertIsDisplayed()
+        assertNoTodo()
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.onNodeWithContentDescription("New chat").assertIsDisplayed().performClick()
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
+        compose.onNodeWithTag("composer").assertIsDisplayed()
+        assertNoTodo()
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
+        compose.onNodeWithTag("composer").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.onNodeWithContentDescription("New chat").assertIsDisplayed()
+        assertNoTodo()
+    }
+
+    @Test
     fun chatShowsGitTotalsAndRefreshes() {
         compose.onNodeWithText("Fixture task").performClick()
         compose.waitUntil(10000) { model.state.value.gitChanges.report != null }
