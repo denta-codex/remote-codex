@@ -683,59 +683,107 @@ constructor(
         }
     }
 
-    override fun newChat() {
+    override fun newChat() = openNewChat()
+
+    internal fun receiveShare(share: IncomingShare) = openNewChat(share)
+
+    private fun openNewChat(share: IncomingShare? = null) {
         reports.actions.add("newChat")
-        if (_state.value.busy) return
+        if (_state.value.busy) {
+            if (share != null) _state.update { it.copy(error = "Please wait for the current operation, then share again.") }
+            return
+        }
+        if (share != null) _state.update { it.copy(busy = true) }
         chatOrigin = "home"
         cancelList(); saveList()
         listSnapshots.remove(false)
         _state.update { it.copy(listInitialized = false) }
         viewModelScope.launch {
-            selection++
-            timeline.clear()
-            buffered.clear()
-            hydrating = false
-            val draft = local.get("draft/new")
-            val attachments = restoreAttachments("new")
-            val journal = parse(local.get("journal/new"))
-            val savedOptions = parseNewTaskOptions(local.get("options/new"))
-            val options = journal?.let { optionsFromJournal(it, savedOptions) } ?: savedOptions
-            _state.update {
-                val reconciled = if (it.modelCatalogStatus == ModelCatalogStatus.Ready)
-                    reconcileModelOptions(options, it.models, null).options else options
-                val restored = if (it.ready && it.collaborationModes.none { mode -> mode.mode == reconciled.collaborationMode })
-                    reconciled.copy(collaborationMode = null) else reconciled
-                it.copy(
-                    page = "chat",
-                    thread = null,
-                    threadCwd = null,
-                    title = "New chat",
-                    entries = emptyList(),
-                    turnStatuses = emptyMap(),
-                    activeTurn = null,
-                    queuedMessages = emptyList(),
-                    queueReady = false,
-                    queueError = null,
-                    decisions = emptyList(),
-                    historyCursor = null,
-                    draft = draft,
-                    attachments = attachments,
-                    newTaskOptions = restored,
-                    threadModel = null,
-                    threadMode = null,
-                    threadReasoningEffort = null,
-                    threadServiceTier = null,
-                    threadServiceTierKnown = false,
-                    speedSaving = false,
-                    speedUncertain = false,
-                    speedError = null,
-                    journal = journal,
-                    error = null,
-                    attention = false,
-                    filePreview = null,
-                )
+            try {
+                selection++
+                timeline.clear()
+                buffered.clear()
+                hydrating = false
+                var draft = local.get("draft/new")
+                var attachments = restoreAttachments("new")
+                val journal = parse(local.get("journal/new"))
+                var shareError: String? = null
+                if (share != null) {
+                    if (journal != null) {
+                        shareError = "Resolve the pending send in this draft, then share again."
+                    } else {
+                        if (share.text.isNotBlank()) {
+                            draft = listOf(draft, share.text).filter { it.isNotBlank() }.joinToString("\n\n")
+                            local.put("draft/new", draft)
+                        }
+                        for (uri in share.streams) {
+                            try {
+                                require(uri.scheme == "content" &&
+                                    uri.authority?.substringAfter('@') != "${getApplication<Application>().packageName}.files")
+                                val added = attachmentStore.importDocument(uri, attachments.sumOf { it.byteSize })
+                                try {
+                                    persistAttachments("new", attachments + added)
+                                } catch (e: Exception) {
+                                    attachmentStore.delete(added)
+                                    throw e
+                                }
+                                attachments += added
+                            } catch (e: CancellationException) { throw e
+                            } catch (_: Exception) {
+                                shareError = "Some shared files could not be added. Check access and attachment size limits, then share those files again."
+                            }
+                        }
+                        if (share.text.isBlank() && share.streams.isEmpty())
+                            shareError = "This share contains no text or files."
+                    }
+                }
+                val savedOptions = parseNewTaskOptions(local.get("options/new"))
+                val options = journal?.let { optionsFromJournal(it, savedOptions) } ?: savedOptions
+                _state.update {
+                    val reconciled = if (it.modelCatalogStatus == ModelCatalogStatus.Ready)
+                        reconcileModelOptions(options, it.models, null).options else options
+                    val restored = if (it.ready && it.collaborationModes.none { mode -> mode.mode == reconciled.collaborationMode })
+                        reconciled.copy(collaborationMode = null) else reconciled
+                    it.copy(
+                        page = "chat",
+                        thread = null,
+                        threadCwd = null,
+                        title = "New chat",
+                        entries = emptyList(),
+                        turnStatuses = emptyMap(),
+                        activeTurn = null,
+                        queuedMessages = emptyList(),
+                        queueReady = false,
+                        queueError = null,
+                        decisions = emptyList(),
+                        historyCursor = null,
+                        draft = draft,
+                        attachments = attachments,
+                        newTaskOptions = restored,
+                        threadModel = null,
+                        threadMode = null,
+                        threadReasoningEffort = null,
+                        threadServiceTier = null,
+                        threadServiceTierKnown = false,
+                        speedSaving = false,
+                        speedUncertain = false,
+                        speedError = null,
+                        journal = journal,
+                        error = shareError,
+                        attention = false,
+                        filePreview = null,
+                    )
+                }
+                if (share == null && _state.value.ready) guarded { recoverNew() }
+            } catch (e: CancellationException) { throw e
+            } catch (_: Exception) {
+                _state.update { it.copy(error = "The draft could not be opened. Please try again.") }
+            } finally {
+                if (share != null) {
+                    _state.update { it.copy(busy = false) }
+                    if (foreground && !_state.value.ready) connect()
+                }
             }
-            if (_state.value.ready) guarded { recoverNew() }
         }
     }
 

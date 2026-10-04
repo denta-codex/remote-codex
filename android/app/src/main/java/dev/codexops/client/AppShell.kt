@@ -90,13 +90,23 @@ internal fun App(model: ClientModel) {
                 }
             },
             topBar = {
-                TopAppBar(
-                    // Cover displays can hide the status bar while retaining a display cutout.
-                    windowInsets = WindowInsets.safeDrawing.only(
-                        WindowInsetsSides.Top + WindowInsetsSides.Horizontal,
-                    ),
-                    title = {
-                        Column {
+                Surface(color = MaterialTheme.colorScheme.surface) {
+                    // Measure the two-line title naturally, including enlarged system text.
+                    // Keep cutout padding outside the content's minimum height.
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .windowInsetsPadding(WindowInsets.safeDrawing.only(
+                                WindowInsetsSides.Top + WindowInsetsSides.Horizontal,
+                            ))
+                            .heightIn(min = 64.dp)
+                            .padding(horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (st.page != "home")
+                            IconButton(onClick = model::back) {
+                                Glyph(R.drawable.ic_back, "Back")
+                            }
+                        Column(Modifier.weight(1f).padding(horizontal = 12.dp, vertical = 8.dp)) {
                             Text(
                                 when (st.page) {
                                     "chat" -> st.title
@@ -127,14 +137,6 @@ internal fun App(model: ClientModel) {
                                 )
                             }
                         }
-                    },
-                    navigationIcon = {
-                        if (st.page != "home")
-                            IconButton(onClick = model::back) {
-                                Glyph(R.drawable.ic_back, "Back")
-                            }
-                    },
-                    actions = {
                         if (st.page == "home") IconButton(onClick = model::newChat) {
                             Glyph(R.drawable.ic_compose, "New chat")
                         }
@@ -149,8 +151,8 @@ internal fun App(model: ClientModel) {
                                 Glyph(R.drawable.ic_settings, "Settings")
                             }
                         BugReportMenu(model)
-                    },
-                )
+                    }
+                }
             },
             containerColor = MaterialTheme.colorScheme.background,
         ) { padding ->

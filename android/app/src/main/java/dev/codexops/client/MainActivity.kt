@@ -28,14 +28,22 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent { RemoteTheme { App(model) } }
-        if (savedInstanceState == null && intent.action == "dev.codexops.client.NEW_CHAT")
-            model.newChat()
+        if (savedInstanceState == null) handleIntent(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent) {
         if (intent.action == "dev.codexops.client.NEW_CHAT") model.newChat()
+        else if (intent.action == Intent.ACTION_SEND || intent.action == Intent.ACTION_SEND_MULTIPLE) {
+            val share = runCatching { intent.incomingShare() }.getOrNull()
+            if (share != null) model.receiveShare(share)
+            else android.widget.Toast.makeText(this, "This share could not be opened.", android.widget.Toast.LENGTH_LONG).show()
+        }
     }
 
     override fun onStart() {
