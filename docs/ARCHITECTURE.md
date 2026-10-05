@@ -336,6 +336,16 @@ before closing, and a revision conflict retains it for comparison. This first
 version provides add/edit/move and read-only work notes; archives and note writes
 remain in the CLI.
 
+Todo cards use physical left/right swipes to move one status at a time through
+To Do, In Progress, and Done. Tabs select the visible column; pager swiping is
+disabled to avoid competing with card gestures. Long-press dragging reorders
+within a column, with scrolling at the viewport edges and accessibility actions
+for moving up/down. The CLI has no custom ordering field, so this presentation
+order is persisted in the phone's ClientStore, scoped by host endpoint and Codex
+home. It survives board refresh and app restart but is not shared with Grace or
+other clients. Status moves retain the existing revision checks and pending-save
+journal; uncertain mutations are never replayed.
+
 ## Inbox activity and phone-local unread
 
 Inbox/archive rows show one accessible indicator: a spinner for active work, a

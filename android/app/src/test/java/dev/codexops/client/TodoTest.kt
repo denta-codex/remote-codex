@@ -53,6 +53,32 @@ class TodoTest {
         override fun close() { scope.cancel() }
     }
 
+    @Test fun priorityOrderSurvivesControllerRecreationAndRejectsCrossColumnTargets() = Fixture().use { f ->
+        f.tasks += TodoItem(2, "Second", "To Do", 1)
+        f.tasks += TodoItem(3, "Last", "To Do", 1)
+        f.tasks += TodoItem(4, "Working", "In Progress", 1)
+        val c = f.controller(); c.refresh(); c.reorder(3, 1, false)
+        assertEquals(listOf(3L, 1L, 2L, 4L), f.screen.todo.items.map { it.id })
+        val reopened = f.controller(); reopened.refresh()
+        assertEquals(listOf(3L, 1L, 2L, 4L), f.screen.todo.items.map { it.id })
+        reopened.reorder(3, 4, true)
+        assertEquals(listOf(3L, 1L, 2L, 4L), f.screen.todo.items.map { it.id })
+        assertEquals(0, f.writes)
+    }
+
+    @Test fun prioritySaveFailureAndPendingMutationKeepTheExistingOrder() = Fixture().use { f ->
+        f.tasks += TodoItem(2, "Second", "To Do", 1)
+        val c = f.controller(); c.refresh()
+        f.store.failPut = true; c.reorder(2, 1, false)
+        assertEquals(listOf(1L, 2L), f.screen.todo.items.map { it.id })
+        assertNotNull(f.screen.todo.error)
+        f.store.failPut = false
+        f.screen = f.screen.copy(todo = f.screen.todo.copy(pending = "Unknown move"))
+        c.reorder(2, 1, false); c.moveTask(1, "In Progress")
+        assertEquals(listOf(1L, 2L), f.screen.todo.items.map { it.id })
+        assertEquals(0, f.writes)
+    }
+
     @Test fun createOnceJournalsBeforeDispatchAndRefreshes() = Fixture().use { f ->
         val c = f.controller(); c.refresh(); c.new(); c.title("New task"); c.description("- [ ] item")
         f.gate = CompletableDeferred(); c.save(); c.save()

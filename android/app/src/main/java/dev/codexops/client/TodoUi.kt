@@ -95,24 +95,17 @@ internal fun TodoScreen(screen: ScreenState, actions: TodoActions) {
                         })
                 }
             }
-            HorizontalPager(pager, Modifier.weight(1f).testTag("todo-columns")) { page ->
+            Text("Swipe a task to move it; hold and drag to reorder. Order is saved on this phone.",
+                Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall)
+            HorizontalPager(pager, Modifier.weight(1f).testTag("todo-columns"), userScrollEnabled = false) { page ->
                 PullToRefreshBox(isRefreshing = state.busy, onRefresh = actions::refreshTodo, modifier = Modifier.fillMaxSize()) {
-                    LazyColumn(Modifier.fillMaxSize().testTag("todo-list-$page"),
-                        contentPadding = PaddingValues(if (cover) 12.dp else 20.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        item { TodoNotices(state, screen.ready, actions) }
-                        val tasks = state.items.filter { it.status == todoStatuses[page] }
-                        if (state.loaded && tasks.isEmpty()) item {
-                            Text("No tasks ${when (page) { 0 -> "to do"; 1 -> "in progress"; else -> "done yet" }}.",
+                    val tasks = state.items.filter { it.status == todoStatuses[page] }
+                    TodoTaskList(tasks, page, enabled, !state.busy && state.loaded, actions, cover,
+                        notices = { TodoNotices(state, screen.ready, actions) },
+                        empty = {
+                            if (state.loaded) Text("No tasks ${when (page) { 0 -> "to do"; 1 -> "in progress"; else -> "done yet" }}.",
                                 Modifier.padding(vertical = 16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        items(tasks, key = { it.id }) { task ->
-                            OutlinedCard(onClick = { actions.openTodoTask(task.id) }, enabled = !state.busy && state.loaded,
-                                modifier = Modifier.fillMaxWidth().testTag("todo-task-${task.id}")) {
-                                Text(task.title, Modifier.fillMaxWidth().padding(16.dp), fontWeight = FontWeight.Medium)
-                            }
-                        }
-                    }
+                        })
                 }
             }
         }

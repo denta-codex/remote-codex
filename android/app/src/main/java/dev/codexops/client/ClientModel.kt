@@ -49,6 +49,8 @@ constructor(
     override fun todoTitle(value: String) = todoController.title(value)
     override fun todoDescription(value: String) = todoController.description(value)
     override fun saveTodo() = todoController.save()
+    override fun moveTodoTask(id: Long, status: String) = todoController.moveTask(id, status)
+    override fun reorderTodo(id: Long, target: Long, after: Boolean) = todoController.reorder(id, target, after)
     override fun moveTodo(status: String) = todoController.move(status)
     override fun closeTodoEditor() = todoController.close()
     override fun discardTodoEditor() = todoController.discard()

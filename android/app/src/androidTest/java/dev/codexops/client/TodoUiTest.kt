@@ -56,6 +56,8 @@ class TodoUiTest {
         override fun todoTitle(value: String) = controller.title(value)
         override fun todoDescription(value: String) = controller.description(value)
         override fun saveTodo() = controller.save()
+        override fun moveTodoTask(id: Long, status: String) = controller.moveTask(id, status)
+        override fun reorderTodo(id: Long, target: Long, after: Boolean) = controller.reorder(id, target, after)
         override fun moveTodo(status: String) = controller.move(status)
         override fun closeTodoEditor() = controller.close()
         override fun discardTodoEditor() = controller.discard()
@@ -79,6 +81,57 @@ class TodoUiTest {
     }
 
     @After fun cleanup() { scope.cancel() }
+
+    @Test fun swipesMoveBothDirectionsAndLongPressReorders() {
+        tasks += TodoItem(2, "Second priority", "To Do", 1)
+        tasks += TodoItem(3, "Last priority", "To Do", 1)
+        show()
+        compose.onNodeWithTag("todo-task-1").performTouchInput { swipeRight() }
+        compose.waitUntil(5000) { state.value.todo.status == "In Progress" && !state.value.todo.busy }
+        compose.onNodeWithTag("todo-task-1").performTouchInput { swipeRight() }
+        compose.waitUntil(5000) { state.value.todo.status == "Done" && !state.value.todo.busy }
+        compose.onNodeWithTag("todo-task-1").performTouchInput { swipeRight() }
+        assertEquals("Done", state.value.todo.status)
+        compose.onNodeWithTag("todo-task-1").performTouchInput { swipeLeft() }
+        compose.waitUntil(5000) { state.value.todo.status == "In Progress" && !state.value.todo.busy }
+        compose.onNodeWithTag("todo-task-1").performTouchInput { swipeLeft() }
+        compose.waitUntil(5000) { state.value.todo.status == "To Do" && !state.value.todo.busy }
+        compose.onNodeWithTag("todo-task-1").assertIsDisplayed()
+        val destination = compose.onNodeWithTag("todo-task-2").fetchSemanticsNode().boundsInRoot.center
+        val source = compose.onNodeWithTag("todo-task-3").fetchSemanticsNode().boundsInRoot.center
+        compose.onNodeWithTag("todo-task-3").performTouchInput {
+            down(center); advanceEventTime(700)
+            moveTo(center + androidx.compose.ui.geometry.Offset(0f, destination.y - source.y - 10f), 500)
+            up()
+        }
+        compose.waitUntil(5000) { state.value.todo.items.filter { it.status == "To Do" }.first().id == 3L }
+        compose.runOnUiThread { controller.refresh() }
+        compose.waitUntil(5000) { !state.value.todo.busy }
+        assertEquals(3L, state.value.todo.items.first().id)
+        assertEquals(0, saves)
+    }
+
+    @Test fun longDragScrollsPastTheSourceRowAndSavesPriority() {
+        tasks.clear()
+        (1L..20L).forEach { tasks += TodoItem(it, "Priority $it", "To Do", 1) }
+        show()
+        val list = compose.onNodeWithTag("todo-list-0")
+        list.performScrollToNode(hasTestTag("todo-task-20"))
+        val bounds = list.fetchSemanticsNode().boundsInRoot
+        val source = compose.onNodeWithTag("todo-task-20").fetchSemanticsNode().boundsInRoot.center
+        list.performTouchInput {
+            down(androidx.compose.ui.geometry.Offset(source.x - bounds.left, source.y - bounds.top))
+        }
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.mainClock.advanceTimeBy(700)
+            list.performTouchInput { moveTo(androidx.compose.ui.geometry.Offset(center.x, 10f), 500) }
+            repeat(140) { compose.mainClock.advanceTimeBy(32) }
+            list.performTouchInput { up() }
+        } finally { compose.mainClock.autoAdvance = true }
+        compose.waitUntil(5000) { state.value.todo.items.first().id == 20L && !state.value.todo.busy }
+        assertEquals(0, saves)
+    }
 
     @Test fun addsEditsAndMovesATaskThroughNativeControls() {
         show()

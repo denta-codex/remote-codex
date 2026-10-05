@@ -31,6 +31,8 @@ interface TodoActions {
     fun todoTitle(value: String)
     fun todoDescription(value: String)
     fun saveTodo()
+    fun moveTodoTask(id: Long, status: String)
+    fun reorderTodo(id: Long, target: Long, after: Boolean)
     fun moveTodo(status: String)
     fun closeTodoEditor()
     fun discardTodoEditor()
@@ -128,6 +130,12 @@ internal class TodoController(
     private val state get() = screen().todo
     private val journal get() = "todo/native/pending/${screen().host.endpoint}/${screen().host.expectedCodexHome}"
     private var journalLoaded = false
+    private val orderKey get() = "todo/native/order/${screen().host.endpoint}/${screen().host.expectedCodexHome}"
+    private var order: List<Long> = emptyList()
+    private fun ordered(items: List<TodoItem>): List<TodoItem> {
+        val ranks = order.withIndex().associate { it.value to it.index }
+        return items.sortedBy { ranks[it.id] ?: Int.MAX_VALUE }
+    }
 
     fun disconnected() {
         update(state.copy(items = emptyList(), loaded = false, reviewed = false))
@@ -139,8 +147,9 @@ internal class TodoController(
         scope.launch {
             try {
                 loadJournal()
+                order = store.get(orderKey).split(",").mapNotNull(String::toLongOrNull)
                 val items = operations.list()
-                if (screen().ready) update(state.copy(items = items, loaded = true, reviewed = state.pending != null))
+                if (screen().ready) update(state.copy(items = ordered(items), loaded = true, reviewed = state.pending != null))
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 update(state.copy(loaded = false, error = "Could not load Todo. Check the connection and that the todo CLI is installed on Grace, then refresh."))
@@ -203,6 +212,34 @@ internal class TodoController(
         mutate("Move task #${task.id} to $status: ${task.title}") { operations.move(task, status) }
     }
 
+    fun moveTask(id: Long, status: String) {
+        val task = state.items.firstOrNull { it.id == id } ?: return
+        if (!canWrite() || state.editor != null || status !in todoStatuses || status == task.status) return
+        mutate("Move task #${task.id} to $status: ${task.title}") { operations.move(task, status) }
+    }
+
+    // The CLI has no priority field. Persist this phone's board order separately from task data.
+    fun reorder(id: Long, target: Long, after: Boolean) {
+        if (!canWrite() || state.editor != null || id == target) return
+        val task = state.items.firstOrNull { it.id == id } ?: return
+        if (state.items.none { it.id == target && it.status == task.status }) return
+        val next = state.items.toMutableList()
+        next.removeAll { it.id == id }
+        next.add(next.indexOfFirst { it.id == target } + if (after) 1 else 0, task)
+        update(state.copy(busy = true, error = null))
+        scope.launch {
+            try {
+                val ids = next.map { it.id }
+                store.put(orderKey, ids.joinToString(","))
+                order = ids
+                if (screen().ready) update(state.copy(items = ordered(state.items)))
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                update(state.copy(error = "Could not save the priority order on this phone."))
+            } finally { update(state.copy(busy = false)) }
+        }
+    }
+
     private fun mutate(description: String, operation: suspend () -> TodoItem) {
         update(state.copy(busy = true, error = null, reviewed = false))
         scope.launch {
@@ -216,12 +253,12 @@ internal class TodoController(
                 confirmed = true
                 // Preserve confirmed data even if clearing the local journal subsequently fails.
                 update(state.copy(editor = null, status = task.status,
-                    items = (state.items.filterNot { it.id == task.id } + task).sortedBy { it.id }))
+                    items = ordered(state.items.filterNot { it.id == task.id } + task)))
                 store.remove(journal)
                 update(state.copy(pending = null))
                 try {
                     val items = operations.list()
-                    if (screen().ready) update(state.copy(items = items, loaded = true))
+                    if (screen().ready) update(state.copy(items = ordered(items), loaded = true))
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
                     update(state.copy(error = "Saved. Could not refresh the board; refresh when connected."))
