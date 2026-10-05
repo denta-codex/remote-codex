@@ -249,7 +249,7 @@ class Rpc(
                 require(id is JsonPrimitive && (id.isString || id.longOrNull != null))
                 if (serverRequests.containsKey(id)) return
                 serverRequests[id] = ServerRequestState.Pending
-                when (val route = ServerRequests.route(message.str("method"), clockMillis)) {
+                when (val route = ServerRequests.route(message.str("method"), message["params"], clockMillis)) {
                     ServerRequestRoute.Interactive -> Unit
                     is ServerRequestRoute.Result -> {
                         respond(id, route.result, epoch)
