@@ -4150,6 +4150,11 @@ class AppTest {
         val failure = obj("success" to JsonPrimitive(false), "contentItems" to JsonArray(listOf(obj(
             "type" to s("inputText"), "text" to s("This client does not support client-executed tools. The tool was not executed.")
         ))))
+        val readThreadFailure = obj("success" to JsonPrimitive(false), "contentItems" to JsonArray(listOf(obj(
+            "type" to s("inputText"), "text" to s("This client does not execute codex_app.read_thread. The tool was not executed. " +
+                "Use the available codex-tasks skill to read or find tasks on an explicitly configured Grace endpoint. " +
+                "Desktop hostId values are not CLI target selectors.")
+        ))))
         fun request(id: Int) = obj("id" to JsonPrimitive(id), "method" to s("item/tool/call"),
             "params" to obj("threadId" to s("task-test"), "namespace" to s("arbitrary"), "tool" to s("any_tool"), "arguments" to JsonNull))
         assertEquals("home", model.state.value.page)
@@ -4164,9 +4169,12 @@ class AppTest {
         compose.runOnUiThread { model.openTask("task-test") }
         compose.waitUntil(10000) { heldHistoryRequests.isNotEmpty() }
         assertTrue(model.state.value.busy)
-        peer!!.send(request(89).toString())
+        peer!!.send(obj("id" to JsonPrimitive(89), "method" to s("item/tool/call"),
+            "params" to obj("threadId" to s("task-test"), "namespace" to s("codex_app"), "tool" to s("read_thread"),
+                "arguments" to obj("threadId" to s("task-test"), "hostId" to s("local"),
+                    "turnLimit" to JsonPrimitive(20), "maxOutputCharsPerItem" to JsonPrimitive(32000)))).toString())
         compose.waitUntil(5000) { userInputResponses.size == 2 }
-        assertEquals(failure, userInputResponses.last())
+        assertEquals(readThreadFailure, userInputResponses.last())
         assertTrue(model.state.value.busy)
         assertTrue(model.state.value.decisions.isEmpty())
         holdHistoryReply = false
@@ -4311,10 +4319,17 @@ class AppTest {
         compose.waitUntil(10000) { heldHistoryRequests.isNotEmpty() }
         fun request(id: String, method: String, params: JsonObject = obj()) =
             obj("id" to s(id), "method" to s(method), "params" to params)
-        peer!!.send(request("time", "currentTime/read").toString())
+        val beforeTime = Math.floorDiv(System.currentTimeMillis(), 1000L)
+        val timeRequest = request("time", "currentTime/read", obj("threadId" to s("unselected-thread")))
+        peer!!.send(timeRequest.toString())
+        peer!!.send(timeRequest.toString())
         peer!!.send(request("attestation", "attestation/generate").toString())
         compose.waitUntil(5000) { serverRequestResponses.size == 2 }
-        assertEquals("-32601", serverRequestResponses.first { it.str("id") == "time" }.map("error").str("code"))
+        val timeReply = serverRequestResponses.first { it.str("id") == "time" }
+        assertEquals(setOf("id", "result"), timeReply.keys)
+        val seconds = timeReply.map("result").getValue("currentTimeAt").jsonPrimitive
+        assertFalse(seconds.isString)
+        assertTrue(seconds.long in beforeTime..Math.floorDiv(System.currentTimeMillis(), 1000L))
         assertEquals("-32601", serverRequestResponses.first { it.str("id") == "attestation" }.map("error").str("code"))
         assertTrue(model.state.value.decisions.isEmpty())
 
