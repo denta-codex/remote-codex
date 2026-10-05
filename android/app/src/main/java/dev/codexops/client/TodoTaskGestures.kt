@@ -13,12 +13,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.font.FontWeight
@@ -37,7 +35,7 @@ internal fun TodoTaskList(tasks: List<TodoItem>, page: Int, enabled: Boolean, op
     var top by remember { mutableFloatStateOf(0f) }
     var height by remember { mutableIntStateOf(0) }
     val edge = with(LocalDensity.current) { 48.dp.toPx() }
-    val haptic = LocalHapticFeedback.current
+    val haptics by rememberUpdatedState(LocalAppHaptics.current)
     val currentActions by rememberUpdatedState(actions)
     fun target() = list.layoutInfo.visibleItemsInfo.filter { info -> tasks.any { it.id == info.key } }
         .minByOrNull { abs(it.offset + it.size / 2f - (top + height / 2f + list.layoutInfo.viewportStartOffset)) }
@@ -69,7 +67,7 @@ internal fun TodoTaskList(tasks: List<TodoItem>, page: Int, enabled: Boolean, op
                     dragging = source
                     top = row.offset.toFloat() - list.layoutInfo.viewportStartOffset
                     height = row.size
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    haptics.longPress()
                     try {
                         while (true) {
                             // Claim held drags before the child row can start a horizontal swipe.
