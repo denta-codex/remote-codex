@@ -13,7 +13,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import dev.codexops.core.*
 import kotlinx.coroutines.*
-import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.*
 
 /** Approval state stays in op-bridge; this activity never creates a chat model. */
 class CredentialRequestsActivity : ComponentActivity() {
@@ -23,9 +23,17 @@ class CredentialRequestsActivity : ComponentActivity() {
     private val blockedIds = mutableSetOf<String>()
     private lateinit var status: TextView
     private lateinit var details: TextView
+    private lateinit var progress: TextView
     private lateinit var requests: LinearLayout
+    private lateinit var singlePanel: LinearLayout
+    private lateinit var batchPanel: LinearLayout
     internal lateinit var secret: EditText
         private set
+    private val batchInputs = linkedMapOf<String, EditText>()
+    internal val batchSecrets: Map<String, EditText> get() = batchInputs
+    private val explicitEmpty = mutableSetOf<String>()
+    private var batch: ApprovalBatch? = null
+    private var validSelection = false
     private lateinit var release: Button
     private lateinit var deny: Button
     private lateinit var refreshButton: Button
@@ -55,40 +63,53 @@ class CredentialRequestsActivity : ComponentActivity() {
             insets
         }
         fun label(text: String) = TextView(this).apply { this.text = text; root.addView(this) }
-        fun button(text: String, action: () -> Unit) = Button(this).apply { this.text = text; setOnClickListener { action() }; root.addView(this) }
+        fun button(text: String, action: () -> Unit) = addButton(root, text, action)
         label("Credential requests").textSize = 24f
-        label("Select the requested item in 1Password, then release it once. Autofill cannot verify the selected account or item. Values go only to the waiting caller.")
+        label("Select the requested values in 1Password, then release once. Autofill cannot verify the selected account, item, or field. Values go only to the waiting caller.")
         status = label("Open this screen when an op-bridge caller is waiting.")
         refreshButton = button("Refresh") { refresh() }
         requests = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; root.addView(this) }
         details = label("Select a pending request.")
-        secret = EditText(this).apply {
-            id = View.generateViewId()
-            hint = "Requested secret"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            isSingleLine = true
-            // Keep focus available to Autofill without opening the typing keyboard.
-            showSoftInputOnFocus = false
-            setAutofillHints(View.AUTOFILL_HINT_PASSWORD)
-            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_YES
-            isSaveEnabled = false
-            isSaveFromParentEnabled = false
-        }
-        root.addView(secret)
-        button("Choose in 1Password") {
-            if (canEdit()) { secret.requestFocus(); autofill?.requestAutofill(secret) }
-        }
+        progress = label("")
+        singlePanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; isSaveEnabled = false; root.addView(this) }
+        secret = secretField("Requested secret", singleLine = true)
+        singlePanel.addView(secret)
+        addButton(singlePanel, "Choose in 1Password") { choose(secret) }
+        batchPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; isSaveEnabled = false; root.addView(this) }
         release = button("Release once") { submit("release") }
         deny = button("Deny") { submit("deny") }
-        secret.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
-            override fun afterTextChanged(s: Editable?) { buttons() }
-        })
+        watch(secret) { buttons() }
         button("Back to requests") { clearSelection(); refresh() }
         button("Close") { finish() }
         setContentView(ScrollView(this).apply { isSaveEnabled = false; addView(root) })
         buttons()
+    }
+
+    private fun addButton(parent: LinearLayout, text: String, action: () -> Unit) = Button(this).apply {
+        this.text = text; setOnClickListener { action() }; parent.addView(this)
+    }
+    private fun secretField(hint: String, singleLine: Boolean) = EditText(this).apply {
+        id = View.generateViewId()
+        this.hint = hint
+        inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD or
+            if (singleLine) 0 else InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        isSingleLine = singleLine
+        // Keep focus available to Autofill without opening the typing keyboard.
+        showSoftInputOnFocus = false
+        setAutofillHints(View.AUTOFILL_HINT_PASSWORD)
+        importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_YES
+        isSaveEnabled = false
+        isSaveFromParentEnabled = false
+    }
+    private fun watch(input: EditText, changed: () -> Unit) {
+        input.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: Editable?) = changed()
+        })
+    }
+    private fun choose(input: EditText) {
+        if (canEdit()) { input.requestFocus(); autofill?.requestAutofill(input) }
     }
 
     override fun onStart() {
@@ -100,8 +121,9 @@ class CredentialRequestsActivity : ComponentActivity() {
                 delay(1000)
                 val request = selected
                 if (request != null && !submitted) {
-                    if (!live(request)) { clearSecret(); details.text = "Request expired. Start a new op-bridge request." }
-                    else showDetails(request)
+                    if (!connection.connected) { clearSecret(); status.text = "Approval connection unavailable. Refresh checks status only." }
+                    else if (!live(request)) { clearSecret(); details.text = "Request expired. Start a new op-bridge request." }
+                    else if (validSelection) showDetails(request)
                 }
                 buttons()
                 if (connection.connected && !busy && refreshJob?.isActive != true) refresh()
@@ -110,29 +132,94 @@ class CredentialRequestsActivity : ComponentActivity() {
     }
 
     private fun live(request: JsonObject) = request.str("state") == "pending" && (request.str("deadline").toLongOrNull() ?: 0) > System.currentTimeMillis()
-    private fun canEdit() = selected?.let(::live) == true && !submitted && !busy && connection.connected
+    private fun canEdit() = validSelection && selected?.let(::live) == true && !submitted && !busy && connection.connected
+    private fun selectedField(id: String) = !batchInputs[id]?.text.isNullOrEmpty() || id in explicitEmpty
+    private fun complete() = batch?.fields?.all { selectedField(it.id) } ?: !secret.text.isNullOrEmpty()
+    private fun releaseValues() = JsonArray(batch!!.fields.map { field ->
+        obj("id" to s(field.id), "value" to s(batchInputs.getValue(field.id).text.toString()))
+    })
     private fun buttons() {
-        secret.isEnabled = canEdit()
-        release.isEnabled = canEdit() && !secret.text.isNullOrEmpty()
-        deny.isEnabled = canEdit()
+        if (!::release.isInitialized) return
+        val editable = canEdit()
+        secret.isEnabled = editable
+        batchInputs.values.forEach { it.isEnabled = editable }
+        release.text = if (selected?.str("kind") == "inject") "Release all once" else "Release once"
+        release.isEnabled = editable && complete() && connection.releaseFits(selected!!.str("id"),
+            value = if (batch == null) secret.text.toString() else null,
+            values = if (batch != null) releaseValues() else null)
+        deny.isEnabled = selected?.let(::live) == true && !submitted && !busy && connection.connected
         refreshButton.isEnabled = !busy
+        progress.text = batch?.let { "${it.fields.count { field -> selectedField(field.id) }} of ${it.fields.size} selected" } ?: ""
+        singlePanel.visibility = if (selected?.str("kind") == "inject") View.GONE else View.VISIBLE
     }
-    private fun clearSecret() { autofill?.cancel(); secret.text?.clear() }
+    private fun clearSecret() {
+        autofill?.cancel()
+        secret.text?.clear()
+        batchInputs.values.forEach { it.text?.clear() }
+        explicitEmpty.clear()
+        buttons()
+    }
     private fun clearSelection() {
         refreshJob?.cancel(); refreshJob = null
-        clearSecret(); selected = null; submitted = false; lockedRequestId = null
+        clearSecret(); selected = null; batch = null; validSelection = false
+        batchPanel.removeAllViews(); batchInputs.clear()
+        submitted = false; lockedRequestId = null
         details.text = "Select a pending request."; buttons()
     }
     internal fun selectRequest(request: JsonObject) {
         if (busy) return
         refreshJob?.cancel(); refreshJob = null
-        clearSecret(); selected = request; submitted = request.str("id") in blockedIds
-        showDetails(request); buttons()
+        clearSecret(); batchPanel.removeAllViews(); batchInputs.clear(); batch = null
+        selected = request; submitted = request.str("id") in blockedIds
+        applyMetadata(request)
+        buttons()
+        if (request.str("kind") == "inject" && request["fields"] == null) refresh()
+    }
+    private fun applyMetadata(request: JsonObject) {
+        validSelection = false
+        val kind = request.str("kind")
+        if (kind == "inject") {
+            if (request["fields"] == null) { details.text = "Loading credential group…"; return }
+            val parsed = try { ApprovalBatch.parse(request) } catch (_: ApprovalFailure) {
+                clearSecret(); batchPanel.removeAllViews(); batchInputs.clear(); batch = null
+                details.text = "Unsupported credential group. Cancel the caller and start a fresh request."
+                return
+            }
+            if (batch != parsed) {
+                clearSecret(); batchPanel.removeAllViews(); batchInputs.clear(); batch = parsed
+                parsed.fields.groupBy { it.vault to it.item }.forEach { (group, fields) ->
+                    batchPanel.addView(TextView(this).apply { text = "Vault: ${group.first}\nItem: ${group.second}" })
+                    fields.forEach { field ->
+                        batchPanel.addView(TextView(this).apply { text = "Field: ${field.field} · ${field.occurrences} occurrence(s)" })
+                        val input = secretField(field.field, singleLine = false)
+                        batchInputs[field.id] = input
+                        batchPanel.addView(input)
+                        watch(input) {
+                            if (!input.text.isNullOrEmpty()) explicitEmpty.remove(field.id)
+                            buttons()
+                        }
+                        addButton(batchPanel, "Choose in 1Password") { choose(input) }
+                        addButton(batchPanel, "Use empty value") {
+                            if (canEdit()) { input.text?.clear(); explicitEmpty.add(field.id); buttons() }
+                        }
+                    }
+                }
+            }
+        } else if (kind.isNotEmpty() && kind != "read") {
+            clearSecret(); details.text = "Unsupported credential request."; return
+        }
+        validSelection = request.str("id").isNotEmpty() && request.str("account").isNotEmpty() &&
+            (kind == "inject" || request.str("item").isNotEmpty() && request.str("field").isNotEmpty())
+        showDetails(request)
     }
     private fun showDetails(request: JsonObject) {
         val seconds = (((request.str("deadline").toLongOrNull() ?: 0) - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
-        details.text = "Host: ${request.str("host")} · Caller: ${request.str("caller")}\nAccount: ${request.str("account")}\nVault: ${request.str("vault").ifEmpty { "Not specified" }}\nItem: ${request.str("item")}\nField: ${request.str("field")}\nTime remaining: ${seconds}s"
+        val selection = if (request.str("kind") == "inject")
+            "${request.str("unique_count")} unique field(s) · ${request.str("occurrence_count")} occurrence(s)"
+        else "Vault: ${request.str("vault").ifEmpty { "Not specified" }}\nItem: ${request.str("item")}\nField: ${request.str("field")}"
+        details.text = "Host: ${request.str("host")} · Caller: ${request.str("caller")}\nAccount: ${request.str("account")}\n$selection\nTime remaining: ${seconds}s"
     }
+    private fun metadata(request: JsonObject) = JsonObject(request.filterKeys { it in setOf("id", "host", "caller", "account", "vault", "item", "field", "kind", "deadline", "fields", "unique_count", "occurrence_count") })
 
     private fun refresh() {
         if (!visible || busy || refreshJob?.isActive == true) return
@@ -149,29 +236,32 @@ class CredentialRequestsActivity : ComponentActivity() {
                 if (id != null) {
                     val response = connection.call("get", id)
                     val current = response.list("requests").firstOrNull()
+                    if (current != null && current.str("id") != id) throw ApprovalFailure("invalid_response")
                     if (current == null || current.str("state") != "pending") {
-                        clearSecret()
-                        submitted = true
+                        clearSecret(); submitted = true; validSelection = false
                         selected = current
                         details.text = terminalText(current?.str("state"))
                     } else {
+                        if (selected?.let { metadata(it) != metadata(current) } == true) clearSecret()
                         selected = current
-                        if (id in blockedIds) { submitted = true; details.text = "Submission was interrupted. Its value will not be resent. Cancel the caller and start a fresh request if needed." }
-                        else showDetails(current)
+                        if (id in blockedIds) {
+                            submitted = true; validSelection = false
+                            details.text = "Submission was interrupted. Its values will not be resent. Cancel the caller and start a fresh request if needed."
+                        } else applyMetadata(current)
                     }
                 }
                 val pending = connection.call("list").list("requests")
                 requests.removeAllViews()
                 pending.forEach { request ->
                     requests.addView(Button(this@CredentialRequestsActivity).apply {
-                        text = "${request.str("item")} / ${request.str("field")}"
+                        text = if (request.str("kind") == "inject") "Inject · ${request.str("unique_count")} field(s)" else "${request.str("item")} / ${request.str("field")}"
                         setOnClickListener { selectRequest(request) }
                     })
                 }
                 status.text = if (pending.isEmpty()) "No pending credential requests." else "${pending.size} pending request(s)."
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
-                connection.close()
+                clearSecret(); connection.close()
                 status.text = if (error is ApprovalFailure && error.kind == "no_session") "No active approval session. Start an op-bridge request, then refresh." else "Approval connection unavailable. Refresh to check again; submitted values are never resent."
             } finally { buttons() }
         }
@@ -183,28 +273,35 @@ class CredentialRequestsActivity : ComponentActivity() {
         "denied" -> "Request denied."
         "expired" -> "Request expired."
         "cancelled" -> "Caller cancelled or disconnected."
+        "failed" -> "Batch failed. No result was released."
         else -> "Delivery cannot be confirmed. Start a fresh caller request if needed; no value will be resent."
     }
 
     private fun submit(method: String) {
         val request = selected ?: return
-        if (!canEdit() || method == "release" && secret.text.isNullOrEmpty()) return
-        if (method == "release" && secret.text.toString().toByteArray().size > 65536) { status.text = "Value exceeds the 64 KiB limit."; return }
+        if (request.let(::live).not() || submitted || busy || !connection.connected) return
+        if (method == "release" && (!canEdit() || !complete())) return
         val id = request.str("id")
-        var value: String? = if (method == "release") secret.text.toString() else null
+        val submission = try {
+            if (method == "release" && batch != null) {
+                connection.prepare("release_batch", id, values = releaseValues())
+            } else connection.prepare(method, id, if (method == "release") secret.text.toString() else null)
+        } catch (error: ApprovalFailure) {
+            status.text = if (error.kind == "invalid_value") "Each value must be valid text within the 64 KiB limit." else "Credential group exceeds the 512 KiB transport limit."
+            return
+        }
         submitted = true; lockedRequestId = id; blockedIds.add(id); busy = true; buttons()
         clearSecret()
         scope.launch {
             try {
                 refreshJob?.cancelAndJoin()
-                val response = connection.call(method, id, value)
-                value = null
+                val response = connection.send(submission)
                 details.text = if (response.str("error").isNotEmpty()) "Request could not be approved. Refresh for its current status." else terminalText(response.list("requests").firstOrNull()?.str("state"))
             } catch (error: Exception) {
                 connection.close()
-                details.text = "Submission outcome unknown. Refresh checks status only; it never resends a value."
+                details.text = "Submission outcome unknown. Refresh checks status only; it never resends values."
                 if (error is CancellationException) throw error
-            } finally { value = null; busy = false; buttons() }
+            } finally { submission.discard(); busy = false; buttons() }
         }
     }
 
@@ -215,7 +312,7 @@ class CredentialRequestsActivity : ComponentActivity() {
     }
     override fun onStop() {
         visible = false; updateJob?.cancel(); refreshJob?.cancel(); connection.close()
-        // A password-manager picker may temporarily cover us: keep only the live field.
+        // A password-manager picker may temporarily cover us: keep only live fields.
         super.onStop()
     }
     override fun finish() { clearSecret(); super.finish() }

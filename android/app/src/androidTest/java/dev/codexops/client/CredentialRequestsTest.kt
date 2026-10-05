@@ -23,13 +23,15 @@ import org.junit.runner.RunWith
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
 
 @RunWith(AndroidJUnit4::class)
 class CredentialRequestsTest {
+    private val fixtureDeadline = System.currentTimeMillis() + 60000
     private fun request(state: String = "pending") = obj("id" to s("fixture-request"), "state" to s(state),
         "account" to s("test.1password.com"), "host" to s("fixture"), "caller" to s("agent"),
         "vault" to s("Test"), "item" to s("Fake token"), "field" to s("password"),
-        "deadline" to JsonPrimitive(System.currentTimeMillis() + 60000))
+        "deadline" to JsonPrimitive(fixtureDeadline))
     private fun button(view: View, name: String): Button? {
         if (view is Button && view.text.toString() == name) return view
         if (view is ViewGroup) for (i in 0 until view.childCount) button(view.getChildAt(i), name)?.let { return it }
@@ -38,6 +40,202 @@ class CredentialRequestsTest {
     private fun fixture(server: MockWebServer): Intent {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         return Intent(context, CredentialRequestsActivity::class.java).putExtra("fixture_endpoint", "ws://127.0.0.1:${server.port}/codex/rpc")
+    }
+    private fun buttons(view: View, name: String): List<Button> = buildList {
+        if (view is Button && view.text.toString() == name) add(view)
+        if (view is ViewGroup) for (i in 0 until view.childCount) addAll(buttons(view.getChildAt(i), name))
+    }
+    private class BatchFixture : AutoCloseable {
+        val server = MockWebServer()
+        val connected = CountDownLatch(1)
+        val released = CountDownLatch(1)
+        val releases = AtomicInteger()
+        val reads = AtomicInteger()
+        val correctValues = AtomicBoolean()
+        val capabilitySeen = AtomicBoolean()
+        @Volatile var state = "pending"
+        @Volatile var deadline = System.currentTimeMillis() + 60000
+        @Volatile var dropRelease = false
+        @Volatile var rejectRelease = false
+        @Volatile var peer: WebSocket? = null
+        fun request(full: Boolean = true) = obj(
+            "id" to s("fixture-batch"), "kind" to s("inject"), "state" to s(state),
+            "account" to s("test.1password.com"), "host" to s("fixture"), "caller" to s("agent"),
+            "deadline" to JsonPrimitive(deadline), "unique_count" to JsonPrimitive(2), "occurrence_count" to JsonPrimitive(3),
+            "fields" to if (full) JsonArray(listOf(
+                obj("id" to s("f1"), "vault" to s("Test"), "item" to s("Fake token"), "field" to s("password"), "occurrences" to JsonPrimitive(2)),
+                obj("id" to s("f2"), "vault" to s("Test"), "item" to s("Fake token"), "field" to s("username"), "occurrences" to JsonPrimitive(1)),
+            )) else null,
+        )
+        init {
+            val listener = object : WebSocketListener() {
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(1000, "") }
+                override fun onOpen(webSocket: WebSocket, response: Response) { peer = webSocket; connected.countDown() }
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    val message = wire.parseToJsonElement(text).jsonObject
+                    val method = message.str("method")
+                    if (method == "release_batch") {
+                        releases.incrementAndGet()
+                        val values = message.list("values")
+                        correctValues.set(values.size == 2 && values[0].str("id") == "f1" && values[0].str("value") == "HARMLESS_BATCH_VALUE" &&
+                            values[1].str("id") == "f2" && values[1]["value"] == s(""))
+                        if (!rejectRelease) state = "completed"
+                        released.countDown()
+                        if (dropRelease) { webSocket.close(1000, ""); return }
+                    } else {
+                        reads.incrementAndGet()
+                        if (method == "list") capabilitySeen.set((message["capabilities"] as? JsonArray)?.contains(s(APPROVAL_BATCH_CAPABILITY)) == true)
+                    }
+                    webSocket.send(obj("version" to JsonPrimitive(1), "id" to message["id"],
+                        "capabilities" to JsonArray(listOf(s(APPROVAL_BATCH_CAPABILITY))),
+                        "error" to if (method == "release_batch" && rejectRelease) s("invalid_batch") else null,
+                        "requests" to JsonArray(if (method == "list" && state != "pending") emptyList() else listOf(request(method != "list")))).toString())
+                }
+            }
+            repeat(16) { server.enqueue(MockResponse().withWebSocketUpgrade(listener)) }
+            server.start()
+        }
+        override fun close() { peer?.close(1000, ""); server.close() }
+    }
+    private fun awaitUi(scenario: ActivityScenario<CredentialRequestsActivity>, predicate: (CredentialRequestsActivity) -> Boolean) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(12)
+        while (System.nanoTime() < deadline) {
+            var ready = false
+            scenario.onActivity { ready = predicate(it) }
+            if (ready) return
+            Thread.sleep(25)
+        }
+        fail("Fixture UI did not reach expected state")
+    }
+    @Test fun completeBatchGroupsDuplicatesUsesExplicitEmptyAndNeverReplays() {
+        BatchFixture().use { backend ->
+            backend.dropRelease = true
+            ActivityScenario.launch<CredentialRequestsActivity>(fixture(backend.server)).use { scenario ->
+                assertTrue(backend.connected.await(10, TimeUnit.SECONDS))
+                scenario.onActivity { it.selectRequest(backend.request(full = false)) }
+                awaitUi(scenario) { it.batchSecrets.size == 2 }
+                scenario.onActivity {
+                    assertEquals(2, it.batchSecrets.size) // Three occurrences require two selections.
+                    val submit = button(it.window.decorView, "Release all once")!!
+                    assertFalse(submit.isEnabled)
+                    it.batchSecrets.getValue("f1").autofill(android.view.autofill.AutofillValue.forText("HARMLESS_BATCH_VALUE"))
+                    assertFalse(submit.isEnabled)
+                    buttons(it.window.decorView, "Use empty value").last().performClick()
+                    assertTrue(submit.isEnabled)
+                    assertTrue(it.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
+                    it.batchSecrets.values.forEach { input -> assertFalse(input.isSaveEnabled); assertFalse(input.isSaveFromParentEnabled) }
+                    submit.performClick(); submit.performClick()
+                    assertTrue(it.batchSecrets.values.all { input -> input.text.isNullOrEmpty() })
+                    assertFalse(submit.isEnabled)
+                }
+                assertTrue(backend.released.await(10, TimeUnit.SECONDS))
+                scenario.recreate()
+                awaitUi(scenario) { button(it.window.decorView, "Release all once")?.isEnabled != true && backend.reads.get() >= 3 }
+                scenario.onActivity { button(it.window.decorView, "Refresh")!!.performClick() }
+                assertEquals(1, backend.releases.get())
+                assertTrue(backend.correctValues.get())
+                assertTrue(backend.capabilitySeen.get())
+                assertEquals("/remote-codex/v1/credentials", backend.server.takeRequest(5, TimeUnit.SECONDS)!!.path)
+            }
+        }
+    }
+    @Test fun batchPickerHandoffKeepsTransientFieldsButRecreationClearsSelections() {
+        BatchFixture().use { backend ->
+            ActivityScenario.launch<CredentialRequestsActivity>(fixture(backend.server)).use { scenario ->
+                assertTrue(backend.connected.await(10, TimeUnit.SECONDS))
+                scenario.onActivity {
+                    it.selectRequest(backend.request())
+                    buttons(it.window.decorView, "Choose in 1Password").last().performClick()
+                    assertTrue(it.batchSecrets.getValue("f2").hasFocus())
+                    assertFalse(it.batchSecrets.getValue("f2").showSoftInputOnFocus)
+                    it.batchSecrets.getValue("f2").setText("PICKER_FIXTURE")
+                    buttons(it.window.decorView, "Use empty value").first().performClick()
+                    assertTrue(button(it.window.decorView, "Release all once")!!.isEnabled)
+                    runBlocking {
+                        try { captureBugReportScreenshot(it); fail("Protected batch activity captured") } catch (_: IllegalStateException) { }
+                    }
+                }
+                scenario.moveToState(Lifecycle.State.CREATED)
+                scenario.moveToState(Lifecycle.State.RESUMED)
+                awaitUi(scenario) { button(it.window.decorView, "Release all once")?.isEnabled == true }
+                scenario.onActivity { assertEquals("PICKER_FIXTURE", it.batchSecrets.getValue("f2").text.toString()) }
+                scenario.recreate()
+                scenario.onActivity {
+                    it.selectRequest(backend.request())
+                    assertTrue(it.batchSecrets.values.all { input -> input.text.isNullOrEmpty() })
+                    assertFalse(button(it.window.decorView, "Release all once")!!.isEnabled)
+                }
+                assertEquals(0, backend.releases.get())
+            }
+        }
+    }
+    @Test fun incompleteBatchDisconnectExpiryAndCancellationClearValues() {
+        BatchFixture().use { backend ->
+            ActivityScenario.launch<CredentialRequestsActivity>(fixture(backend.server)).use { scenario ->
+                assertTrue(backend.connected.await(10, TimeUnit.SECONDS))
+                scenario.onActivity {
+                    it.selectRequest(backend.request()); it.batchSecrets.getValue("f1").setText("TRANSIENT_FIXTURE")
+                    assertFalse(button(it.window.decorView, "Release all once")!!.isEnabled)
+                }
+                backend.peer!!.close(1000, "")
+                awaitUi(scenario) { it.batchSecrets.values.all { input -> input.text.isNullOrEmpty() } }
+                scenario.onActivity { button(it.window.decorView, "Refresh")!!.performClick() }
+                awaitUi(scenario) { it.batchSecrets.getValue("f1").isEnabled }
+                scenario.onActivity { it.batchSecrets.getValue("f1").setText("TRANSIENT_FIXTURE") }
+                backend.state = "cancelled"
+                awaitUi(scenario) { it.batchSecrets.values.all { input -> input.text.isNullOrEmpty() } && !it.batchSecrets.getValue("f1").isEnabled }
+                backend.state = "pending"; backend.deadline = System.currentTimeMillis() + 1500
+                scenario.onActivity { it.selectRequest(backend.request()); it.batchSecrets.getValue("f1").setText("TRANSIENT_FIXTURE") }
+                awaitUi(scenario) { it.batchSecrets.values.all { input -> input.text.isNullOrEmpty() } && !it.batchSecrets.getValue("f1").isEnabled }
+                assertEquals(0, backend.releases.get())
+            }
+        }
+    }
+    @Test fun batchLimitsIncludeEscapingAndMalformedMetadataDisablesRelease() {
+        BatchFixture().use { backend ->
+            ActivityScenario.launch<CredentialRequestsActivity>(fixture(backend.server)).use { scenario ->
+                assertTrue(backend.connected.await(10, TimeUnit.SECONDS))
+                scenario.onActivity {
+                    it.selectRequest(backend.request())
+                    it.batchSecrets.getValue("f1").setText("x".repeat(APPROVAL_VALUE_LIMIT + 1))
+                    it.batchSecrets.getValue("f2").setText("small")
+                    assertFalse(button(it.window.decorView, "Release all once")!!.isEnabled)
+                    it.batchSecrets.getValue("f1").setText("\u0001".repeat(APPROVAL_VALUE_LIMIT))
+                    assertTrue(button(it.window.decorView, "Release all once")!!.isEnabled)
+                    it.batchSecrets.getValue("f2").setText("\u0001".repeat(APPROVAL_VALUE_LIMIT))
+                    assertFalse(button(it.window.decorView, "Release all once")!!.isEnabled)
+                    val malformed = JsonObject(backend.request() + ("unique_count" to JsonPrimitive(3)))
+                    it.selectRequest(malformed)
+                    assertTrue(it.batchSecrets.isEmpty())
+                    assertFalse(button(it.window.decorView, "Release all once")!!.isEnabled)
+                }
+                assertEquals(0, backend.releases.get())
+            }
+        }
+    }
+    @Test fun rejectedBatchRemainsBlockedAcrossRefreshAndRecreation() {
+        BatchFixture().use { backend ->
+            backend.rejectRelease = true
+            ActivityScenario.launch<CredentialRequestsActivity>(fixture(backend.server)).use { scenario ->
+                assertTrue(backend.connected.await(10, TimeUnit.SECONDS))
+                scenario.onActivity {
+                    it.selectRequest(backend.request())
+                    it.batchSecrets.getValue("f1").setText("HARMLESS_BATCH_VALUE")
+                    buttons(it.window.decorView, "Use empty value").last().performClick()
+                    button(it.window.decorView, "Release all once")!!.performClick()
+                }
+                assertTrue(backend.released.await(10, TimeUnit.SECONDS))
+                scenario.recreate()
+                awaitUi(scenario) { backend.reads.get() >= 3 }
+                scenario.onActivity {
+                    it.selectRequest(backend.request())
+                    assertFalse(button(it.window.decorView, "Release all once")!!.isEnabled)
+                    assertTrue(it.batchSecrets.values.all { input -> input.text.isNullOrEmpty() })
+                    button(it.window.decorView, "Refresh")!!.performClick()
+                }
+                assertEquals(1, backend.releases.get())
+            }
+        }
     }
     @Test
     fun releaseUsesSeparateRouteClearsValueAndNeverReplays() {
