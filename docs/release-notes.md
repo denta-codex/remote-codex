@@ -1,2 +1,9 @@
-- Verify Todo-free Android navigation at the requested base
-- Add native Todo board using the local task CLI
+- Reject unsupported Android client tool calls without blocking tasks
+- Merge branch 'main' into fix/reject-unsupported-client-tools
+- Show recorded file changes after completed turns with fullscreen diffs
+- Merge branch 'main' into fix/completed-turn-file-changes
+- Use available cover-screen height and cutout-safe layouts across Android
+- Merge branch 'main' into fix/cover-screen-window-insets
+- Apply cover-screen inset handling to recorded-change viewer
+- Toggle task read status with the unread swipe gesture
+- Merge branch 'main' into fix/task-unread-toggle
