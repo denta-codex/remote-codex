@@ -14,11 +14,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
@@ -50,7 +48,7 @@ internal fun TaskSwipeRow(
     var armed by remember { mutableStateOf(false) }
     val maxThreshold = with(LocalDensity.current) { 112.dp.toPx() }
     val threshold = (width * 0.35f).coerceAtMost(maxThreshold).coerceAtLeast(1f)
-    val haptic = LocalHapticFeedback.current
+    val haptics by rememberUpdatedState(LocalAppHaptics.current)
     val unreadLabel = if (unread) "Mark read" else "Mark unread"
     val archiveLabel = if (archived) "Unarchive" else "Archive"
     val open by rememberUpdatedState(onOpen)
@@ -133,7 +131,7 @@ internal fun TaskSwipeRow(
                         )
                         val nowArmed = abs(drag) >= threshold
                         if (nowArmed && !armed)
-                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            haptics.tick()
                         armed = nowArmed
                     }
                 }

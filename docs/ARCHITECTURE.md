@@ -17,6 +17,25 @@ The host bearer token is a systemd encrypted user credential loaded at service
 start. Android scans its versioned setup QR and stores the token with an Android
 Keystore key. Authentication applies only to the forwarder upgrade; stock RPC
 remains unchanged.
+
+Upstream account authentication belongs to stock Codex, separately from the
+phone's forwarder credential. Grace's inspected configuration uses the `litellm`
+Responses provider with `requires_openai_auth=true` and managed `chatgpt` auth;
+Android does not supply external ChatGPT tokens or own their refresh.
+`account/chatgptAuthTokens/refresh` is explicitly unsupported by `ServerRequests`
+and receives JSON-RPC error `-32601`, rather than entering the approval UI.
+External token support would require a separately authorized provider contract
+and account validation; the forwarder bearer credential cannot satisfy it.
+
+Client attestation is an independent capability. Android omits
+`initialize.capabilities.requestAttestation`, whose protocol default is false,
+and explicitly rejects `attestation/generate` with `-32601`. Its response contract
+requires an opaque token but does not establish a supported issuer or Android
+Play Integrity contract. Never fabricate an attestation result. Both unsupported
+responses use the shared connection-generation and response-attempt guards,
+which never replay uncertain replies. Request payloads, upstream tokens, account
+identifiers, and attestation values must not enter operational logs or reports.
+
 Android has no SSH transport. SSH is for deployment/recovery. Attachment transfer uses
 stock `fs/createDirectory`, `fs/writeFile`, `fs/readFile`, and `fs/getMetadata` RPC over the same WSS
 connection; there is no additional HTTP upload or preview endpoint.
