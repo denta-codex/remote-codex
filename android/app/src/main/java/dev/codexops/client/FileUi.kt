@@ -14,6 +14,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
@@ -40,13 +41,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 @Composable
-internal fun FileAwareMarkdown(text: String, actions: ConversationActions) {
+internal fun FileAwareMarkdown(text: String, actions: ConversationActions, onRendered: (() -> Unit)? = null) {
     // Keep the last rendered document while its replacement parses off-thread.
     // The String overload clears it to a loading box on each streaming delta,
     // collapsing the list item and destroying the reader's scroll anchor.
-    val markdown by produceState<MarkdownState>(MarkdownState.Loading(), text) {
+    val rendered by produceState(RenderedMarkdown(null, MarkdownState.Loading()), text) {
         parseMarkdownFlow(text).collect { parsed ->
-            if (parsed !is MarkdownState.Loading) value = parsed
+            if (parsed !is MarkdownState.Loading) value = RenderedMarkdown(text, parsed)
         }
     }
     val external = LocalUriHandler.current
@@ -80,7 +81,10 @@ internal fun FileAwareMarkdown(text: String, actions: ConversationActions) {
     )
     CompositionLocalProvider(LocalUriHandler provides handler) {
         Markdown(
-            markdown,
+            rendered.state,
+            modifier = if (onRendered != null && rendered.source == text && rendered.state is MarkdownState.Success)
+                Modifier.onGloballyPositioned { if (it.size.height > 0) onRendered() }
+            else Modifier,
             typography = typography,
             components = markdownComponents(
                 table = { table ->
@@ -112,6 +116,8 @@ internal fun FileAwareMarkdown(text: String, actions: ConversationActions) {
         )
     }
 }
+
+private data class RenderedMarkdown(val source: String?, val state: MarkdownState)
 
 internal fun fileReference(uri: String): FileRef? {
     if (uri.startsWith("#")) return null

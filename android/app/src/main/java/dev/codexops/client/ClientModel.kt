@@ -4,6 +4,7 @@ import android.app.Application
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -12,6 +13,8 @@ import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 
 class ClientModel
@@ -35,6 +38,48 @@ constructor(
     private val remoteFileRepository = RemoteFileRepository(app)
     private val _state = MutableStateFlow(ScreenState(host = host))
     val state = _state.asStateFlow()
+    private val streamingHaptics = StreamingHaptics(SystemClock::uptimeMillis)
+    private val hapticPreferenceLock = Mutex()
+    private var liveTextRevision = 0L
+    private var hapticTurn: String? = null
+    private var hapticResumed = false
+
+    internal fun hapticResumed(value: Boolean) {
+        hapticResumed = value
+        if (!value) cancelStreamingHaptics()
+    }
+
+    override fun hapticFeedback(enabled: Boolean) {
+        if (!_state.value.hapticsLoaded) return
+        if (!enabled) cancelStreamingHaptics()
+        _state.update { it.copy(hapticsEnabled = enabled) }
+        viewModelScope.launch {
+            hapticPreferenceLock.withLock {
+                try { local.put("haptics/enabled", enabled.toString()) }
+                catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    _state.update { it.copy(error = "The haptic preference could not be saved.") }
+                }
+            }
+        }
+    }
+
+    private fun hapticConversationActive(): Boolean = _state.value.let {
+        it.page == "chat" && it.ready && it.appForeground && hapticResumed && it.hapticsLoaded && it.hapticsEnabled
+    }
+
+    override fun assistantTextRendered(update: LiveAssistantText, visible: Boolean): Float? {
+        if (!hapticConversationActive() || _state.value.thread != update.thread) {
+            cancelStreamingHaptics()
+            return null
+        }
+        return streamingHaptics.rendered(update, visible)
+    }
+
+    override fun cancelStreamingHaptics() {
+        streamingHaptics.cancel()
+        _state.update { it.copy(liveAssistantText = null) }
+    }
     private val gitMerge = GitMergeController(viewModelScope, local, StockGitMergeOperations(rpc),
         { _state.value }, { thread, merge ->
             _state.update { if (it.thread == thread) it.copy(merge = merge) else it }
@@ -89,6 +134,7 @@ constructor(
     }
 
     private fun showList(archive: Boolean) {
+        cancelStreamingHaptics()
         cancelList()
         saveList()
         val saved = listSnapshots[archive] ?: ChatListSnapshot()
@@ -146,6 +192,14 @@ constructor(
                 }
         }
         viewModelScope.launch {
+            try {
+                val enabled = local.get("haptics/enabled") != "false"
+                _state.update { it.copy(hapticsLoaded = true, hapticsEnabled = enabled) }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                _state.update { it.copy(hapticsLoaded = true, hapticsEnabled = false,
+                    error = "The haptic preference could not be loaded.") }
+            }
             _state.update {
                 it.copy(configured = runCatching { local.token().isNotEmpty() }.getOrDefault(false))
             }
@@ -157,6 +211,7 @@ constructor(
     }
 
     fun foreground(value: Boolean) {
+        if (!value) cancelStreamingHaptics()
         foreground = value
         _state.update { it.copy(appForeground = value) }
         if (value) UpdateInstallResults.consume(getApplication())?.let(::applyInstallResult)
@@ -166,6 +221,7 @@ constructor(
     override fun connect() {
         reports.actions.add("connect")
         if (connectionJob?.isActive == true || _state.value.busy) return
+        cancelStreamingHaptics()
         connectionJob =
             viewModelScope.launch {
                 var attempt = 0
@@ -417,6 +473,7 @@ constructor(
     }
 
     override fun settings() {
+        cancelStreamingHaptics()
         reports.actions.add("settings")
         settingsOrigin = _state.value.page
         cancelList()
@@ -677,6 +734,7 @@ constructor(
     }
 
     override fun newChat() {
+        cancelStreamingHaptics()
         reports.actions.add("newChat")
         if (_state.value.busy) return
         chatOrigin = "home"
@@ -686,6 +744,7 @@ constructor(
         viewModelScope.launch {
             selection++
             timeline.clear()
+            hapticTurn = null
             buffered.clear()
             hydrating = false
             val draft = local.get("draft/new")
@@ -758,8 +817,10 @@ constructor(
     }
 
     private suspend fun loadTask(id: String) {
+        cancelStreamingHaptics()
         val n = ++selection
         timeline.clear()
+        hapticTurn = null
         buffered.clear()
         hydrating = true
         _state.update {
@@ -829,6 +890,8 @@ constructor(
                 history.list("data").reversed(),
                 buffered.filter { it.map("params").str("threadId") == id },
             )
+            hapticTurn = timeline.activeTurn ?: timeline.values().lastOrNull()?.turn
+            streamingHaptics.baseline(id, hapticTurn)
             buffered.removeAll {
                 !it.containsKey("id") &&
                     it.str("method") != "serverRequest/resolved" &&
@@ -872,7 +935,7 @@ constructor(
                 hydrating = false
                 val queued = buffered.toList()
                 buffered.clear()
-                queued.forEach { applyEvent(it) }
+                queued.forEach { applyEvent(it, live = false) }
                 _state.update { it.copy(busy = false) }
                 publish()
             }
@@ -2107,6 +2170,7 @@ constructor(
     private fun handle(event: JsonObject) {
         if (event.str("_epoch").toLongOrNull()?.let { it != rpc.generation } == true) return
         if (event.str("method") == "connection/lost") {
+            cancelStreamingHaptics()
             activityMonitor.disconnected()
             requests.clear()
             _state.update {
@@ -2153,7 +2217,7 @@ constructor(
         applyEvent(event)
     }
 
-    private fun applyEvent(event: JsonObject) {
+    private fun applyEvent(event: JsonObject, live: Boolean = true) {
         val method = event.str("method")
         val p = event.map("params")
         if (event.containsKey("id")) {
@@ -2178,7 +2242,26 @@ constructor(
             refreshQueue()
             return
         }
+        val textEvent = method in setOf("item/agentMessage/delta", "item/plan/delta", "item/started", "item/completed")
+        val itemId = p.str("itemId").ifEmpty { p.map("item").str("id") }
+        val turnId = p.str("turnId")
+        val beforeText = if (textEvent) timeline.values().firstOrNull { it.turn == turnId && it.id == itemId }?.text.orEmpty() else ""
         timeline.event(method, p)
+        if (method == "turn/started") {
+            hapticTurn = p.map("turn").str("id")
+            if (live) streamingHaptics.begin(p.str("threadId"), hapticTurn!!, hapticConversationActive())
+        }
+        if (live && textEvent && turnId.isNotBlank() && itemId.isNotBlank() &&
+            turnId == hapticTurn) {
+            val entry = timeline.values().firstOrNull { it.turn == turnId && it.id == itemId }
+            if (entry != null && entry.kind in setOf("agentMessage", "plan") && entry.text.isNotBlank() &&
+                entry.text != beforeText && (method.endsWith("/delta") || entry.text.length > beforeText.length)) {
+                val update = LiveAssistantText(p.str("threadId"), turnId, itemId, ++liveTextRevision,
+                    entry.text.length, entry.text.hashCode())
+                streamingHaptics.live(update, hapticConversationActive())
+                _state.update { it.copy(liveAssistantText = update) }
+            }
+        }
         if (method == "thread/settings/updated") {
             val settings = p.map("threadSettings")
             if (settings.containsKey("serviceTier")) speedRevision++

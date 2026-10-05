@@ -29,6 +29,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.codexops.core.*
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
@@ -44,6 +46,8 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
     val cover = LocalAppWindowClass.current.coverScreen
     var confirmUnlock by remember { mutableStateOf(false) }
     val scroll = rememberLazyListState()
+    val haptics = LocalAppHaptics.current
+    val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
     var followLatest by remember { mutableStateOf(true) }
     var initiallyPositioned by remember { mutableStateOf(false) }
     val readingScroll = remember(scroll) {
@@ -151,6 +155,21 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
                             st.queueReady &&
                             st.journal == null,
                     onImplement = { actions.implementPlan(entry.key) },
+                    onTextRendered = st.liveAssistantText?.takeIf {
+                        it.thread == st.thread && it.key == entry.key &&
+                            it.textLength == entry.text.length && it.textHash == entry.text.hashCode()
+                    }?.let { update ->
+                        {
+                            val layout = scroll.layoutInfo
+                            val item = layout.visibleItemsInfo.firstOrNull { it.key == entry.key }
+                            val visible = followLatest && st.appForeground && st.ready &&
+                                lifecycle.isAtLeast(Lifecycle.State.RESUMED) && layout.viewportSize.height > 0 &&
+                                item != null && item.offset < layout.viewportEndOffset &&
+                                item.offset + item.size > layout.viewportStartOffset &&
+                                item.offset + item.size <= layout.viewportEndOffset
+                            actions.assistantTextRendered(update, visible)?.let(haptics::stream)
+                        }
+                    },
                 )
             }
             items(st.decisions, key = { it.key }) { decision ->
@@ -321,6 +340,7 @@ private fun Message(
     visualizationScope: String,
     canImplement: Boolean,
     onImplement: () -> Unit,
+    onTextRendered: (() -> Unit)? = null,
 ) {
     var expanded by rememberSaveable(entry.key) { mutableStateOf(false) }
     var planFullscreen by rememberSaveable(entry.key) { mutableStateOf(false) }
@@ -348,7 +368,7 @@ private fun Message(
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             MediaGallery(entry.media, actions)
             if (entry.text.isNotBlank())
-                VisualizationAwareMarkdown(entry.text.take(100000), visualizationScope, entry.completed, actions)
+                VisualizationAwareMarkdown(entry.text.take(100000), visualizationScope, entry.completed, actions, onTextRendered)
         }
     else if (entry.kind == "plan") {
         Card(
@@ -373,7 +393,7 @@ private fun Message(
                         Text("Full screen")
                     }
                 }
-                SelectionContainer { FileAwareMarkdown(entry.text.take(100000), actions) }
+                SelectionContainer { FileAwareMarkdown(entry.text.take(100000), actions, onTextRendered) }
                 if (canImplement)
                     Button(
                         onClick = onImplement,

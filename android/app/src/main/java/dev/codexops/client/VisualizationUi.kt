@@ -27,13 +27,15 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.*
 
 @Composable
-internal fun VisualizationAwareMarkdown(text: String, scope: String, completed: Boolean, actions: ConversationActions) {
+internal fun VisualizationAwareMarkdown(text: String, scope: String, completed: Boolean, actions: ConversationActions,
+    onRendered: (() -> Unit)? = null) {
     val parts = remember(text) { visualizationParts(text) }
+    val lastText = parts.indexOfLast { it is VisualizationPart.Markdown }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         parts.forEachIndexed { index, part ->
             when (part) {
                 is VisualizationPart.Markdown -> if (part.text.isNotBlank())
-                    SelectionContainer { FileAwareMarkdown(part.text, actions) }
+                    SelectionContainer { FileAwareMarkdown(part.text, actions, if (index == lastText) onRendered else null) }
                 is VisualizationPart.Visual -> key(scope, index, part.reference.path) {
                     val stateKey = remember(scope, index, part.reference.path) {
                         MessageDigest.getInstance("SHA-256")
