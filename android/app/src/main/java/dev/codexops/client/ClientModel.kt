@@ -2284,8 +2284,10 @@ constructor(
         viewModelScope.launch {
             guarded {
                 if (requests[decision.key] != decision || !_state.value.ready) return@guarded
-                if (decision.method == "item/fileChange/requestApproval" && result.str("decision") == "accept" &&
-                    fileApprovalContexts.text(decision).isBlank()) return@guarded
+                if (decision.method in setOf("item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/permissions/requestApproval") &&
+                    !ApprovalChoices.validResult(decision, result)) return@guarded
+                if (decision.method == "item/fileChange/requestApproval" && fileApprovalContexts.text(decision).isBlank() &&
+                    ApprovalChoices.choices(decision).any { it.result == result && it.grantsAccess }) return@guarded
                 requests.remove(decision.key)
                 cancelUnusedApprovalContextRecovery()
                 publish()

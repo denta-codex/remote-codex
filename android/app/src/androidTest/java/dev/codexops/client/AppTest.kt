@@ -4438,9 +4438,14 @@ class AppTest {
             approvalResumeRequests.size == 2 && model.state.value.fileApprovalContexts["88"] == FileApprovalContext()
         }
         compose.onNodeWithText("Approve once").assertIsNotEnabled()
+        compose.onNodeWithText("More choices").performScrollTo().performClick()
+        compose.onNodeWithText("Approve for session").assertIsNotEnabled()
         compose.onNodeWithText("Approval details unavailable. Open this task on desktop.").assertExists()
         val decision = model.state.value.decisions.single()
-        compose.runOnUiThread { model.answer(decision, Decisions.result(decision, true)) }
+        compose.runOnUiThread {
+            model.answer(decision, obj("decision" to s("accept")))
+            model.answer(decision, obj("decision" to s("acceptForSession")))
+        }
         compose.waitForIdle()
         assertTrue(serverRequestResponses.isEmpty())
         peer!!.send(obj("method" to s("item/started"), "params" to obj(
@@ -4460,9 +4465,12 @@ class AppTest {
             )),
         ))
         compose.waitUntil(5000) { model.state.value.fileApprovalContexts["88"]?.text == "latest.kt\n-before\n+latest" }
-        compose.onNodeWithText("Decline").performScrollTo().performClick()
+        compose.onNodeWithText("Approve for session").assertIsEnabled().performScrollTo().performClick()
+        compose.onNodeWithText("Confirm").assertExists()
+        assertTrue(serverRequestResponses.isEmpty())
+        compose.onNodeWithText("Confirm").performClick()
         compose.waitUntil(5000) { serverRequestResponses.size == 1 }
-        assertEquals(obj("decision" to s("decline")), serverRequestResponses.single().map("result"))
+        assertEquals(obj("decision" to s("acceptForSession")), serverRequestResponses.single().map("result"))
     }
 
     @Test
@@ -4482,7 +4490,7 @@ class AppTest {
         compose.runOnUiThread { model.foreground(true) }
         compose.waitUntil(15000) { model.state.value.ready && !model.state.value.busy && approvalResumeRequests.size == 2 }
         assertTrue(model.state.value.decisions.isEmpty())
-        compose.runOnUiThread { model.answer(oldDecision, Decisions.result(oldDecision, true)) }
+        compose.runOnUiThread { model.answer(oldDecision, obj("decision" to s("accept"))) }
         compose.waitForIdle()
         assertEquals(1, serverRequestResponses.size)
         // Reusing the numeric ID is safe only after a fresh request arrives from stock.
@@ -4512,7 +4520,7 @@ class AppTest {
         peer!!.send(obj("id" to held["id"], "result" to obj(
             "thread" to obj("id" to s("task-test")), "initialTurnsPage" to fileApprovalPage(),
         )).toString())
-        compose.runOnUiThread { model.answer(oldDecision, Decisions.result(oldDecision, true)) }
+        compose.runOnUiThread { model.answer(oldDecision, obj("decision" to s("accept"))) }
         holdApprovalContextReply = false
         peer!!.send(fileApprovalRequest(99).toString())
         compose.waitUntil(5000) {
@@ -4557,6 +4565,108 @@ class AppTest {
             "threadId" to s("task-test"), "turnId" to s("approval-turn"), "itemId" to s("patch"),
         ),
     )
+    @Test
+    fun extendedApprovalChoicesRequireConfirmationAndPreservePayload() {
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy }
+        val amendment = obj("acceptWithExecpolicyAmendment" to obj("execpolicy_amendment" to JsonArray(listOf(s("git"), s("status")))))
+        peer!!.send(obj("id" to JsonPrimitive(88), "method" to s("item/commandExecution/requestApproval"), "params" to obj(
+            "threadId" to s("task-test"), "turnId" to s("turn-test"), "itemId" to s("command"),
+            "kind" to s("writeStdin"), "approvalId" to s("stdin-callback"), "command" to s("git status\n"),
+            "startedAtMs" to JsonPrimitive(0),
+            "availableDecisions" to JsonArray(listOf(s("accept"), s("acceptForSession"), amendment, s("decline")))
+        )).toString())
+        compose.waitUntil(5000) { model.state.value.decisions.size == 1 }
+        compose.onNodeWithText("Send input to an existing terminal").assertExists()
+        compose.onNodeWithText("More choices").performScrollTo().performClick()
+        compose.onNodeWithText("Approve for session").assertExists()
+        compose.onNodeWithText("Approve and save command rule").performScrollTo().performClick()
+        compose.onNodeWithText("Confirm").assertExists()
+        assertTrue(userInputResponses.isEmpty())
+        compose.onNodeWithText("Back").performClick()
+        assertTrue(userInputResponses.isEmpty())
+        compose.onNodeWithText("Approve and save command rule").performScrollTo().performClick()
+        compose.onNodeWithText("Confirm").performClick()
+        compose.waitUntil(5000) { userInputResponses.size == 1 }
+        assertEquals(obj("decision" to amendment), userInputResponses.single())
+
+        peer!!.send(obj("id" to JsonPrimitive(89), "method" to s("item/commandExecution/requestApproval"), "params" to obj(
+            "threadId" to s("task-test"), "turnId" to s("turn-test"), "itemId" to s("command"),
+            "startedAtMs" to JsonPrimitive(0),
+            "availableDecisions" to JsonArray(listOf(s("cancel")))
+        )).toString())
+        compose.waitUntil(5000) { model.state.value.decisions.size == 1 }
+        compose.onNodeWithText("Approve once").assertDoesNotExist()
+        compose.onNodeWithText("Decline").assertDoesNotExist()
+        compose.onNodeWithText("More choices").performScrollTo().performClick()
+        compose.onNodeWithText("Deny and stop turn").performScrollTo().performClick()
+        compose.waitUntil(5000) { userInputResponses.size == 2 }
+        assertEquals(obj("decision" to s("cancel")), userInputResponses.last())
+    }
+
+    @Test
+    fun networkApprovalRulesConfirmTheHostAndExactAction() {
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy }
+        listOf("allow", "deny").forEachIndexed { index, action ->
+            val amendment = obj("applyNetworkPolicyAmendment" to obj("network_policy_amendment" to obj(
+                "host" to s("example.test"), "action" to s(action))))
+            peer!!.send(obj("id" to JsonPrimitive(88 + index), "method" to s("item/commandExecution/requestApproval"), "params" to obj(
+                "threadId" to s("task-test"), "turnId" to s("turn-test"), "itemId" to s("network"),
+                "startedAtMs" to JsonPrimitive(0),
+                "networkApprovalContext" to obj("host" to s("example.test"), "protocol" to s("https")),
+                "availableDecisions" to JsonArray(listOf(amendment))
+            )).toString())
+            compose.waitUntil(5000) { model.state.value.decisions.size == 1 }
+            compose.onNodeWithText("Approve once").assertDoesNotExist()
+            compose.onNodeWithText("More choices").performScrollTo().performClick()
+            compose.onNodeWithText("Save network $action rule").performScrollTo().performClick()
+            compose.onNodeWithText("${if (action == "allow") "Allow" else "Deny"} future network requests for example.test. This rule persists beyond this turn.").assertExists()
+            assertEquals(index, userInputResponses.size)
+            compose.onNodeWithText("Confirm").performClick()
+            compose.waitUntil(5000) { userInputResponses.size == index + 1 }
+            assertEquals(obj("decision" to amendment), userInputResponses.last())
+        }
+    }
+
+    @Test
+    fun permissionSelectionKeepsRestrictionsAndConfirmsSessionScope() {
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy }
+        fun entry(access: String, path: String) = obj("access" to s(access), "path" to obj("type" to s("path"), "path" to s(path)))
+        val read = entry("read", "/fixture/read")
+        val write = entry("write", "/fixture/write")
+        val deny = entry("deny", "/fixture/write/private")
+        fun request(id: Int) = obj("id" to JsonPrimitive(id), "method" to s("item/permissions/requestApproval"), "params" to obj(
+            "threadId" to s("task-test"), "turnId" to s("turn-test"), "itemId" to s("permissions"), "cwd" to s("/fixture"),
+            "startedAtMs" to JsonPrimitive(0),
+            "permissions" to obj("network" to obj("enabled" to JsonPrimitive(true)), "fileSystem" to obj(
+                "entries" to JsonArray(listOf(read, write, deny)), "globScanMaxDepth" to JsonPrimitive(4)))
+        ))
+        peer!!.send(request(88).toString())
+        compose.waitUntil(5000) { model.state.value.decisions.size == 1 }
+        compose.onNodeWithText("Selected permissions apply only to this turn.").assertExists()
+        compose.onNodeWithText("Network access").performScrollTo().performClick()
+        compose.onNodeWithText("read: /fixture/read").performScrollTo().performClick()
+        compose.onNodeWithText("Keep selected permissions for this session").performScrollTo().performClick()
+        compose.onNodeWithText("Approve for session").performScrollTo().performClick()
+        assertTrue(userInputResponses.isEmpty())
+        compose.onNodeWithText("Confirm").performClick()
+        compose.waitUntil(5000) { userInputResponses.size == 1 }
+        assertEquals(obj("permissions" to obj("fileSystem" to obj("entries" to JsonArray(listOf(write, deny)),
+            "globScanMaxDepth" to JsonPrimitive(4))), "scope" to s("session")), userInputResponses.single())
+
+        peer!!.send(request(89).toString())
+        compose.waitUntil(5000) { model.state.value.decisions.size == 1 }
+        val pending = model.state.value.decisions.single()
+        compose.runOnUiThread { model.answer(pending, obj("permissions" to obj("fileSystem" to obj("write" to JsonArray(listOf(s("/"))))), "scope" to s("session"))) }
+        compose.waitForIdle()
+        assertEquals(1, userInputResponses.size)
+        assertEquals(1, model.state.value.decisions.size)
+        compose.onNodeWithText("Decline").performScrollTo().performClick()
+        compose.waitUntil(5000) { userInputResponses.size == 2 }
+        assertEquals(obj("permissions" to obj(), "scope" to s("turn")), userInputResponses.last())
+    }
 
     @Test
     fun approvalStillWaitsForPhoneDecision() {

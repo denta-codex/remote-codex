@@ -341,16 +341,6 @@ object Decisions {
             id to obj("answers" to JsonArray(values))
         }))
 
-    fun result(decision: Decision, accept: Boolean): JsonObject =
-        when (decision.method) {
-            "item/permissions/requestApproval" ->
-                obj(
-                    "permissions" to if (accept) decision.params.map("permissions") else obj(),
-                    "scope" to s("turn"),
-                )
-            else -> obj("decision" to s(if (accept) "accept" else "decline"))
-        }
-
     fun answers(answers: Map<String, String>) =
         obj(
             "answers" to

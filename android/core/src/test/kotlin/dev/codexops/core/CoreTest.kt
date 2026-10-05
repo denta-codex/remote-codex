@@ -379,8 +379,9 @@ class CoreTest {
                 obj("permissions" to obj("network" to obj("enabled" to JsonPrimitive(true)))),
                 1,
             )
-        assertEquals(obj(), Decisions.result(d, false).map("permissions"))
-        assertEquals("turn", Decisions.result(d, true).str("scope"))
+        val selection = PermissionSelection(d)
+        assertEquals(obj(), selection.result(emptySet()).map("permissions"))
+        assertEquals("turn", selection.result(setOf("network")).str("scope"))
     }
 
     @Test

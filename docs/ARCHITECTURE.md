@@ -255,7 +255,9 @@ OpenAI forms and verification modes require desktop. URL requests display the
 destination before an explicit external-browser action. Accepting a URL request
 means consent to proceed, not proof of completion; browser return and request
 resolution never establish completion. Uncertain responses are never replayed.
-No auto-approval is performed. Permission grants are limited to the current turn.
+No auto-approval is performed. Permission grants default to the current turn;
+broader session grants require explicit confirmation. Every granting file-approval
+choice also requires matching recovered context.
 
 The project browser supplies `projectId` plus the chosen absolute
 `workingDirectory`; the workspace adapter validates both with `project/read`.

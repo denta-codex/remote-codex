@@ -20,6 +20,12 @@
   tests, app unit tests, instrumentation compilation, and the snapshot-before-
   history and reconnect-ownership emulator fixtures. The only merge conflict was
   documentation; both approval recovery and MCP behavior were preserved.
+- The subsequent approval-choice update on main `1c6b29c` was also integrated.
+  Context, dispatcher, approval-choice, and app unit tests passed, as did three
+  focused emulator fixtures for recovery before history, reconnect ownership,
+  and missing-details retry. The retry fixture also verifies that once/session
+  grants cannot bypass missing context and that recovered session grants still
+  require confirmation.
 - These are stock-contract fixtures, not a live-account or physical-phone
   acceptance run. No release, publication, deployment, or phone installation
   was performed.
