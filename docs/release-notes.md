@@ -1,6 +1,5 @@
-- Persist new-task model and reasoning defaults through Codex config
-- Add Todo status swipes and persistent phone-local drag ordering
-- Fix Todo refresh icon and create tasks in the selected column
-- Merge branch 'main' into fix/persist-new-task-model
-- Merge Todo refresh icon and selected-column creation fixes
-- Merge branch 'main' into fix/persist-new-task-model
+- Add a subtle estimated chat-cost badge with price sources and explanations for unknown, partial, or stale estimates. Estimates use the server's published catalog and recorded request history; subscription usage is not an extra charge.
+- Add send feedback and fading streaming haptics.
+- Support stock question forms, MCP elicitation forms, URL consent, and complete approval choices.
+- Recover file approval details across reconnects.
+- Improve client-time responses and guidance for task tools.
