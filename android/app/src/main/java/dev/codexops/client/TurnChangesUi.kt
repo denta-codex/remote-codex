@@ -48,12 +48,18 @@ internal fun TurnChangesRow(changes: ConversationRow.Changes, open: () -> Unit) 
 }
 
 @Composable
-internal fun TurnChangesViewer(changes: ConversationRow.Changes, onDismiss: () -> Unit) {
+internal fun TurnChangesViewer(
+    changes: ConversationRow.Changes,
+    subtitle: String = "This reply",
+    tagPrefix: String = "turn",
+    refresh: (() -> Unit)? = null,
+    onDismiss: () -> Unit,
+) {
     var selectedPath by rememberSaveable(changes.turn) { mutableStateOf<String?>(null) }
     val file = changes.files.firstOrNull { it.path == selectedPath }
     val back = { if (file == null) onDismiss() else selectedPath = null }
     Dialog(onDismissRequest = back, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        Surface(Modifier.fillMaxSize().testTag("turn-changes-fullscreen"), color = MaterialTheme.colorScheme.background) {
+        Surface(Modifier.fillMaxSize().testTag("$tagPrefix-changes-fullscreen"), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize().safeDrawingPadding()) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically) {
@@ -61,16 +67,20 @@ internal fun TurnChangesViewer(changes: ConversationRow.Changes, onDismiss: () -
                     Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
                         Text(if (file == null) "Changed files" else file.path.substringAfterLast('/'),
                             style = MaterialTheme.typography.titleMedium)
-                        Text("This reply", style = MaterialTheme.typography.labelSmall,
+                        Text(subtitle, style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    refresh?.let { action ->
+                        IconButton(action, Modifier.testTag("refresh-git-changes")) { Glyph(R.drawable.ic_refresh, "Refresh changes") }
                     }
                 }
                 HorizontalDivider()
                 if (file == null) {
                     LazyColumn(Modifier.fillMaxSize().testTag("changed-files"), contentPadding = PaddingValues(12.dp)) {
+                        if (changes.files.isEmpty()) item { Text("No changes in this worktree.", Modifier.padding(12.dp)) }
                         items(changes.files, key = { it.path }) { changed ->
                             Row(Modifier.fillMaxWidth().heightIn(min = 56.dp)
-                                .clickable(role = Role.Button, onClickLabel = "View recorded changes") { selectedPath = changed.path }
+                                .clickable(role = Role.Button, onClickLabel = "View file changes") { selectedPath = changed.path }
                                 .testTag("changed-file-${changed.path}").padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -91,7 +101,8 @@ internal fun TurnChangesViewer(changes: ConversationRow.Changes, onDismiss: () -
                                 val movePath = patch["kind"]?.let { (it as? kotlinx.serialization.json.JsonObject)?.str("movePath") }.orEmpty()
                                 if (movePath.isNotBlank()) Text("Renamed to $movePath", style = MaterialTheme.typography.bodySmall)
                                 val diff = patch.str("diff")
-                                if (diff.isBlank()) Text("No text diff recorded", style = MaterialTheme.typography.bodyMedium)
+                                if (diff.isBlank()) Text(if (tagPrefix == "worktree") "Empty file or no text diff available" else "No text diff recorded",
+                                    style = MaterialTheme.typography.bodyMedium)
                                 else RecordedPatch(diff)
                             }
                         }

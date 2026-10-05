@@ -23,7 +23,7 @@ class ChatCostTest {
         assertFalse(usage.incomplete)
         val cost = estimateChatCost(usage, listOf(model()))
         assertEquals(0.00538, cost.usd!!, 0.0000001)
-        assertEquals("≈<\$0.01", cost.label)
+        assertEquals("~<\$0.01", cost.label)
     }
 
     @Test fun historicalModelAndTierChangesKeepTheirOwnRatesAndExplicitAliases() {
@@ -41,7 +41,7 @@ class ChatCostTest {
         val zero = model(price = 0.0).let { it.copy(pricing = it.pricing!!.copy(stale = true,
             rates = listOf(ModelPriceRate("standard", "short", 0.0, 0.0, 0.0, 0.0)))) }
         val cost = estimateChatCost(data, listOf(zero))
-        assertEquals("≈\$0.00", cost.label)
+        assertEquals("~\$0.00", cost.label)
         assertTrue(cost.staleRates)
         assertEquals(listOf("source"), cost.sources)
         val unknown = estimateChatCost(data, emptyList())

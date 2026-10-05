@@ -13,7 +13,7 @@ import androidx.compose.ui.unit.dp
 @Composable
 internal fun ChatCostBadge(cost: ChatCost) {
     var details by remember { mutableStateOf(false) }
-    TextButton(onClick = { details = true }, modifier = Modifier.testTag("chat-cost").semantics {
+    TextButton(onClick = { details = true }, modifier = Modifier.heightIn(min = 48.dp).testTag("chat-cost").semantics {
         contentDescription = "Estimated chat cost ${cost.label}" +
             (if (cost.partial) ", partial" else "") +
             (if (cost.staleRates || cost.staleUsage) ", stale" else "")
@@ -21,6 +21,8 @@ internal fun ChatCostBadge(cost: ChatCost) {
         colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant)) {
         Text(cost.label + if (cost.partial || cost.staleRates || cost.staleUsage) "*" else "",
             maxLines = 1, style = MaterialTheme.typography.labelMedium)
+        Spacer(Modifier.width(6.dp))
+        Glyph(R.drawable.ic_chevron, modifier = Modifier.size(14.dp))
     }
     if (details) AlertDialog(
         onDismissRequest = { details = false },

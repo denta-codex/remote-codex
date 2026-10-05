@@ -20,7 +20,7 @@ data class ChatCost(
     val fetchedAt: List<String> = emptyList(),
 ) {
     val label: String get() = usd?.let {
-        if (it > 0 && it < 0.01) "≈<\$0.01" else String.format(Locale.US, "≈\$%.2f", it)
+        if (it > 0 && it < 0.01) "~<\$0.01" else String.format(Locale.US, "~\$%.2f", it)
     } ?: "\$—"
 }
 

@@ -199,7 +199,7 @@ class AppTest {
         historyOverride = obj("data" to JsonArray(emptyList()))
         compose.runOnUiThread { model.foreground(true); model.openTask("task-test") }
         compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy }
-        compose.onNodeWithTag("git-changes").assertDoesNotExist()
+        compose.onNodeWithTag("conversation-summary").assertIsDisplayed()
         emit(peer!!, "turn/started", obj("turn" to obj("id" to s("edits-turn"), "status" to s("inProgress"))))
         emit(peer!!, "item/completed", obj("turnId" to s("edits-turn"), "item" to recordedEdit()))
         emit(peer!!, "item/completed", obj("turnId" to s("edits-turn"), "item" to obj(
@@ -232,10 +232,10 @@ class AppTest {
     }
 
     @Test
-    fun discussionHasNoChangesChrome() {
+    fun discussionShowsCleanWorktreeWithoutRecordedChanges() {
         val gitReads = AtomicInteger()
         browserResponse = { method, params ->
-            if (method == "command/exec" && params.toString().contains("remote-codex-changes")) gitReads.incrementAndGet()
+            if (method == "command/exec" && params.toString().contains("remote-codex-worktree")) gitReads.incrementAndGet()
             null
         }
         historyOverride = obj("data" to JsonArray(listOf(obj("id" to s("discussion"), "status" to s("completed"),
@@ -246,10 +246,11 @@ class AppTest {
             runCatching { compose.onNodeWithText("Here is the explanation.").assertIsDisplayed() }.isSuccess
         }
         captureComposer("recorded-changes-discussion.png")
-        compose.onNodeWithTag("git-changes").assertDoesNotExist()
+        compose.waitUntil(5000) { model.state.value.worktreeChanges.status == WorktreeStatus.Ready }
+        compose.onNodeWithTag("git-changes").assertIsDisplayed().assertTextContains("0 files")
         compose.onNodeWithTag("refresh-git-changes").assertDoesNotExist()
         compose.onNodeWithTag("turn-changes-discussion").assertDoesNotExist()
-        assertEquals(0, gitReads.get())
+        assertTrue(gitReads.get() > 0)
     }
 
     @Test
@@ -323,7 +324,8 @@ class AppTest {
         compose.onNodeWithContentDescription("New chat").assertIsDisplayed().performClick()
         compose.waitUntil(5000) { model.state.value.page == "chat" }
         compose.onNodeWithTag("composer").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.onNodeWithTag("app-menu").performClick()
+        compose.onNodeWithText("Settings").performClick()
         compose.onNodeWithContentDescription("Back").performClick()
         compose.waitUntil(5000) { model.state.value.page == "chat" }
         compose.onNodeWithTag("composer").assertIsDisplayed()
@@ -673,7 +675,7 @@ class AppTest {
 
     @Before
     fun setup() {
-        reportCoverOverride = testName.methodName in setOf("systemScreenshotOffersReportWithTheCapturedWindow", "commandTrayCoverLargeTextKeepsActionsReachable", "coverCameraDockKeepsActionsLeftAndFunctional", "coverChatToolbarAvoidsCutoutWithHiddenStatusBar", "coverComposerUsesAvailableHeightAboveBottomCutout", "addProjectCoverPickerKeepsActionsReachable")
+        reportCoverOverride = testName.methodName in setOf("systemScreenshotOffersReportWithTheCapturedWindow", "commandTrayCoverLargeTextKeepsActionsReachable", "coverCameraDockKeepsActionsLeftAndFunctional", "coverChatToolbarAvoidsCutoutWithHiddenStatusBar", "coverComposerUsesAvailableHeightAboveBottomCutout", "addProjectCoverPickerKeepsActionsReachable", "floatingSummaryCoverKeepsBothTapTargetsAndComposerVisible")
         if (coverScreen || landscapeScreen || reportCoverOverride) {
             shell(if (landscapeScreen) "wm size 2992x1224" else "wm size 1080x1272")
             shell(when {
@@ -949,6 +951,8 @@ class AppTest {
                                             }
                                             "command/exec" -> {
                                                 when {
+                                                    "remote-codex-worktree" in command -> obj("exitCode" to JsonPrimitive(0),
+                                                        "stdout" to s("remote-codex-worktree-v1\u0000ready\u0000/fixture/remote-codex\u0000end\u0000"))
                                                     "get-url" in command -> obj("exitCode" to JsonPrimitive(0), "stdout" to s("git@github.com:denta-codex/remote-codex.git\n"))
                                                     "remote-codex-environment" in command -> {
                                                         environmentSetups.incrementAndGet()
@@ -1766,7 +1770,8 @@ class AppTest {
         compose.onNodeWithText("Hello from Grace").assertIsDisplayed()
         assertEquals(1, sent.get())
         demoPause(2500)
-        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.onNodeWithTag("app-menu").performClick()
+        compose.onNodeWithText("Settings").performClick()
         compose.onNodeWithText("Scan setup QR").assertIsDisplayed()
         compose.onNodeWithText("Check for updates").performScrollTo().assertIsDisplayed()
         demoPause(2000)
@@ -1854,6 +1859,9 @@ class AppTest {
                         listOf(android.graphics.Rect(0, 0, 100, cutoutTop)),
                     ))
                     .build()
+                // Remeasurement requests fresh platform insets. Keep the injected
+                // cutout authoritative instead of letting the real status bar replace it.
+                androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(compose.activity.window.decorView) { _, _ -> insets }
                 androidx.core.view.ViewCompat.dispatchApplyWindowInsets(compose.activity.window.decorView, insets)
             }
             compose.waitForIdle()
@@ -1861,7 +1869,8 @@ class AppTest {
                 compose.onNodeWithText(title, useUnmergedTree = true),
                 compose.onNodeWithText(model.state.value.connection, useUnmergedTree = true),
                 compose.onNodeWithContentDescription(action),
-                compose.onNodeWithContentDescription("Settings"),
+                if (model.state.value.page == "chat") compose.onNodeWithTag("app-menu")
+                else compose.onNodeWithContentDescription("Settings"),
             )) {
                 node.assertIsDisplayed()
                 val visible = node.fetchSemanticsNode().boundsInRoot
@@ -1871,7 +1880,7 @@ class AppTest {
                 assertEquals("Toolbar content is clipped", (full.bottom - full.top).value * density, visible.height, 1f)
             }
         }
-        assertToolbar("Fixture task", "Copy deeplink")
+        assertToolbar("Fixture task", "More options")
         compose.onNodeWithContentDescription("Back").performClick()
         assertToolbar("Chats", "New chat")
         // The cover display can be entered while the app is already running.
@@ -2059,7 +2068,9 @@ class AppTest {
                 !model.state.value.busy
         }
 
-        compose.onNodeWithContentDescription("Copy deeplink").performClick()
+        compose.onNodeWithContentDescription("Copy deeplink").assertDoesNotExist()
+        compose.onNodeWithTag("app-menu").performClick()
+        compose.onNodeWithText("Copy deeplink").performClick()
 
         val clipboard = app.getSystemService(ClipboardManager::class.java)
         compose.waitUntil(5000) {
@@ -2742,6 +2753,82 @@ class AppTest {
     }
 
     @Test
+    fun floatingSummaryCoverKeepsBothTapTargetsAndComposerVisible() {
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                RemoteTheme {
+                    val density = androidx.compose.ui.platform.LocalDensity.current
+                    CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides
+                        androidx.compose.ui.unit.Density(density.density, fontScale = 1.3f)) { App(model) }
+                }
+            }
+        }
+        floatingSummaryShowsNetChangesRefreshesAndKeepsHeaderActionsInMenu()
+    }
+
+    @Test
+    fun floatingSummaryShowsNetChangesRefreshesAndKeepsHeaderActionsInMenu() {
+        fixtureTitle = "README worktree changes"
+        val reads = CopyOnWriteArrayList<JsonObject>()
+        var unavailable = false
+        var files = listOf(listOf("README.md", "1", "1", "@@ -1 +1 @@\n-old\n+new"))
+        browserResponse = { method, params ->
+            if (method == "command/exec" && (params["command"] as? JsonArray)?.any { it.jsonPrimitive.content == "remote-codex-worktree" } == true) {
+                reads += params
+                if (unavailable) obj("exitCode" to JsonPrimitive(1))
+                else obj("exitCode" to JsonPrimitive(0), "stdout" to s(
+                    (listOf("remote-codex-worktree-v1", "ready", "/fixture/remote-codex") + files.flatten() + listOf("end", ""))
+                        .joinToString("\u0000")))
+            } else null
+        }
+        compose.runOnUiThread { model.foreground(true); model.openTask("task-test") }
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.worktreeChanges.files.size == 1 }
+        compose.onNodeWithText(fixtureTitle).assertIsDisplayed()
+        compose.onNodeWithText("Connected to Grace").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Settings").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Copy deeplink").assertDoesNotExist()
+        val summary = compose.onNodeWithTag("conversation-summary")
+        summary.assertIsDisplayed()
+        compose.onNodeWithTag("git-changes").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+            .assertTextContains("1 file").assertTextContains("+1").assertTextContains("−1")
+        compose.onNodeWithTag("chat-cost").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        val pill = summary.fetchSemanticsNode().boundsInRoot
+        assertTrue(pill.top >= compose.onNodeWithTag("timeline").fetchSemanticsNode().boundsInRoot.bottom)
+        assertTrue(pill.bottom <= compose.onNodeWithTag("composer").fetchSemanticsNode().boundsInRoot.top)
+        captureComposer("floating-summary-a.png")
+        compose.onNodeWithTag("git-changes").performClick()
+        compose.onNodeWithTag("worktree-changes-fullscreen").assertIsDisplayed()
+        compose.onNodeWithTag("changed-file-README.md").performClick()
+        compose.onNodeWithText("@@ -1 +1 @@\n-old\n+new").assertIsDisplayed()
+        compose.onNodeWithTag("changes-back").performClick()
+        files = files + listOf(listOf("new.txt", "2", "0", "@@ -0,0 +1,2 @@\n+one\n+two"))
+        compose.onNodeWithTag("refresh-git-changes").performClick()
+        compose.waitUntil(5000) { model.state.value.worktreeChanges.files.size == 2 }
+        compose.onNodeWithTag("changed-file-new.txt").assertIsDisplayed()
+        unavailable = true
+        compose.onNodeWithTag("refresh-git-changes").performClick()
+        compose.waitUntil(5000) { model.state.value.worktreeChanges.stale }
+        assertEquals(3L, model.state.value.worktreeChanges.added)
+        compose.onNodeWithTag("changes-back").performClick()
+        compose.onNodeWithTag("git-changes").assertTextContains("−1*")
+        unavailable = false
+        files = emptyList()
+        emit(peer!!, "turn/completed", obj("turn" to obj("id" to s("turn-test"), "status" to s("completed"))))
+        compose.waitUntil(5000) { !model.state.value.worktreeChanges.stale && model.state.value.worktreeChanges.files.isEmpty() }
+        compose.onNodeWithTag("git-changes").assertTextContains("0 files")
+        compose.onNodeWithTag("git-changes").performClick()
+        compose.onNodeWithText("No changes in this worktree.").assertIsDisplayed()
+        compose.onNodeWithTag("changes-back").performClick()
+        compose.onNodeWithTag("app-menu").performClick()
+        compose.onNodeWithText("Settings").performClick()
+        compose.onNodeWithText("Scan setup QR").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
+        assertTrue(reads.all { it.map("sandboxPolicy").str("type") == "readOnly" })
+        assertEquals(0, sent.get())
+    }
+
+    @Test
     fun chatCostBadgeReadsHistoryUpdatesAndExplainsStaleAndUnknownPrices() {
         compose.waitUntil(10000) { model.state.value.ready }
         var unavailable = false
@@ -2771,7 +2858,8 @@ class AppTest {
         compose.waitUntil(10000) { model.state.value.models.any { it.enrichment != null } }
         compose.onNodeWithText(fixtureTitle).performClick()
         compose.waitUntil(10000) { model.state.value.chatCost.usd != null }
-        compose.onNodeWithTag("chat-cost").assertIsDisplayed().assertTextContains("≈\$5.28")
+        compose.onNodeWithTag("chat-cost").assertIsDisplayed().assertTextContains("~\$5.28")
+        captureComposer("floating-summary-cost.png")
         compose.onNodeWithTag("chat-cost").performClick()
         compose.onNodeWithText("Estimated chat cost").assertIsDisplayed()
         compose.onNodeWithText("Subscription usage is not an extra charge.", substring = true).assertIsDisplayed()
@@ -2780,12 +2868,12 @@ class AppTest {
         rollout += event(doubled)
         emit(peer!!, "thread/tokenUsage/updated", obj("turnId" to s("turn-test")))
         compose.waitUntil(10000) { model.state.value.chatCost.requests == 2 }
-        compose.onNodeWithTag("chat-cost").assertTextContains("≈\$10.56")
+        compose.onNodeWithTag("chat-cost").assertTextContains("~\$10.56")
         unavailable = true
         emit(peer!!, "thread/tokenUsage/updated", obj("turnId" to s("turn-test")))
         compose.runOnUiThread { model.refreshModels() }
         compose.waitUntil(10000) { model.state.value.chatCost.staleUsage && model.state.value.chatCost.staleRates }
-        compose.onNodeWithTag("chat-cost").assertTextContains("≈\$10.56*")
+        compose.onNodeWithTag("chat-cost").assertTextContains("~\$10.56*")
 
         unavailable = false
         catalog = """{"models":[],"remote_codex":{"schema_version":1,"revision":"${"b".repeat(64)}","models":[]}}"""

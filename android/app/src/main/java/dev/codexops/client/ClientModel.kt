@@ -147,6 +147,8 @@ constructor(
             activityMonitor.read(thread, signature)
     }
     private var selection = 0
+    private val worktreeRefresh = MutableStateFlow(0L)
+    override fun refreshWorktreeChanges() { worktreeRefresh.value++ }
     private var speedRevision = 0
     private val modelDefaultsMutex = Mutex()
     private var uncertainModelDefaultsGeneration: Long? = null
@@ -216,6 +218,42 @@ constructor(
         }
 
     init {
+        viewModelScope.launch {
+            state.map { st ->
+                Triple(st.ready && st.appForeground && st.page == "chat", st.thread, st.threadCwd)
+            }.distinctUntilChanged().collectLatest { (active, thread, cwd) ->
+                if (thread == null || cwd == null) {
+                    _state.update { it.copy(worktreeChanges = WorktreeChanges()) }
+                    return@collectLatest
+                }
+                if (!active) {
+                    _state.update { it.copy(worktreeChanges = it.worktreeChanges.copy(stale = true)) }
+                    return@collectLatest
+                }
+                val selected = selection
+                val generation = rpc.generation
+                fun current() = selection == selected && rpc.generation == generation &&
+                    _state.value.let { it.ready && it.appForeground && it.page == "chat" && it.thread == thread && it.threadCwd == cwd }
+                if (_state.value.worktreeChanges.cwd != cwd)
+                    _state.update { it.copy(worktreeChanges = WorktreeChanges(cwd = cwd)) }
+                while (current()) {
+                    val revision = worktreeRefresh.value
+                    try {
+                        val changes = readWorktreeChanges(rpc, cwd)
+                        if (current()) _state.update { it.copy(worktreeChanges = changes) }
+                    } catch (e: Exception) {
+                        if (e is CancellationException && e !is TimeoutCancellationException) throw e
+                        if (current()) _state.update { st ->
+                            val previous = st.worktreeChanges
+                            st.copy(worktreeChanges = if (previous.status == WorktreeStatus.Ready)
+                                previous.copy(stale = true) else WorktreeChanges(cwd = cwd, status = WorktreeStatus.Error))
+                        }
+                    }
+                    // Only read while this chat is visible. Refresh immediately for edits or an explicit tap.
+                    withTimeoutOrNull(10_000) { worktreeRefresh.first { it != revision } }
+                }
+            }
+        }
         viewModelScope.launch {
             state.map { Triple(it.page == "todo", it.ready, it.appForeground) }.distinctUntilChanged()
                 .collect { (visible, ready, foreground) ->
@@ -846,6 +884,7 @@ constructor(
                         thread = null,
                         threadCwd = null,
                         chatCost = ChatCost(),
+                        worktreeChanges = WorktreeChanges(),
                         title = "New chat",
                         entries = emptyList(),
                         turnStatuses = emptyMap(),
@@ -928,6 +967,7 @@ constructor(
                 thread = id,
                 threadCwd = null,
                 chatCost = ChatCost(),
+                worktreeChanges = WorktreeChanges(),
                 title = "Conversation",
                 entries = emptyList(),
                 fileApprovalContexts = emptyMap(),
@@ -2481,6 +2521,9 @@ constructor(
                 it.copy(attention = p.map("status")["activeFlags"].toString().contains("waiting"))
             }
         if (method == "thread/tokenUsage/updated" || method == "turn/completed") refreshChatCost()
+        if (method == "turn/completed" || method == "turn/diff/updated" ||
+            method == "item/completed" && p.map("item").str("type") in setOf("fileChange", "commandExecution"))
+            refreshWorktreeChanges()
         if (method == "turn/completed") _state.update { it.copy(attention = false) }
         publish()
     }

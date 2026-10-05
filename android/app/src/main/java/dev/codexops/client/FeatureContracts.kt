@@ -157,6 +157,7 @@ data class ScreenState(
     val thread: String? = null,
     val threadCwd: String? = null,
     val chatCost: ChatCost = ChatCost(),
+    val worktreeChanges: WorktreeChanges = WorktreeChanges(),
     val title: String = "New chat",
     val entries: List<Entry> = emptyList(),
     val turnStatuses: Map<String, String> = emptyMap(),
@@ -254,6 +255,7 @@ interface SettingsActions {
 }
 
 interface ConversationActions {
+    fun refreshWorktreeChanges() {}
     fun assistantTextRendered(update: LiveAssistantText, visible: Boolean): Float? = null
     fun cancelStreamingHaptics() {}
 

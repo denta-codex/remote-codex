@@ -18,7 +18,6 @@ import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -70,7 +69,6 @@ internal fun App(model: ClientModel) {
 private fun AppContent(model: ClientModel) {
     val st by model.state.collectAsStateWithLifecycle()
     val report by model.reports.state.collectAsStateWithLifecycle()
-    val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
     BackHandler(st.page != "home") { model.back() }
     AdaptiveWindow {
@@ -126,7 +124,7 @@ private fun AppContent(model: ClientModel) {
                                 },
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                maxLines = 1,
+                                maxLines = if (st.page == "chat") 2 else 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
                             Row(
@@ -144,6 +142,8 @@ private fun AppContent(model: ClientModel) {
                                     st.connection,
                                     fontSize = 12.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                 )
                             }
                         }
@@ -151,15 +151,7 @@ private fun AppContent(model: ClientModel) {
                             TextButton(onClick = model::openTodo) { Text("Todo") }
                             IconButton(onClick = model::newChat) { Glyph(R.drawable.ic_compose, "New chat") }
                         }
-                        if (st.page == "chat" && st.thread != null)
-                            ChatCostBadge(st.chatCost.copy(staleUsage = st.chatCost.staleUsage || !st.ready))
-                        if (st.page == "chat")
-                            st.thread?.let { threadId ->
-                                IconButton(onClick = { copyThreadDeeplink(context, threadId) }) {
-                                    Glyph(R.drawable.ic_copy, "Copy deeplink")
-                                }
-                            }
-                        if (st.page != "settings")
+                        if (st.page !in setOf("settings", "chat"))
                             IconButton(onClick = model::settings) {
                                 Glyph(R.drawable.ic_settings, "Settings")
                             }

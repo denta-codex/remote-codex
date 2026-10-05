@@ -3,7 +3,7 @@
 > **Personal project:** This is my personal setup. I'm sharing the source in the
 > hope that it benefits others. I am not accepting outside pull requests at this time.
 
-Codex on a remote host. Native Android text client for Grace's existing stock
+Use Codex on a remote host. Native Android text client for Grace's existing stock
 Codex app server, over WSS and Tailscale.
 
 Tap **Todo** on the Chats screen for the native task board. Switch between
@@ -36,6 +36,16 @@ for its recorded patches. Back returns to the file list, then the conversation.
 Replies without recorded edits have no changes row. These are Codex's recorded
 file edits, including repeated edits to a file, rather than current Git totals;
 shell edits without a file-change record are not included.
+
+The floating pill above the composer shows current Git worktree totals and the
+estimated chat spend, using `~` for the estimate. Tap the changes to inspect the
+files and diffs, or the spend to see its accounting details. Git totals include
+staged, unstaged, and untracked files across the repository; ignored files are
+excluded, and renames appear as a deletion and an addition. Totals refresh while
+the chat is visible and after edits; `*` marks retained totals that could not be
+refreshed. These totals are separate from each reply's recorded edits.
+The chat header keeps its title and connection status; **⋮** contains **Settings**,
+**Copy deeplink**, archive, and report actions.
 
 Open the composer's conversation settings and choose **Speed → Standard / Fast**.
 Fast adds a lightning icon after the reasoning level. Existing chats save the

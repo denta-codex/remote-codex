@@ -305,6 +305,7 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
                 Glyph(R.drawable.ic_down, "Jump to latest")
             }
     }
+    if (st.thread != null && (!cover || st.decisions.isEmpty())) ConversationSummary(st, actions)
     if (!cover || st.decisions.isEmpty())
         ConversationComposer(
             state = st,

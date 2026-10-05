@@ -101,6 +101,14 @@ internal fun BugReportMenu(model: ClientModel) {
             Text("⋮", fontSize = 26.sp)
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            if (screen.page == "chat") {
+                DropdownMenuItem(text = { Text("Settings") }, leadingIcon = { Glyph(R.drawable.ic_settings) },
+                    onClick = { menu = false; model.settings() })
+                screen.thread?.let { thread ->
+                    DropdownMenuItem(text = { Text("Copy deeplink") }, leadingIcon = { Glyph(R.drawable.ic_copy) },
+                        onClick = { menu = false; copyThreadDeeplink(context, thread) })
+                }
+            }
             if (screen.page == "chat" && screen.thread != null) {
                 DropdownMenuItem(
                     text = { Text(if (screen.archived) "Unarchive" else "Archive") },
