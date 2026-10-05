@@ -9,6 +9,13 @@ Record Android version, APK version/code, signer fingerprint, Codex version and 
 - [ ] Invalid QR and canceled scan leave an existing credential intact; manual entry works.
 - [ ] Select Remote Codex as default assistant; cold/warm gesture opens New chat.
 - [ ] Send text, observe streaming, queue follow-ups, promote one with Steer now, and stop.
+- [ ] On both displays, feel one tick on Send (including queueing) and soft ticks
+      synchronized with new reply text. Confirm strength fades over eight seconds,
+      stays silent afterward, and starts fresh for the next turn. Assess comfort
+      and synchronization on the Razr; emulator results cannot establish the feel.
+- [ ] Disable Haptic feedback in Settings, restart, and confirm send, streaming,
+      and swipe effects remain off. Verify Android's touch-feedback setting is
+      respected, and history/reconnect/background activity produces no extra ticks.
 - [ ] Verify queued text and images survive reopening, preserve a new draft when steered,
       and match changes made on desktop. Resume an interrupted queue with Send now.
 - [ ] Enter Plan mode, answer a blocking question, view the completed plan full screen, and implement it.
@@ -22,6 +29,7 @@ Record Android version, APK version/code, signer fingerprint, Codex version and 
 - [ ] Confirm identical task and messages on desktop, including projectless identity.
 - [ ] Search, archive-filter, page tasks/history, and continue an existing coding task.
 - [ ] Command/file/permission decisions and question forms work with real requests.
+- [ ] MCP forms submit typed values; URL requests open only after consent and never infer completion from browser return.
 - [ ] Desktop answers first: phone controls disappear.
 - [ ] Late pending file approval is either actionable with context or explicitly unsupported.
 - [ ] Lock/unlock, rotation/folding and process recreation preserve drafts/history.

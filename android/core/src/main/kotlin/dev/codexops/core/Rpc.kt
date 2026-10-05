@@ -69,7 +69,10 @@ private class StatusDraft(private val status: (Int) -> Unit) :
     override fun copyInstance(): Draft = StatusDraft(status)
 }
 
-class Rpc(private val allowLoopbackTest: Boolean = false) {
+class Rpc(
+    private val allowLoopbackTest: Boolean = false,
+    private val clockMillis: () -> Long = System::currentTimeMillis,
+) {
     val events = Channel<JsonObject>(1024)
     private val next = AtomicLong()
     private val pending = ConcurrentHashMap<String, CompletableDeferred<JsonObject>>()
@@ -246,7 +249,7 @@ class Rpc(private val allowLoopbackTest: Boolean = false) {
                 require(id is JsonPrimitive && (id.isString || id.longOrNull != null))
                 if (serverRequests.containsKey(id)) return
                 serverRequests[id] = ServerRequestState.Pending
-                when (val route = ServerRequests.route(message.str("method"))) {
+                when (val route = ServerRequests.route(message.str("method"), message["params"], clockMillis)) {
                     ServerRequestRoute.Interactive -> Unit
                     is ServerRequestRoute.Result -> {
                         respond(id, route.result, epoch)

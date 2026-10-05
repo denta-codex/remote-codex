@@ -315,6 +315,9 @@ data class Decision(
     val params: JsonObject,
     val epoch: Long,
 ) {
+    val blocksUser
+        get() = method != "item/tool/requestUserInput" || params["isBlocking"] != JsonPrimitive(false)
+
     val key
         get() = id.toString()
 
@@ -323,6 +326,21 @@ data class Decision(
 }
 
 object Decisions {
+    const val OTHER_ANSWER = "None of the above"
+
+    /** Stock answers contain the selected label first, then optional notes. */
+    fun questionAnswers(questions: List<JsonObject>, selections: Map<String, String>, notes: Map<String, String>) =
+        obj("answers" to JsonObject(questions.associate { question ->
+            val id = question.str("id")
+            val values = buildList {
+                selections[id]?.let { add(s(it)) }
+                notes[id]?.takeIf { it.isNotBlank() }?.let {
+                    add(s(if (question["isSecret"] == JsonPrimitive(true)) it else it.trim()))
+                }
+            }
+            id to obj("answers" to JsonArray(values))
+        }))
+
     fun answers(answers: Map<String, String>) =
         obj(
             "answers" to
