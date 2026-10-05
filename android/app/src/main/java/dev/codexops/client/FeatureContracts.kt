@@ -160,6 +160,7 @@ data class ScreenState(
     val worktreeChanges: WorktreeChanges = WorktreeChanges(),
     val title: String = "New chat",
     val entries: List<Entry> = emptyList(),
+    val followUps: FollowUpState = FollowUpState(),
     val turnStatuses: Map<String, String> = emptyMap(),
     val historyCursor: String? = null,
     val draft: String = "",
@@ -255,6 +256,7 @@ interface SettingsActions {
 }
 
 interface ConversationActions {
+    fun sendFollowUp(text: String) {}
     fun refreshWorktreeChanges() {}
     fun assistantTextRendered(update: LiveAssistantText, visible: Boolean): Float? = null
     fun cancelStreamingHaptics() {}

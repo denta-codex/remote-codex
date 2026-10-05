@@ -48,6 +48,8 @@ constructor(
     private val remoteFileRepository = RemoteFileRepository(app)
     private val _state = MutableStateFlow(ScreenState(host = host))
     val state = _state.asStateFlow()
+    private val followUps = FollowUpController(viewModelScope, StockFollowUpSuggestions(rpc),
+        { rpc.generation }, { _state.value }, { value -> _state.update { it.copy(followUps = value) } })
     private val streamingHaptics = StreamingHaptics(SystemClock::uptimeMillis)
     private val hapticPreferenceLock = Mutex()
     private var liveTextRevision = 0L
@@ -219,6 +221,9 @@ constructor(
 
     init {
         viewModelScope.launch {
+            state.collect { followUps.changed() }
+        }
+        viewModelScope.launch {
             state.map { st ->
                 Triple(st.ready && st.appForeground && st.page == "chat", st.thread, st.threadCwd)
             }.distinctUntilChanged().collectLatest { (active, thread, cwd) ->
@@ -310,11 +315,13 @@ constructor(
     }
 
     fun foreground(value: Boolean) {
+        val reopening = value && !foreground
         if (!value) cancelStreamingHaptics()
         foreground = value
         _state.update { it.copy(appForeground = value) }
         if (value) UpdateInstallResults.consume(getApplication())?.let(::applyInstallResult)
         if (value && !_state.value.ready) connect()
+        if (reopening && _state.value.ready && !_state.value.busy) followUps.opened()
     }
 
     override fun connect() {
@@ -601,6 +608,7 @@ constructor(
             "chat" -> if (chatOrigin == "archives") showList(true) else home()
             else -> home()
         }
+        if (_state.value.page == "chat") followUps.opened()
     }
 
     override fun home() {
@@ -1009,6 +1017,7 @@ constructor(
         }
         if (n != selection) return
         _state.update { it.copy(draft = draft, attachments = attachments, journal = journal) }
+        var opened = false
         try {
             val response = try {
                 readEventually(
@@ -1078,6 +1087,7 @@ constructor(
                 )
             }
             readQueue(id)
+            opened = true
             if (n == selection) {
                 refreshChatCost()
                 activityMonitor.opened(id)
@@ -1092,6 +1102,7 @@ constructor(
                 // Resume already attempted the live snapshot; missing details require an explicit retry.
                 requests.values.filter { it.thread == id }.forEach { attemptedApprovalContexts.add(it.key) }
                 publish()
+                if (opened) followUps.opened()
             }
         }
     }
@@ -1702,7 +1713,14 @@ constructor(
         submit("Implement the proposed plan.", "default", clearDraft = false)
     }
 
-    private fun submit(text: String, selectedMode: String?, clearDraft: Boolean) {
+    override fun sendFollowUp(text: String) {
+        val before = _state.value
+        if (text !in before.visibleFollowUps()) return
+        followUps.consumed()
+        submit(text, before.newTaskOptions.collaborationMode, clearDraft = false, includeAttachments = false)
+    }
+
+    private fun submit(text: String, selectedMode: String?, clearDraft: Boolean, includeAttachments: Boolean = true) {
         val before = _state.value
         val queue = clearDraft && before.thread != null && before.willQueueMessage()
         val hasTurnStartOverrides =
@@ -1758,7 +1776,7 @@ constructor(
                     "serviceTier" to before.newTaskOptions.serviceTier?.let(::s),
                     "threadId" to before.thread?.let(::s),
                     "expectedTurnId" to before.activeTurn?.let(::s),
-                    "attachments" to JsonArray(before.attachments.map { it.json() }),
+                    "attachments" to JsonArray((if (includeAttachments) before.attachments else emptyList()).map { it.json() }),
                     "collaborationMode" to mode?.mode?.let(::s),
                     "collaborationModeSetting" to modeSetting,
                 )

@@ -45,6 +45,106 @@ import org.junit.rules.TestName
 import org.junit.Assert.*
 
 class AppTest {
+    private val suggestionMessages = listOf("Show me a layout", "What about speed?", "How will we preserve my draft?")
+    private val followUpRequests = CopyOnWriteArrayList<JsonObject>()
+    private val heldFollowUpRequests = CopyOnWriteArrayList<JsonObject>()
+    @Volatile private var holdFollowUpReply = false
+    @Volatile private var followUpFixtureResponse: JsonObject? = null
+
+    private fun suggestionsResult(messages: List<String> = suggestionMessages): JsonObject = obj(
+        "exitCode" to JsonPrimitive(0), "stdout" to s(obj("choices" to JsonArray(listOf(obj(
+            "finish_reason" to s("stop"), "message" to obj("content" to s(obj(
+                "suggestions" to JsonArray(messages.map(::s)),
+            ).toString())),
+        )))).toString()),
+    )
+
+    private fun installSuggestionHistory() {
+        historyOverride = obj("data" to JsonArray(listOf(obj(
+            "id" to s("suggestion-history"), "status" to s("completed"), "items" to JsonArray(listOf(
+                obj("id" to s("suggestion-user"), "type" to s("userMessage"), "content" to JsonArray(listOf(
+                    obj("type" to s("text"), "text" to s("Scope suggested mobile replies")),
+                ))),
+                obj("id" to s("suggestion-assistant"), "type" to s("agentMessage"),
+                    "text" to s("We can generate three short contextual follow-up messages.")),
+            )),
+        ))))
+        followUpFixtureResponse = suggestionsResult()
+    }
+
+    @Test
+    fun followUpPillsCacheAndSendExactTextPreservingModeDraftAndAttachments() {
+        installSuggestionHistory()
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.visibleFollowUps().size == 3 }
+        compose.onNodeWithTag("follow-up-suggestions").assertIsDisplayed()
+        suggestionMessages.forEach { compose.onNodeWithText(it).assertIsDisplayed() }
+        assertEquals(1, followUpRequests.size)
+        assertEquals(0, sent.get())
+        compose.runOnUiThread { model.home(); model.openTask("task-test") }
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.visibleFollowUps().size == 3 }
+        assertEquals(1, followUpRequests.size)
+        val image = fixtureImage("suggestion-draft.png")
+        compose.runOnUiThread { model.settings(); model.back(); model.foreground(false); model.foreground(true) }
+        compose.waitUntil(5000) { model.state.value.visibleFollowUps().size == 3 }
+        assertEquals(1, followUpRequests.size)
+        compose.runOnUiThread {
+            model.draft("Keep my separate draft")
+            model.addAttachments(listOf(Uri.fromFile(image)))
+            model.updateNewTaskOptions(model.state.value.newTaskOptions.copy(collaborationMode = "plan"))
+        }
+        compose.waitUntil(5000) { model.state.value.attachments.size == 1 }
+        val attachment = model.state.value.attachments.single()
+        compose.onNodeWithTag("follow-up-1").performClick()
+        compose.runOnUiThread { model.sendFollowUp(suggestionMessages[1]) }
+        compose.waitUntil(10000) { sent.get() == 1 && !model.state.value.busy && model.state.value.journal == null }
+        assertEquals("What about speed?", acceptedText)
+        assertEquals(listOf("text"), acceptedInput.map { it.jsonObject.str("type") })
+        assertEquals("plan", lastTurnStartParams!!.map("collaborationMode").str("mode"))
+        assertEquals("plan", model.state.value.newTaskOptions.collaborationMode)
+        assertEquals("Keep my separate draft", model.state.value.draft)
+        assertEquals(listOf(attachment), model.state.value.attachments)
+        assertTrue(File(attachment.localPath).exists())
+        assertTrue(model.state.value.visibleFollowUps().isEmpty())
+        assertEquals(1, followUpRequests.size)
+        compose.onNodeWithTag("follow-up-suggestions").assertDoesNotExist()
+    }
+
+    @Test
+    fun followUpLateResponseCannotPopulateAnotherConversation() {
+        installSuggestionHistory()
+        holdFollowUpReply = true
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(5000) { heldFollowUpRequests.size == 1 && !model.state.value.busy }
+        compose.runOnUiThread { model.home(); model.openTask("project-task") }
+        compose.waitUntil(5000) { heldFollowUpRequests.size == 2 && !model.state.value.busy }
+        peer!!.send(obj("id" to heldFollowUpRequests.first()["id"], "result" to suggestionsResult()).toString())
+        compose.waitForIdle()
+        assertEquals("project-task", model.state.value.thread)
+        assertTrue(model.state.value.visibleFollowUps().isEmpty())
+        peer!!.send(obj("id" to heldFollowUpRequests.last()["id"], "result" to suggestionsResult()).toString())
+        compose.waitUntil(5000) { model.state.value.visibleFollowUps().size == 3 }
+        assertEquals(0, sent.get())
+        assertEquals(0, threadStarts.get())
+    }
+
+    @Test
+    fun followUpProviderFailureIsQuietAndComposerStillSendsNormally() {
+        installSuggestionHistory()
+        followUpFixtureResponse = obj("exitCode" to JsonPrimitive(22), "stderr" to s("fixture provider unavailable"))
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(5000) { followUpRequests.size == 1 && !model.state.value.busy }
+        compose.waitForIdle()
+        assertTrue(model.state.value.visibleFollowUps().isEmpty())
+        assertNull(model.state.value.error)
+        compose.onNodeWithTag("follow-up-suggestions").assertDoesNotExist()
+        compose.onNodeWithTag("composer").performTextInput("Send normally")
+        compose.onNodeWithTag("send").performClick()
+        compose.waitUntil(10000) { sent.get() == 1 && !model.state.value.busy }
+        assertEquals("Send normally", acceptedText)
+        assertEquals(1, followUpRequests.size)
+    }
+
     private class HapticRecorder : HapticDriver {
         val ticks = AtomicInteger()
         val scales = CopyOnWriteArrayList<Float>()
@@ -729,6 +829,13 @@ class AppTest {
                                             return
                                         }
                                     }
+                                    if (method == "command/exec" && StockFollowUpSuggestions.COMMAND_NAME in command) {
+                                        followUpRequests.add(m)
+                                        if (holdFollowUpReply) {
+                                            heldFollowUpRequests.add(m)
+                                            return
+                                        }
+                                    }
                                     if (method == "thread/turns/list" && holdHistoryReply && params.str("threadId") != historyReplyExemption) {
                                         heldHistoryRequests.add(m.getValue("id"))
                                         return
@@ -951,6 +1058,8 @@ class AppTest {
                                             }
                                             "command/exec" -> {
                                                 when {
+                                                    StockFollowUpSuggestions.COMMAND_NAME in command ->
+                                                        followUpFixtureResponse ?: obj("exitCode" to JsonPrimitive(22))
                                                     "remote-codex-worktree" in command -> obj("exitCode" to JsonPrimitive(0),
                                                         "stdout" to s("remote-codex-worktree-v1\u0000ready\u0000/fixture/remote-codex\u0000end\u0000"))
                                                     "get-url" in command -> obj("exitCode" to JsonPrimitive(0), "stdout" to s("git@github.com:denta-codex/remote-codex.git\n"))

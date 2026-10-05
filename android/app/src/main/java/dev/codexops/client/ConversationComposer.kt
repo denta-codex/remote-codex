@@ -60,6 +60,26 @@ internal fun ConversationComposer(state: ScreenState, actions: ConversationActio
             onSend = { haptics.tick(); tray = false; onSend(); keyboard?.hide(); actions.send() },
             projectAvailable = projectAvailable, cameraDock = cameraDock)
     }
+    val followUps = state.visibleFollowUps()
+    if (followUps.isNotEmpty()) {
+        FlowRow(
+            Modifier.fillMaxWidth().padding(horizontal = if (compact) 8.dp else 12.dp, vertical = 4.dp)
+                .testTag("follow-up-suggestions"),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            followUps.forEachIndexed { index, message ->
+                OutlinedButton(
+                    onClick = { haptics.tick(); actions.sendFollowUp(message) },
+                    modifier = Modifier.testTag("follow-up-$index"),
+                    shape = RoundedCornerShape(24.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                ) { Text(message, style = MaterialTheme.typography.bodyMedium) }
+            }
+        }
+    }
     Surface(
         Modifier.padding(horizontal = if (compact) 8.dp else 12.dp, vertical = if (compact) 4.dp else 8.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
