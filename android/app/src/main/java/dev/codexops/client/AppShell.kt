@@ -69,6 +69,9 @@ internal fun App(model: ClientModel) {
     BackHandler(st.page != "home") { model.back() }
     AdaptiveWindow {
         Scaffold(
+            // The system owns the usable cover-screen bounds. Reserve cutouts and
+            // system bars once, including when the camera band is at the bottom.
+            contentWindowInsets = WindowInsets.safeDrawing,
             snackbarHost = {
                 SnackbarHost(snackbar) { data ->
                     Snackbar {
@@ -90,18 +93,29 @@ internal fun App(model: ClientModel) {
                 }
             },
             topBar = {
-                TopAppBar(
-                    // Cover displays can hide the status bar while retaining a display cutout.
-                    windowInsets = WindowInsets.safeDrawing.only(
-                        WindowInsetsSides.Top + WindowInsetsSides.Horizontal,
-                    ),
-                    title = {
-                        Column {
+                Surface(color = MaterialTheme.colorScheme.surface) {
+                    // Measure the two-line title naturally, including enlarged system text.
+                    // Keep cutout padding outside the content's minimum height.
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .windowInsetsPadding(WindowInsets.safeDrawing.only(
+                                WindowInsetsSides.Top + WindowInsetsSides.Horizontal,
+                            ))
+                            .heightIn(min = 64.dp)
+                            .padding(horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (st.page != "home")
+                            IconButton(onClick = model::back) {
+                                Glyph(R.drawable.ic_back, "Back")
+                            }
+                        Column(Modifier.weight(1f).padding(horizontal = 12.dp, vertical = 8.dp)) {
                             Text(
                                 when (st.page) {
                                     "chat" -> st.title
                                     "settings" -> "Settings"
                                     "archives" -> "Archived chats"
+                                    "todo" -> "Todo"
                                     else -> "Chats"
                                 },
                                 fontSize = 18.sp,
@@ -127,16 +141,9 @@ internal fun App(model: ClientModel) {
                                 )
                             }
                         }
-                    },
-                    navigationIcon = {
-                        if (st.page != "home")
-                            IconButton(onClick = model::back) {
-                                Glyph(R.drawable.ic_back, "Back")
-                            }
-                    },
-                    actions = {
-                        if (st.page == "home") IconButton(onClick = model::newChat) {
-                            Glyph(R.drawable.ic_compose, "New chat")
+                        if (st.page == "home") {
+                            TextButton(onClick = model::openTodo) { Text("Todo") }
+                            IconButton(onClick = model::newChat) { Glyph(R.drawable.ic_compose, "New chat") }
                         }
                         if (st.page == "chat")
                             st.thread?.let { threadId ->
@@ -149,8 +156,8 @@ internal fun App(model: ClientModel) {
                                 Glyph(R.drawable.ic_settings, "Settings")
                             }
                         BugReportMenu(model)
-                    },
-                )
+                    }
+                }
             },
             containerColor = MaterialTheme.colorScheme.background,
         ) { padding ->
@@ -170,7 +177,7 @@ internal fun App(model: ClientModel) {
                         Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text("Drafts stay on this phone.", Modifier.weight(1f), fontSize = 12.sp)
+                        Text(if (st.page == "todo") "Todo requires Grace." else "Drafts stay on this phone.", Modifier.weight(1f), fontSize = 12.sp)
                         TextButton(onClick = model::connect) {
                             Glyph(R.drawable.ic_refresh)
                             Spacer(Modifier.width(8.dp))
@@ -178,6 +185,7 @@ internal fun App(model: ClientModel) {
                         }
                     }
                 when (st.page) {
+                    "todo" -> TodoScreen(st, model)
                     "settings" -> SettingsScreen(st, model, report.shakeEnabled, model.reports::shakeEnabled,
                         report.screenshotEnabled, model.reports::screenshotEnabled)
                     "chat" -> key(st.thread) { ConversationScreen(st, model) }
@@ -186,7 +194,6 @@ internal fun App(model: ClientModel) {
             }
         }
         BugReportHost(model, st, snackbar)
-        GitMergeDialog(st, model)
     }
 }
 

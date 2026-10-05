@@ -31,20 +31,53 @@ constructor(
     private val rpc: RemoteSession = StockRemoteSession(allowLoopbackTest)
     private val updater = AppUpdater(app, endpoint, allowLoopbackTest)
     private val workspaces = StockWorkspaceAdapter(rpc)
+    private val projectRepository = ProjectRepository(rpc)
     private val timeline = Timeline()
     private val attachmentStore = AttachmentStore(app)
     private val mediaRepository = MediaRepository(app)
     private val remoteFileRepository = RemoteFileRepository(app)
     private val _state = MutableStateFlow(ScreenState(host = host))
     val state = _state.asStateFlow()
-    private val gitMerge = GitMergeController(viewModelScope, local, StockGitMergeOperations(rpc),
-        { _state.value }, { thread, merge ->
-            _state.update { if (it.thread == thread) it.copy(merge = merge) else it }
+    private val todoController = TodoController(viewModelScope, local, StockTodoOperations(rpc),
+        { _state.value }, { todo -> _state.update { it.copy(todo = todo) } })
+    override fun openTodo() {
+        cancelList(); saveList()
+        _state.update { it.copy(page = "todo", error = null) }
+    }
+    override fun refreshTodo() = todoController.refresh()
+    override fun selectTodoStatus(status: String) = todoController.select(status)
+    override fun newTodo() = todoController.new()
+    override fun openTodoTask(id: Long) = todoController.open(id)
+    override fun todoTitle(value: String) = todoController.title(value)
+    override fun todoDescription(value: String) = todoController.description(value)
+    override fun saveTodo() = todoController.save()
+    override fun moveTodoTask(id: Long, status: String) = todoController.moveTask(id, status)
+    override fun reorderTodo(id: Long, target: Long, after: Boolean) = todoController.reorder(id, target, after)
+    override fun moveTodo(status: String) = todoController.move(status)
+    override fun closeTodoEditor() = todoController.close()
+    override fun discardTodoEditor() = todoController.discard()
+    override fun keepTodoEditor() = todoController.keep()
+    override fun acknowledgeTodoOutcome() = todoController.acknowledge()
+    private val projectAddition = ProjectAdditionController(viewModelScope, local, rpc,
+        { _state.value }, { addition -> _state.update { it.copy(projectAddition = addition) } },
+        { projects, project, root, current ->
+            val options = _state.value.newTaskOptions.copy(projectId = project.id,
+                workingDirectory = root, executionTarget = ExecutionTarget.CurrentWorkspace)
+            local.put("options/new", newTaskOptionsJson(options).toString())
+            if (current()) {
+                _state.update { it.copy(projects = projects, newTaskOptions = options) }
+                true
+            } else false
         })
-    override fun inspectMerge() = gitMerge.inspect()
-    override fun mergeIntoMain() = gitMerge.merge()
-    override fun reconcileMerge() = gitMerge.reconcile()
-    override fun dismissMerge() = gitMerge.dismiss()
+    override fun openAddProject() = projectAddition.open()
+    override fun dismissAddProject() = projectAddition.dismiss()
+    override fun projectPath(value: String) = projectAddition.editPath(value)
+    override fun browseProjectFolder(path: String) = projectAddition.browse(path)
+    override fun useProjectFolder() = projectAddition.confirmFolder()
+    override fun projectName(value: String) = projectAddition.name(value)
+    override fun addProject() = projectAddition.add()
+    override fun checkProjectRegistration() = projectAddition.checkAgain()
+    override fun chooseMatchingProject(id: String) = projectAddition.choose(id)
     internal val reports = BugReportController(app, viewModelScope, local, rpc, host, { _state.value })
     private var connectionJob: Job? = null
     private var updateJob: Job? = null
@@ -126,6 +159,19 @@ constructor(
         }
 
     init {
+        viewModelScope.launch {
+            state.map { Triple(it.page == "todo", it.ready, it.appForeground) }.distinctUntilChanged()
+                .collect { (visible, ready, foreground) ->
+                    if (!ready) todoController.disconnected()
+                    else if (visible && foreground) todoController.refresh()
+                }
+        }
+        viewModelScope.launch {
+            state.map { Triple(it.ready, it.page, it.thread) }.distinctUntilChanged().collect { (ready, page, thread) ->
+                if (!ready) projectAddition.disconnected()
+                if (page != "chat" || thread != null) projectAddition.dismiss()
+            }
+        }
         viewModelScope.launch {
             state.map { Triple(it.ready && it.page == "chat", it.thread, it.settingsCwd()) }
                 .distinctUntilChanged().collectLatest { (active, _, cwd) ->
@@ -431,11 +477,12 @@ constructor(
     override fun back() {
         if (_state.value.busy) return
         when (_state.value.page) {
+            "todo" -> if (_state.value.todo.editor != null) todoController.close() else home()
             "archives" -> {
                 cancelList(); saveList()
                 _state.update { it.copy(page = "settings", error = null) }
             }
-            "settings" -> if (settingsOrigin == "chat") _state.update { it.copy(page = "chat") } else home()
+            "settings" -> if (settingsOrigin in setOf("chat", "todo")) _state.update { it.copy(page = settingsOrigin) } else home()
             "chat" -> if (chatOrigin == "archives") showList(true) else home()
             else -> home()
         }
@@ -490,15 +537,15 @@ constructor(
             listFailed = false, listIndex = 0, listOffset = 0) }
     }
 
-    override fun markTaskUnread(id: String) {
+    override fun toggleTaskUnread(id: String) {
         if (_state.value.tasks.none { it.str("id") == id }) return
         viewModelScope.launch {
             try {
-                activityMonitor.markUnread(id)
-                _state.update { it.copy(taskNotice = TaskNotice(UUID.randomUUID().toString(), "Marked unread")) }
+                val unread = activityMonitor.toggleUnread(id)
+                _state.update { it.copy(taskNotice = TaskNotice(UUID.randomUUID().toString(), if (unread) "Marked unread" else "Marked read")) }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                _state.update { it.copy(error = "Could not save the unread reminder.") }
+                _state.update { it.copy(error = "Could not save the read status.") }
             }
         }
     }
@@ -575,38 +622,7 @@ constructor(
 
     private suspend fun refreshProjects() {
         if (!_state.value.ready) return
-        val projects = linkedMapOf<String, CodexProject>()
-        val cursors = mutableSetOf<String>()
-        var cursor: String? = null
-        var requests = 0
-        do {
-            check(requests++ < 100) { "Project loading exceeded its request limit" }
-            val result =
-                rpc.call(
-                    "project/list",
-                    obj(
-                        "cursor" to cursor?.let(::s),
-                        "limit" to JsonPrimitive(50),
-                        "sortKey" to s("position"),
-                        "sortDirection" to s("asc"),
-                    ),
-                )
-            result.list("data").forEach { row ->
-                val id = row.str("id")
-                if (id.isNotEmpty()) {
-                    projects[id] =
-                        CodexProject(
-                            id = id,
-                            name = row.str("name").ifBlank { "Untitled project" },
-                            roots = row.list("roots").map { it.str("path") }.filter(String::isNotBlank),
-                        )
-                }
-            }
-            check(projects.size <= 5000) { "Project loading exceeded its catalog limit" }
-            cursor = result.cursor()
-            check(cursor == null || cursors.add(cursor!!)) { "Project loading repeated a page" }
-        } while (cursor != null)
-        val values = projects.values.toList()
+        val values = projectRepository.list()
         _state.update { before ->
             val filter = before.projectFilter
             val availableFilter =
@@ -617,7 +633,7 @@ constructor(
             val options =
                 if (before.thread == null && selected?.primaryRoot != null)
                     before.newTaskOptions.copy(
-                        workingDirectory = selected.primaryRoot,
+                        workingDirectory = before.newTaskOptions.workingDirectory?.takeIf { it in selected.roots } ?: selected.primaryRoot,
                         executionTarget = ExecutionTarget.CurrentWorkspace,
                     )
                 else before.newTaskOptions
@@ -680,59 +696,107 @@ constructor(
         }
     }
 
-    override fun newChat() {
+    override fun newChat() = openNewChat()
+
+    internal fun receiveShare(share: IncomingShare) = openNewChat(share)
+
+    private fun openNewChat(share: IncomingShare? = null) {
         reports.actions.add("newChat")
-        if (_state.value.busy) return
+        if (_state.value.busy) {
+            if (share != null) _state.update { it.copy(error = "Please wait for the current operation, then share again.") }
+            return
+        }
+        if (share != null) _state.update { it.copy(busy = true) }
         chatOrigin = "home"
         cancelList(); saveList()
         listSnapshots.remove(false)
         _state.update { it.copy(listInitialized = false) }
         viewModelScope.launch {
-            selection++
-            timeline.clear()
-            buffered.clear()
-            hydrating = false
-            val draft = local.get("draft/new")
-            val attachments = restoreAttachments("new")
-            val journal = parse(local.get("journal/new"))
-            val savedOptions = parseNewTaskOptions(local.get("options/new"))
-            val options = journal?.let { optionsFromJournal(it, savedOptions) } ?: savedOptions
-            _state.update {
-                val reconciled = if (it.modelCatalogStatus == ModelCatalogStatus.Ready)
-                    reconcileModelOptions(options, it.models, null).options else options
-                val restored = if (it.ready && it.collaborationModes.none { mode -> mode.mode == reconciled.collaborationMode })
-                    reconciled.copy(collaborationMode = null) else reconciled
-                it.copy(
-                    page = "chat",
-                    thread = null,
-                    threadCwd = null,
-                    merge = GitMergeState(),
-                    title = "New chat",
-                    entries = emptyList(),
-                    activeTurn = null,
-                    queuedMessages = emptyList(),
-                    queueReady = false,
-                    queueError = null,
-                    decisions = emptyList(),
-                    historyCursor = null,
-                    draft = draft,
-                    attachments = attachments,
-                    newTaskOptions = restored,
-                    threadModel = null,
-                    threadMode = null,
-                    threadReasoningEffort = null,
-                    threadServiceTier = null,
-                    threadServiceTierKnown = false,
-                    speedSaving = false,
-                    speedUncertain = false,
-                    speedError = null,
-                    journal = journal,
-                    error = null,
-                    attention = false,
-                    filePreview = null,
-                )
+            try {
+                selection++
+                timeline.clear()
+                buffered.clear()
+                hydrating = false
+                var draft = local.get("draft/new")
+                var attachments = restoreAttachments("new")
+                val journal = parse(local.get("journal/new"))
+                var shareError: String? = null
+                if (share != null) {
+                    if (journal != null) {
+                        shareError = "Resolve the pending send in this draft, then share again."
+                    } else {
+                        if (share.text.isNotBlank()) {
+                            draft = listOf(draft, share.text).filter { it.isNotBlank() }.joinToString("\n\n")
+                            local.put("draft/new", draft)
+                        }
+                        for (uri in share.streams) {
+                            try {
+                                require(uri.scheme == "content" &&
+                                    uri.authority?.substringAfter('@') != "${getApplication<Application>().packageName}.files")
+                                val added = attachmentStore.importDocument(uri, attachments.sumOf { it.byteSize })
+                                try {
+                                    persistAttachments("new", attachments + added)
+                                } catch (e: Exception) {
+                                    attachmentStore.delete(added)
+                                    throw e
+                                }
+                                attachments += added
+                            } catch (e: CancellationException) { throw e
+                            } catch (_: Exception) {
+                                shareError = "Some shared files could not be added. Check access and attachment size limits, then share those files again."
+                            }
+                        }
+                        if (share.text.isBlank() && share.streams.isEmpty())
+                            shareError = "This share contains no text or files."
+                    }
+                }
+                val savedOptions = parseNewTaskOptions(local.get("options/new"))
+                val options = journal?.let { optionsFromJournal(it, savedOptions) } ?: savedOptions
+                _state.update {
+                    val reconciled = if (it.modelCatalogStatus == ModelCatalogStatus.Ready)
+                        reconcileModelOptions(options, it.models, null).options else options
+                    val restored = if (it.ready && it.collaborationModes.none { mode -> mode.mode == reconciled.collaborationMode })
+                        reconciled.copy(collaborationMode = null) else reconciled
+                    it.copy(
+                        page = "chat",
+                        thread = null,
+                        threadCwd = null,
+                        title = "New chat",
+                        entries = emptyList(),
+                        turnStatuses = emptyMap(),
+                        activeTurn = null,
+                        queuedMessages = emptyList(),
+                        queueReady = false,
+                        queueError = null,
+                        decisions = emptyList(),
+                        historyCursor = null,
+                        draft = draft,
+                        attachments = attachments,
+                        newTaskOptions = restored,
+                        threadModel = null,
+                        threadMode = null,
+                        threadReasoningEffort = null,
+                        threadServiceTier = null,
+                        threadServiceTierKnown = false,
+                        speedSaving = false,
+                        speedUncertain = false,
+                        speedError = null,
+                        journal = journal,
+                        error = shareError,
+                        attention = false,
+                        filePreview = null,
+                    )
+                }
+                if (share == null && _state.value.ready) guarded { recoverNew() }
+            } catch (e: CancellationException) { throw e
+            } catch (_: Exception) {
+                _state.update { it.copy(error = "The draft could not be opened. Please try again.") }
+            } finally {
+                if (share != null) {
+                    _state.update { it.copy(busy = false) }
+                    if (foreground && !_state.value.ready) connect()
+                }
             }
-            if (_state.value.ready) guarded { recoverNew() }
         }
     }
 
@@ -771,9 +835,9 @@ constructor(
                 page = "chat",
                 thread = id,
                 threadCwd = null,
-                merge = if (it.thread == id) it.merge else GitMergeState(working = true),
                 title = "Conversation",
                 entries = emptyList(),
+                turnStatuses = emptyMap(),
                 activeTurn = null,
                 queuedMessages = emptyList(),
                 queueReady = false,
@@ -868,7 +932,6 @@ constructor(
             }
             readQueue(id)
             if (n == selection) {
-                gitMerge.restore(id)
                 activityMonitor.opened(id)
             }
         } finally {
@@ -1382,7 +1445,6 @@ constructor(
     }
 
     private fun mutateQueued(id: String, sendNow: Boolean) {
-        if (_state.value.merge.blocksTask) return
         val before = _state.value
         val thread = before.thread ?: return
         if (!before.ready || !before.queueReady || before.busy || before.journal != null) return
@@ -1483,7 +1545,6 @@ constructor(
     }
 
     private fun submit(text: String, selectedMode: String?, clearDraft: Boolean) {
-        if (_state.value.merge.blocksTask) return
         val before = _state.value
         val queue = clearDraft && before.thread != null && before.willQueueMessage()
         val hasTurnStartOverrides =
@@ -2088,7 +2149,6 @@ constructor(
     }
 
     override fun recoverPreparation() {
-        if (_state.value.merge.blocksTask) return
         reports.actions.add("recoverPreparation", _state.value.thread)
         val before = _state.value
         if (!before.ready || before.busy || before.journal == null) return
@@ -2259,6 +2319,7 @@ constructor(
         _state.update { st ->
             st.copy(
                 entries = timeline.values(),
+                turnStatuses = timeline.turnStatuses,
                 activeTurn = timeline.activeTurn,
                 decisions = requests.values.filter { it.thread == st.thread },
             )

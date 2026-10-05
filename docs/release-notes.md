@@ -1,15 +1,9 @@
-- Keep cover screen toolbar clear of display cutouts
-- Merge main into cover toolbar fix
-- Remove retired Autofill playground
-- Merge branch 'cleanup/retired-autofill-playground'
-- Default reports to implementation and support committing task changes before merge
-- Add archive action to conversation overflow menu
-- Merge branch 'main' into fix/conversation-archive-menu
-- Hide unknown mode labels in conversation composer
-- Merge branch 'main' into fix/hide-unknown-mode
-- Fix full-screen keyboard text synchronization
-- Make composer send button use primary colors
-- Merge branch 'main' into fix/report-default-and-commit-merge-main
-- Omit unknown mode from cover-screen accessibility
-- Merge branch 'main' into fix/hide-unknown-mode
-- Merge branch 'fix/conversation-archive-menu'
+- Reject unsupported Android client tool calls without blocking tasks
+- Merge branch 'main' into fix/reject-unsupported-client-tools
+- Show recorded file changes after completed turns with fullscreen diffs
+- Merge branch 'main' into fix/completed-turn-file-changes
+- Use available cover-screen height and cutout-safe layouts across Android
+- Merge branch 'main' into fix/cover-screen-window-insets
+- Apply cover-screen inset handling to recorded-change viewer
+- Toggle task read status with the unread swipe gesture
+- Merge branch 'main' into fix/task-unread-toggle

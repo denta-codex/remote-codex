@@ -8,7 +8,7 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ChatActivityTest {
-    @Test fun manualUnreadSharesExistingMarkersAndPreservesAutomaticUnread() = runBlocking {
+    @Test fun unreadTogglePersistsAndAcknowledgesAutomaticUnread() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         try {
             val store = MemoryStore()
@@ -16,10 +16,12 @@ class ChatActivityTest {
             var output = ChatActivity()
             fun monitor() = ChatActivityMonitor(scope, store, rpc, "host") { _, state -> output = state }
             val first = monitor()
-            first.markUnread("chat")
+            first.toggleUnread("chat")
             first.refresh("chat")
             assertTrue(output.unread)
-            first.markUnread("chat")
+            first.toggleUnread("chat")
+            assertFalse(output.unread)
+            first.toggleUnread("chat")
             val restarted = monitor()
             restarted.refresh("chat")
             assertTrue(output.unread)
@@ -28,7 +30,13 @@ class ChatActivityTest {
             rpc.text = "Another reply"
             restarted.refresh("chat")
             assertTrue(output.unread)
-            restarted.markUnread("chat")
+            restarted.toggleUnread("chat")
+            assertFalse(output.unread)
+            restarted.refresh("chat")
+            assertFalse(output.unread)
+            rpc.text = "Newest reply"
+            restarted.refresh("chat")
+            assertTrue(output.unread)
             restarted.opened("chat")
             assertTrue("Opening must not clear an unseen automatic reply", output.unread)
             restarted.read("chat", replySignature("turn", listOf(reply(rpc.text)))!!)

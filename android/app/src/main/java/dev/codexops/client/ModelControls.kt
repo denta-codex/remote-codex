@@ -207,7 +207,7 @@ internal fun ScreenState.composerSettings(): ComposerSettings {
             settingsCwd() == null -> "After workspace creation"
             else -> inherited?.modelSource ?: "From server"
         },
-        effort?.replaceFirstChar { it.uppercase() } ?: unknown,
+        effort?.replaceFirstChar { it.uppercase() }.orEmpty(),
         when {
             queued -> "This chat"
             preset != null -> "From ${preset.name} mode"
