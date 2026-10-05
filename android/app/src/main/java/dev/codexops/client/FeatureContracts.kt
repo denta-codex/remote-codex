@@ -156,6 +156,7 @@ data class ScreenState(
     val listOffset: Int = 0,
     val thread: String? = null,
     val threadCwd: String? = null,
+    val chatCost: ChatCost = ChatCost(),
     val title: String = "New chat",
     val entries: List<Entry> = emptyList(),
     val turnStatuses: Map<String, String> = emptyMap(),

@@ -151,6 +151,8 @@ private fun AppContent(model: ClientModel) {
                             TextButton(onClick = model::openTodo) { Text("Todo") }
                             IconButton(onClick = model::newChat) { Glyph(R.drawable.ic_compose, "New chat") }
                         }
+                        if (st.page == "chat" && st.thread != null)
+                            ChatCostBadge(st.chatCost.copy(staleUsage = st.chatCost.staleUsage || !st.ready))
                         if (st.page == "chat")
                             st.thread?.let { threadId ->
                                 IconButton(onClick = { copyThreadDeeplink(context, threadId) }) {

@@ -322,6 +322,43 @@ prompt and default-mode behavior. This legacy path serves only those already
 started operations and can be removed once they have completed. Saved reviews
 survive process recreation; reconnect never submits them automatically.
 
+Model enrichment deliberately happens in Android. Stock `model/list` remains the
+authority for the active runtime's model inventory, ordering, and capabilities.
+Codex ignores custom catalog fields when constructing that response. Enriching
+`model/list` on the server would require the Rust forwarder to decode and rewrite
+RPC; its byte-copy transport remains unchanged. After publishing the stock list,
+Android discovers `model_catalog_json` through `config/read`, then reads the
+enriched catalog with stock `fs/readFile` over WSS. No host command is executed.
+
+The server catalog embeds versioned `remote_codex` metadata with a content revision,
+provider-qualified model identities, explicit aliases, and optional USD pricing
+including source, fetch time, service tier, and context variant. Android matches
+exact identities and explicit aliases without adding models or changing settings.
+Its host/path/revision-scoped Room cache is a copy of the server catalog, not a
+separate pricing authority. Failed or malformed reads retain validated cached
+metadata marked stale; missing enrichment leaves stock model selection working.
+Refresh and connection-generation guards discard late results. Android model
+refresh fetches published data; it never refreshes server inventories or pricing.
+The chat header shows a compact API-equivalent cost estimate using this metadata.
+Android reads the stock thread response's rollout path with `fs/readFile` on open
+and after coalesced usage/completion notifications. It parses only accounting
+envelopes in memory, retaining request token counts and their recorded provider,
+model, and service tier; it never persists rollout text or a separate price table.
+The current model selection is never applied retroactively to earlier requests.
+Duplicate cumulative usage notifications are ignored, cached input and cache
+writes are priced separately, and reasoning tokens remain part of output.
+Exact catalog identities and explicit aliases also price historical models no
+longer present in the runtime picker. Price refresh reprices the retained usage.
+
+The badge's details identify this as an estimate rather than a subscription
+charge. Unknown prices, malformed or missing usage, and incomplete histories
+produce unavailable or partial amounts, never assumed zero. Retained stale rates
+and failed usage reads are marked. Selection and connection guards discard late
+reads. This version uses full stock file reads with a five-second timeout and a
+16 MiB parsing limit; unavailable, oversized, or unsupported rollout paths leave
+the chat usable and the estimate unavailable/stale. Hosting, tool charges, and
+separate subagent chats are excluded. Whole-chat history includes inherited turns.
+
 Limits: no push notifications, directory attachments, terminal emulator, or interactive
 command previews. Activity text is bounded for phone rendering; full output
 remains on Grace. End-to-end physical-device behavior is a release acceptance step,

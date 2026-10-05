@@ -30,6 +30,10 @@ constructor(
         GraceHost.copy(endpoint = endpoint, expectedCodexHome = expectedHome, bugReportRepository = bugReportRepository)
     private val local: ClientStore = LocalStore(app)
     private val rpc: RemoteSession = StockRemoteSession(allowLoopbackTest)
+    private val modelEnrichment = ModelEnrichmentRepository(rpc, local)
+    private var chatCostJob: Job? = null
+    private var chatUsage: ChatUsage? = null
+    private var chatUsagePath: String? = null
     private val updater = AppUpdater(app, endpoint, allowLoopbackTest)
     private val workspaces = StockWorkspaceAdapter(rpc)
     private val projectRepository = ProjectRepository(rpc)
@@ -778,6 +782,9 @@ constructor(
             try {
                 selection++
                 resetApprovalContexts()
+                chatCostJob?.cancel()
+                chatUsage = null
+                chatUsagePath = null
                 timeline.clear()
                 hapticTurn = null
                 buffered.clear()
@@ -826,6 +833,7 @@ constructor(
                         page = "chat",
                         thread = null,
                         threadCwd = null,
+                        chatCost = ChatCost(),
                         title = "New chat",
                         entries = emptyList(),
                         turnStatuses = emptyMap(),
@@ -892,6 +900,9 @@ constructor(
 
     private suspend fun loadTask(id: String) {
         cancelStreamingHaptics()
+        chatCostJob?.cancel()
+        chatUsage = null
+        chatUsagePath = null
         val n = ++selection
         val epoch = rpc.generation
         resetApprovalContexts(id)
@@ -904,6 +915,7 @@ constructor(
                 page = "chat",
                 thread = id,
                 threadCwd = null,
+                chatCost = ChatCost(),
                 title = "Conversation",
                 entries = emptyList(),
                 fileApprovalContexts = emptyMap(),
@@ -961,6 +973,7 @@ constructor(
             fileApprovalContexts.resumed(response, epoch)
             publish()
             val thread = response.map("thread")
+            if (n == selection) chatUsagePath = thread.str("path").takeIf { it.startsWith('/') && !it.contains('\u0000') }
             val history =
                 readEventually(
                     "thread/turns/list",
@@ -1014,6 +1027,7 @@ constructor(
             }
             readQueue(id)
             if (n == selection) {
+                refreshChatCost()
                 activityMonitor.opened(id)
             }
         } finally {
@@ -1239,6 +1253,14 @@ constructor(
                     "options/new",
                     newTaskOptionsJson(_state.value.newTaskOptions).toString(),
                 )
+            val generation = rpc.generation
+            val enriched = modelEnrichment.load(endpoint + "/" + expectedHome, catalog) {
+                n == modelCatalogSelection && _state.value.ready && rpc.generation == generation
+            }
+            if (n == modelCatalogSelection && _state.value.ready && rpc.generation == generation) {
+                _state.update { it.copy(models = enriched) }
+                repriceChatCost()
+            }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             if (n != modelCatalogSelection) return
@@ -1776,6 +1798,9 @@ constructor(
                         ),
                     )
                 val thread = result.map("thread")
+                chatCostJob?.cancel()
+                chatUsage = null
+                chatUsagePath = thread.str("path").takeIf { it.startsWith('/') && !it.contains('\u0000') }
                 val createdId = thread.str("id")
                 if (createdId.isEmpty())
                     throw WorkspaceSetupFailure("The task response did not include an ID", true)
@@ -2433,8 +2458,40 @@ constructor(
             _state.update {
                 it.copy(attention = p.map("status")["activeFlags"].toString().contains("waiting"))
             }
+        if (method == "thread/tokenUsage/updated" || method == "turn/completed") refreshChatCost()
         if (method == "turn/completed") _state.update { it.copy(attention = false) }
         publish()
+    }
+
+    private fun repriceChatCost() {
+        val usage = chatUsage ?: return
+        _state.update { st -> st.copy(chatCost = estimateChatCost(usage, modelEnrichment.catalogModels)
+            .copy(staleUsage = st.chatCost.staleUsage)) }
+    }
+
+    private fun refreshChatCost() {
+        val path = chatUsagePath ?: return
+        val thread = _state.value.thread ?: return
+        val selected = selection
+        val generation = rpc.generation
+        fun current() = selection == selected && _state.value.thread == thread && rpc.generation == generation && _state.value.ready
+        chatCostJob?.cancel()
+        chatCostJob = viewModelScope.launch {
+            // Coalesce token notifications. Full stock fs/readFile is the available
+            // read adapter; retain only parsed usage, never rollout message text.
+            delay(500)
+            try {
+                val bytes = withTimeout(5_000) { rpc.readFile(path) }
+                val usage = withContext(Dispatchers.Default) { parseChatUsage(bytes, thread) }
+                if (current()) {
+                    chatUsage = usage
+                    _state.update { it.copy(chatCost = estimateChatCost(usage, modelEnrichment.catalogModels)) }
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException && e !is TimeoutCancellationException) throw e
+                if (current()) _state.update { it.copy(chatCost = it.chatCost.copy(staleUsage = true)) }
+            }
+        }
     }
 
     private fun publish() {

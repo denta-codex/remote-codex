@@ -2605,7 +2605,9 @@ class AppTest {
         fastModelAvailable = false
         compose.waitUntil(5000) { !model.state.value.busy }
         compose.runOnUiThread { model.connect() }
-        compose.waitUntil(5000) {
+        // Reconnect includes project, settings, and catalog reads. Use the same
+        // bounded budget as the earlier reconnect, including on a cold emulator.
+        compose.waitUntil(15000) {
             modelLists.get() > previousLists &&
                 model.state.value.modelCatalogStatus == ModelCatalogStatus.Ready
         }
@@ -2736,6 +2738,98 @@ class AppTest {
         assertNull(model.state.value.thread)
         assertNull(model.state.value.newTaskOptions.serviceTier)
         assertFalse(model.state.value.speedSaving)
+    }
+
+    @Test
+    fun chatCostBadgeReadsHistoryUpdatesAndExplainsStaleAndUnknownPrices() {
+        compose.waitUntil(10000) { model.state.value.ready }
+        var unavailable = false
+        val count = """{"input_tokens":1000000,"cached_input_tokens":200000,"output_tokens":100000,"reasoning_output_tokens":50000,"total_tokens":1100000}"""
+        val doubled = """{"input_tokens":2000000,"cached_input_tokens":400000,"output_tokens":200000,"reasoning_output_tokens":100000,"total_tokens":2200000}"""
+        val header = """{"type":"session_meta","payload":{"id":"task-test","model_provider":"openai"}}
+{"type":"turn_context","payload":{"model":"gpt-fixture","service_tier":"default"}}
+"""
+        fun event(total: String) = """{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":$total,"last_token_usage":$count}}}
+"""
+        var rollout = header + event(count)
+        var catalog = """{"models":[],"remote_codex":{"schema_version":1,"revision":"${"a".repeat(64)}","models":[{"provider":"openai","model":"gpt-fixture","pricing":{"currency":"USD","source_url":"https://models.dev/api.json","fetched_at":"2026-10-05T00:00:00Z","status":"fresh","rates":[{"tier":"standard","context":"short","input_per_million":4,"output_per_million":20,"cached_input_per_million":0.4}]}}]}}"""
+        browserResponse = { method, params -> when {
+            method == "config/read" -> obj("config" to obj("model_provider" to s("openai"),
+                "model_catalog_json" to s("/fixture/cost-catalog.json")))
+            method == "thread/resume" -> obj("model" to s("gpt-fixture"), "thread" to obj(
+                "id" to params["threadId"], "name" to s(fixtureTitle), "cwd" to s("/fixture/remote-codex"),
+                "path" to s("/fixture/cost-rollout.jsonl")))
+            method == "fs/readFile" && params.str("path") in setOf("/fixture/cost-catalog.json", "/fixture/cost-rollout.jsonl") -> {
+                if (unavailable) obj("_fixtureError" to obj("code" to JsonPrimitive(-32603), "message" to s("Unavailable")))
+                else obj("dataBase64" to s(Base64.getEncoder().encodeToString(
+                    (if (params.str("path").endsWith("jsonl")) rollout else catalog).toByteArray())))
+            }
+            else -> null
+        } }
+        compose.runOnUiThread { model.refreshModels() }
+        compose.waitUntil(10000) { model.state.value.models.any { it.enrichment != null } }
+        compose.onNodeWithText(fixtureTitle).performClick()
+        compose.waitUntil(10000) { model.state.value.chatCost.usd != null }
+        compose.onNodeWithTag("chat-cost").assertIsDisplayed().assertTextContains("≈\$5.28")
+        compose.onNodeWithTag("chat-cost").performClick()
+        compose.onNodeWithText("Estimated chat cost").assertIsDisplayed()
+        compose.onNodeWithText("Subscription usage is not an extra charge.", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("Done").performClick()
+
+        rollout += event(doubled)
+        emit(peer!!, "thread/tokenUsage/updated", obj("turnId" to s("turn-test")))
+        compose.waitUntil(10000) { model.state.value.chatCost.requests == 2 }
+        compose.onNodeWithTag("chat-cost").assertTextContains("≈\$10.56")
+        unavailable = true
+        emit(peer!!, "thread/tokenUsage/updated", obj("turnId" to s("turn-test")))
+        compose.runOnUiThread { model.refreshModels() }
+        compose.waitUntil(10000) { model.state.value.chatCost.staleUsage && model.state.value.chatCost.staleRates }
+        compose.onNodeWithTag("chat-cost").assertTextContains("≈\$10.56*")
+
+        unavailable = false
+        catalog = """{"models":[],"remote_codex":{"schema_version":1,"revision":"${"b".repeat(64)}","models":[]}}"""
+        compose.runOnUiThread { model.refreshModels() }
+        compose.waitUntil(10000) { model.state.value.chatCost.usd == null }
+        compose.onNodeWithTag("chat-cost").assertTextContains("\$—*")
+        assertEquals(0, sent.get())
+        compose.runOnUiThread { model.newChat() }
+        compose.waitUntil(10000) { model.state.value.thread == null }
+        compose.onNodeWithTag("chat-cost").assertDoesNotExist()
+    }
+
+    @Test
+    fun modelCatalogEnrichmentReadsStockFileAndRetainsStaleCache() {
+        compose.waitUntil(10000) { model.state.value.ready && model.state.value.modelCatalogStatus == ModelCatalogStatus.Ready }
+        val reads = AtomicInteger()
+        var unavailable = false
+        val catalog = """{"models":[],"remote_codex":{"schema_version":1,"revision":"${"a".repeat(64)}","models":[{"provider":"openai","model":"gpt-fixture","pricing":{"currency":"USD","source_url":"https://models.dev/api.json","fetched_at":"2026-10-05T00:00:00Z","status":"fresh","rates":[{"tier":"standard","context":"short","input_per_million":4,"output_per_million":20,"cached_input_per_million":0.4}]}}]}}"""
+        browserResponse = { method, params ->
+            when {
+                method == "config/read" -> obj("config" to obj("model" to s(savedDefaultModel),
+                    "model_reasoning_effort" to s(savedDefaultEffort), "model_provider" to s("openai"),
+                    "model_catalog_json" to s("/fixture/enriched-models.json")))
+                method == "fs/readFile" && params.str("path") == "/fixture/enriched-models.json" -> {
+                    reads.incrementAndGet()
+                    if (unavailable) obj("_fixtureError" to obj("code" to JsonPrimitive(-32603), "message" to s("Catalog unavailable")))
+                    else obj("dataBase64" to s(Base64.getEncoder().encodeToString(catalog.toByteArray())))
+                }
+                else -> null
+            }
+        }
+        val runtime = model.state.value.models.map { it.copy(enrichment = null) }
+        compose.runOnUiThread { model.refreshModels() }
+        compose.waitUntil(10000) { model.state.value.models.firstOrNull { it.id == "gpt-fixture" }?.enrichment != null }
+        val price = model.state.value.models.first { it.id == "gpt-fixture" }.enrichment!!.pricing!!
+        assertEquals(4.0, price.rates.single().inputPerMillion, 0.0)
+        assertFalse(price.stale)
+        assertEquals(runtime, model.state.value.models.map { it.copy(enrichment = null) })
+        unavailable = true
+        compose.runOnUiThread { model.refreshModels() }
+        compose.waitUntil(10000) { model.state.value.models.first { it.id == "gpt-fixture" }.enrichment?.cached == true }
+        assertTrue(model.state.value.models.first { it.id == "gpt-fixture" }.enrichment!!.pricing!!.stale)
+        assertEquals(ModelCatalogStatus.Ready, model.state.value.modelCatalogStatus)
+        assertTrue(reads.get() >= 2)
+        assertEquals(0, sent.get())
     }
 
     @Test

@@ -16,6 +16,7 @@ data class ServerModelOption(
     val supportedReasoningEfforts: List<ReasoningEffortOption>,
     val isDefault: Boolean,
     val serviceTiers: List<String> = emptyList(),
+    val enrichment: ModelEnrichment? = null,
 )
 
 enum class ModelCatalogStatus {
