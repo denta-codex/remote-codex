@@ -2200,6 +2200,8 @@ constructor(
         viewModelScope.launch {
             guarded {
                 if (requests[decision.key] != decision || !_state.value.ready) return@guarded
+                if (decision.method in setOf("item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/permissions/requestApproval") &&
+                    !ApprovalChoices.validResult(decision, result)) return@guarded
                 requests.remove(decision.key)
                 publish()
                 rpc.respond(decision.id, result, decision.epoch)

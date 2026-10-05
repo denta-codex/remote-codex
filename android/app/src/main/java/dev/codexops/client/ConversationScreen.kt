@@ -557,6 +557,7 @@ private fun DecisionCard(d: Decision, st: ScreenState, actions: ConversationActi
                             }
                     }
                 if (p.str("cwd").isNotBlank()) Text(p.str("cwd"), fontSize = 12.sp)
+                if (p.str("kind") == "writeStdin") Text("Send input to an existing terminal")
                 SelectionContainer {
                     Text(
                         context.ifBlank {
@@ -566,28 +567,93 @@ private fun DecisionCard(d: Decision, st: ScreenState, actions: ConversationActi
                         fontSize = 12.sp,
                     )
                 }
-                val available =
-                    (p["availableDecisions"] as? JsonArray)?.map {
-                        (it as? JsonPrimitive)?.content
-                    }
-                Row {
-                    TextButton(
-                        { actions.answer(d, Decisions.result(d, false)) },
-                        enabled = st.ready && (available == null || "decline" in available),
-                    ) {
-                        Text("Decline")
-                    }
-                    Button(
-                        { actions.answer(d, Decisions.result(d, true)) },
-                        enabled =
-                            st.ready &&
-                                context.isNotBlank() &&
-                                (available == null || "accept" in available),
-                    ) {
-                        Text("Approve once")
-                    }
-                }
+                if (d.method == "item/permissions/requestApproval")
+                    PermissionApproval(d, st.ready, actions)
+                else ApprovalDecisionButtons(d, st.ready, context.isNotBlank(), actions)
             }
         }
     }
+}
+
+@Composable
+private fun ApprovalDecisionButtons(d: Decision, ready: Boolean, hasContext: Boolean, actions: ConversationActions) {
+    val choices = remember(d) { ApprovalChoices.choices(d) }
+    var expanded by remember(d) { mutableStateOf(false) }
+    var confirmation by remember(d) { mutableStateOf<ApprovalChoice?>(null) }
+    fun enabled(choice: ApprovalChoice) = ready && (!choice.grantsAccess || hasContext)
+    Row {
+        choices.firstOrNull { it.value == s("decline") }?.let { choice ->
+            TextButton({ actions.answer(d, choice.result) }, enabled = enabled(choice)) { Text(choice.label) }
+        }
+        choices.firstOrNull { it.value == s("accept") }?.let { choice ->
+            Button({ actions.answer(d, choice.result) }, enabled = enabled(choice)) { Text(choice.label) }
+        }
+    }
+    val extended = choices.filter { it.value != s("decline") && it.value != s("accept") }
+    if (extended.isNotEmpty()) {
+        TextButton({ expanded = !expanded }) { Text(if (expanded) "Fewer choices" else "More choices") }
+        if (expanded) extended.forEach { choice ->
+            TextButton({
+                if (choice.consequence.isNotEmpty()) confirmation = choice else actions.answer(d, choice.result)
+            }, enabled = enabled(choice)) { Text(choice.label) }
+        }
+    }
+    if (choices.isEmpty()) Text("No supported approval choices. Open this task on desktop.")
+    confirmation?.let { choice ->
+        AlertDialog(
+            onDismissRequest = { confirmation = null },
+            title = { Text(choice.label) },
+            text = { SelectionContainer { Text(choice.consequence, Modifier.verticalScroll(rememberScrollState())) } },
+            confirmButton = {
+                TextButton({ confirmation = null; actions.answer(d, choice.result) }, enabled = enabled(choice)) {
+                    Text("Confirm")
+                }
+            },
+            dismissButton = { TextButton({ confirmation = null }) { Text("Back") } },
+        )
+    }
+}
+
+@Composable
+private fun PermissionApproval(d: Decision, ready: Boolean, actions: ConversationActions) {
+    val selection = remember(d) { PermissionSelection(d) }
+    var selected by remember(d) { mutableStateOf(selection.options.map { it.id }.toSet()) }
+    var session by remember(d) { mutableStateOf(false) }
+    var confirmSession by remember(d) { mutableStateOf(false) }
+    selection.options.forEach { option ->
+        Row(Modifier.fillMaxWidth().clickable {
+            selected = if (option.id in selected) selected - option.id else selected + option.id
+        }, verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(option.id in selected, { checked ->
+                selected = if (checked) selected + option.id else selected - option.id
+            })
+            Text(option.label, Modifier.weight(1f), fontSize = 12.sp)
+        }
+    }
+    Row(Modifier.fillMaxWidth().clickable { session = !session }, verticalAlignment = Alignment.CenterVertically) {
+        Checkbox(session, { session = it })
+        Text("Keep selected permissions for this session", Modifier.weight(1f))
+    }
+    Text(if (session) "Selected permissions will remain available for subsequent turns in this session."
+        else "Selected permissions apply only to this turn.", fontSize = 12.sp)
+    Row {
+        TextButton({ actions.answer(d, selection.result(emptySet())) }, enabled = ready) { Text("Decline") }
+        Button({
+            if (session) confirmSession = true else actions.answer(d, selection.result(selected))
+        }, enabled = ready && selected.isNotEmpty()) { Text(if (session) "Approve for session" else "Approve once") }
+    }
+    if (selection.options.isEmpty()) Text("No supported permissions to grant. Open this task on desktop.")
+    if (confirmSession) AlertDialog(
+        onDismissRequest = { confirmSession = false },
+        title = { Text("Approve for session") },
+        text = { Column(Modifier.verticalScroll(rememberScrollState())) {
+            Text("These permissions remain available for subsequent turns in this session:")
+            selection.options.filter { it.id in selected }.forEach { Text(it.label, fontSize = 12.sp) }
+        } },
+        confirmButton = {
+            TextButton({ confirmSession = false; actions.answer(d, selection.result(selected, "session")) },
+                enabled = ready && selected.isNotEmpty()) { Text("Confirm") }
+        },
+        dismissButton = { TextButton({ confirmSession = false }) { Text("Back") } },
+    )
 }
