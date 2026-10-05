@@ -59,9 +59,15 @@ internal fun Glyph(
     Icon(painterResource(resource), contentDescription = description, modifier = modifier)
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun App(model: ClientModel) {
+    val st by model.state.collectAsStateWithLifecycle()
+    HapticProvider(st.hapticsLoaded && st.hapticsEnabled, model::hapticResumed) { AppContent(model) }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AppContent(model: ClientModel) {
     val st by model.state.collectAsStateWithLifecycle()
     val report by model.reports.state.collectAsStateWithLifecycle()
     val context = LocalContext.current

@@ -131,6 +131,9 @@ data class ScreenState(
     val connection: String = "Offline",
     val ready: Boolean = false,
     val appForeground: Boolean = false,
+    val hapticsLoaded: Boolean = false,
+    val hapticsEnabled: Boolean = true,
+    val liveAssistantText: LiveAssistantText? = null,
     val configured: Boolean = false,
     val projects: List<CodexProject> = emptyList(),
     val projectAddition: ProjectAdditionState = ProjectAdditionState(),
@@ -234,6 +237,8 @@ interface HomeActions {
 }
 
 interface SettingsActions {
+    fun hapticFeedback(enabled: Boolean)
+
     fun openArchives()
 
     fun saveCredential(value: String)
@@ -248,6 +253,9 @@ interface SettingsActions {
 }
 
 interface ConversationActions {
+    fun assistantTextRendered(update: LiveAssistantText, visible: Boolean): Float? = null
+    fun cancelStreamingHaptics() {}
+
     fun openAddProject()
     fun dismissAddProject()
     fun projectPath(value: String)

@@ -117,6 +117,13 @@ internal fun SettingsScreen(
             Text("Save and connect")
         }
         HorizontalDivider()
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Haptic feedback", Modifier.weight(1f))
+            Switch(checked = st.hapticsEnabled, onCheckedChange = actions::hapticFeedback,
+                enabled = st.hapticsLoaded, modifier = Modifier.testTag("haptic-feedback-toggle"))
+        }
+        Text("Feel a light tick when sending and softer ticks as replies arrive.", fontSize = 13.sp)
+        HorizontalDivider()
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("Offer a report after screenshots", Modifier.weight(1f))

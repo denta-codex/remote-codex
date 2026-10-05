@@ -128,6 +128,10 @@ class ChatActivityTest {
             assertEquals(ChatIndicator.Input, result.indicator)
             monitor.event(obj("method" to s("serverRequest/resolved"), "params" to obj("requestId" to JsonPrimitive(7))))
             assertEquals(ChatIndicator.Working, result.indicator)
+            monitor.event(obj("id" to s("mcp"), "method" to s(McpElicitation.METHOD), "params" to obj("threadId" to s("chat"))))
+            assertEquals(ChatIndicator.Input, result.indicator)
+            monitor.event(obj("method" to s("serverRequest/resolved"), "params" to obj("requestId" to s("mcp"))))
+            assertEquals(ChatIndicator.Working, result.indicator)
             monitor.event(obj("id" to JsonPrimitive(8), "method" to s("item/commandExecution/requestApproval"), "params" to obj("threadId" to s("chat"))))
             assertEquals(ChatIndicator.Approval, result.indicator)
             rpc.beforeHistory = {}
@@ -150,6 +154,28 @@ class ChatActivityTest {
             rpc.runtime = status("idle")
             monitor.refresh("chat")
             assertEquals(ChatIndicator.Unread, result.indicator)
+        } finally { scope.cancel() }
+    }
+
+    @Test fun nonblockingQuestionsAndTheirResolutionDoNotOverrideServerStatus() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            var result = ChatActivity()
+            val monitor = ChatActivityMonitor(scope, MemoryStore(), Session(), "host") { _, state -> result = state }
+            fun question() = monitor.event(obj("id" to JsonPrimitive(9), "method" to s("item/tool/requestUserInput"),
+                "params" to obj("threadId" to s("chat"), "isBlocking" to JsonPrimitive(false))))
+            for (expected in listOf("active", "idle", "systemError")) {
+                monitor.event(obj("method" to s("thread/status/changed"),
+                    "params" to obj("threadId" to s("chat"), "status" to status(expected))))
+                question()
+                assertEquals(runtimeIndicator(status(expected)), result.indicator)
+                monitor.event(obj("method" to s("serverRequest/resolved"), "params" to obj("requestId" to JsonPrimitive(9))))
+                assertEquals(runtimeIndicator(status(expected)), result.indicator)
+            }
+            monitor.event(obj("id" to JsonPrimitive(8), "method" to s("item/commandExecution/requestApproval"),
+                "params" to obj("threadId" to s("chat"))))
+            question()
+            assertEquals(ChatIndicator.Approval, result.indicator)
         } finally { scope.cancel() }
     }
 

@@ -16,6 +16,10 @@
   server reissue and no response replay; and resolution during recovery with
   late-snapshot rejection. The new-chat fixture's initial wait was corrected to
   await the chat page before typing, then the affected fixture passed on rerun.
+- Integration with local main `8f5b202` passed the focused context/dispatcher
+  tests, app unit tests, instrumentation compilation, and the snapshot-before-
+  history and reconnect-ownership emulator fixtures. The only merge conflict was
+  documentation; both approval recovery and MCP behavior were preserved.
 - These are stock-contract fixtures, not a live-account or physical-phone
   acceptance run. No release, publication, deployment, or phone installation
   was performed.
