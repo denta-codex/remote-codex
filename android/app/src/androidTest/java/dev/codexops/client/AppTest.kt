@@ -600,6 +600,7 @@ class AppTest {
     private val userInputResponses = CopyOnWriteArrayList<JsonObject>()
     private val serverRequestResponses = CopyOnWriteArrayList<JsonObject>()
     @Volatile private var holdHistoryReply = false
+    @Volatile private var historyReplyExemption: String? = null
     private val heldHistoryRequests = CopyOnWriteArrayList<JsonElement>()
     private val app
         get() = ApplicationProvider.getApplicationContext<Application>()
@@ -726,7 +727,7 @@ class AppTest {
                                             return
                                         }
                                     }
-                                    if (method == "thread/turns/list" && holdHistoryReply) {
+                                    if (method == "thread/turns/list" && holdHistoryReply && params.str("threadId") != historyReplyExemption) {
                                         heldHistoryRequests.add(m.getValue("id"))
                                         return
                                     }
@@ -4264,11 +4265,6 @@ class AppTest {
         val failure = obj("success" to JsonPrimitive(false), "contentItems" to JsonArray(listOf(obj(
             "type" to s("inputText"), "text" to s("This client does not support client-executed tools. The tool was not executed.")
         ))))
-        val readThreadFailure = obj("success" to JsonPrimitive(false), "contentItems" to JsonArray(listOf(obj(
-            "type" to s("inputText"), "text" to s("This client does not execute codex_app.read_thread. The tool was not executed. " +
-                "Use the available codex-tasks skill to read or find tasks on an explicitly configured Grace endpoint. " +
-                "Desktop hostId values are not CLI target selectors.")
-        ))))
         fun request(id: Int) = obj("id" to JsonPrimitive(id), "method" to s("item/tool/call"),
             "params" to obj("threadId" to s("task-test"), "namespace" to s("arbitrary"), "tool" to s("any_tool"), "arguments" to JsonNull))
         assertEquals("home", model.state.value.page)
@@ -4288,7 +4284,8 @@ class AppTest {
                 "arguments" to obj("threadId" to s("task-test"), "hostId" to s("local"),
                     "turnLimit" to JsonPrimitive(20), "maxOutputCharsPerItem" to JsonPrimitive(32000)))).toString())
         compose.waitUntil(5000) { userInputResponses.size == 2 }
-        assertEquals(readThreadFailure, userInputResponses.last())
+        assertEquals(JsonPrimitive(false), userInputResponses.last()["success"])
+        assertTrue(userInputResponses.last().toString().contains("active host"))
         assertTrue(model.state.value.busy)
         assertTrue(model.state.value.decisions.isEmpty())
         holdHistoryReply = false
@@ -4298,6 +4295,81 @@ class AppTest {
         compose.waitForIdle()
         assertEquals(2, userInputResponses.size)
         assertTrue(model.state.value.decisions.isEmpty())
+        compose.onNodeWithText("Your input is needed").assertDoesNotExist()
+    }
+
+    @Test
+    fun nativeTaskToolsReadDuringHistoryLoadingWithoutOpeningTasks() {
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.onNodeWithTag("composer").performTextInput("Discover and inspect tasks")
+        compose.onNodeWithTag("send").performClick()
+        compose.waitUntil(15000) { model.state.value.entries.any { it.text == "Hello from Grace" } }
+        val advertised = lastThreadStartParams!!.list("dynamicTools").single()
+        assertEquals("namespace", advertised.str("type"))
+        assertEquals("codex_app", advertised.str("name"))
+        val names = advertised.list("tools").map { it.str("name") }
+        assertEquals(listOf("list_threads", "read_thread"), names)
+        assertTrue(advertised.list("tools").all { it["deferLoading"] == JsonPrimitive(false) })
+        compose.waitUntil(10000) { !model.state.value.busy }
+        compose.runOnUiThread { model.home() }
+        compose.waitUntil(5000) { model.state.value.page == "home" }
+        val calls = CopyOnWriteArrayList<Pair<String, JsonObject>>()
+        val task = obj("id" to s("task-inspect"), "name" to s("Inspect fixture"), "preview" to s("Fixture preview"),
+            "cwd" to s("/fixture"), "status" to obj("type" to s("idle")),
+            "createdAt" to JsonPrimitive(100), "updatedAt" to JsonPrimitive(200))
+        browserResponse = { method, params ->
+            if (params.str("threadId") == "task-inspect" || method == "thread/list" && params.str("limit") == "2") {
+                calls.add(method to params)
+                when (method) {
+                    "thread/list" -> obj("data" to JsonArray(listOf(task)))
+                    "thread/read" -> obj("thread" to task)
+                    "thread/turns/list" -> obj("data" to JsonArray(listOf(obj(
+                        "id" to s("inspect-turn"), "status" to s("completed"), "itemsView" to s("full"),
+                        "items" to JsonArray(listOf(obj("id" to s("inspect-reply"), "type" to s("agentMessage"),
+                            "text" to s("Read-only fixture answer"), "phase" to s("final")))),
+                    ))), "nextCursor" to s("inspect-older"))
+                    else -> obj()
+                }
+            } else null
+        }
+        fun request(id: String, tool: String, args: JsonObject) = obj("id" to s(id), "method" to s("item/tool/call"),
+            "params" to obj("namespace" to s("codex_app"), "tool" to s(tool), "arguments" to args))
+        fun data(id: String): JsonObject {
+            val result = serverRequestResponses.single { it.str("id") == id }.map("result")
+            assertEquals(JsonPrimitive(true), result["success"])
+            return wire.parseToJsonElement(result.list("contentItems").last().str("text")).jsonObject
+        }
+        val listing = request("native-list", names[0], obj("limit" to JsonPrimitive(2)))
+        peer!!.send(listing.toString())
+        peer!!.send(listing.toString())
+        compose.waitUntil(5000) { serverRequestResponses.any { it.str("id") == "native-list" } }
+        val found = data("native-list").list("threads").single()
+        assertEquals("grace", found.str("hostId"))
+        assertEquals("task-inspect", found.str("threadId"))
+        assertEquals("home", model.state.value.page)
+
+        historyReplyExemption = "task-inspect"
+        holdHistoryReply = true
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { heldHistoryRequests.isNotEmpty() }
+        val reading = request("native-read", names[1], obj("threadId" to found["threadId"], "hostId" to found["hostId"]))
+        peer!!.send(reading.toString())
+        peer!!.send(reading.toString())
+        compose.waitUntil(5000) { serverRequestResponses.any { it.str("id") == "native-read" } }
+        val read = data("native-read")
+        assertEquals("Read-only fixture answer", read.list("turns").single().list("items").single().str("text"))
+        assertEquals("inspect-older", read.map("page").str("nextCursor"))
+        assertEquals("task-test", model.state.value.thread)
+        assertTrue(model.state.value.busy)
+        assertTrue(model.state.value.decisions.isEmpty())
+        assertEquals(listOf("thread/list", "thread/read", "thread/turns/list"), calls.map { it.first })
+        assertEquals(JsonPrimitive(false), calls[1].second["includeTurns"])
+        assertEquals("full", calls[2].second.str("itemsView"))
+        holdHistoryReply = false
+        heldHistoryRequests.forEach { peer!!.send(obj("id" to it, "result" to history()).toString()) }
+        compose.waitUntil(10000) { !model.state.value.busy }
+        compose.waitForIdle()
+        assertEquals(2, serverRequestResponses.size)
         compose.onNodeWithText("Your input is needed").assertDoesNotExist()
     }
 

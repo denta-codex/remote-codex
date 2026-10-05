@@ -1207,3 +1207,36 @@ gesture are still pending user-authorized live deployment and delivery.
 - Fixture screenshots of the fullscreen file list and highlighted diff were
   inspected and retained under ignored `artifacts/completed-turn-changes/`.
   No release, deployment, or phone installation was performed.
+
+## Native read-only task tools — 2026-10-05
+
+- Integrated local main `597d7bc` into the feature worktree before final checks,
+  preserving main's approval-context, approval-choice, and chat-cost changes.
+- Both ordinary chats and report tasks advertise exactly `codex_app.list_threads`
+  and `codex_app.read_thread` via `thread/start.dynamicTools`. The installed stock
+  0.159.2 experimental schema confirms the namespace/function specification;
+  `thread/resume` does not accept tool-registration overrides.
+- A disposable stock app-server probe used the compiled Kotlin definitions, an
+  isolated temporary Codex home, and a loopback fixture Responses provider. It
+  verified both tool definitions in the model request, supported argument types,
+  required fields and descriptions, and a namespaced `item/tool/call` callback.
+  Stock removes numeric bounds/defaults during schema normalization; descriptions
+  repeat them, and handler validation remains authoritative. No credentials,
+  live account tasks, or real model inference were used.
+- `:core:test` and `:app:testDebugUnitTest` passed after integration and the
+  registration changes. Coverage includes limits, cursors, bounded outputs,
+  invalid/unsupported requests, timeout/size failures, resolution, cancellation,
+  duplicate IDs, and stale connection generations. Report-submission tests also
+  check registration at their task-creation boundary.
+- Four focused managed Android 16 scenarios passed:
+  `nativeTaskToolsReadDuringHistoryLoadingWithoutOpeningTasks`,
+  `unsupportedToolsFailOnHomeAndDuringHistoryLoading`,
+  `fileApprovalRecoversLiveSnapshotBeforeHistoryFinishes`, and
+  `extendedApprovalChoicesRequireConfirmationAndPreservePayload`.
+  The native fixture now creates a task, checks eager tool advertisement, then
+  lists and reads through those advertised names while another history load is
+  held. Its initial navigation assertion raced turn completion; waiting for the
+  fixture turn to finish fixed it, and the affected scenario passed on rerun.
+- Existing tasks retain their existing tool definitions; this change does not
+  retrofit registration, add mutation tools, or add a production server. No
+  release, deployment, authentication change, or phone installation was performed.

@@ -34,6 +34,11 @@ constructor(
     private var chatCostJob: Job? = null
     private var chatUsage: ChatUsage? = null
     private var chatUsagePath: String? = null
+    @Volatile private var verifiedTaskGeneration: Long? = null
+    private val taskTools = TaskToolRequests(viewModelScope, { rpc.generation },
+        { host.id.takeIf { verifiedTaskGeneration == rpc.generation } },
+        { method, params, epoch -> rpc.callForGeneration(method, params, epoch) },
+        { id, result, epoch -> rpc.respond(id, result, epoch) })
     private val updater = AppUpdater(app, endpoint, allowLoopbackTest)
     private val workspaces = StockWorkspaceAdapter(rpc)
     private val projectRepository = ProjectRepository(rpc)
@@ -310,6 +315,8 @@ constructor(
                         )
                     }
                     resetApprovalContexts()
+                    verifiedTaskGeneration = null
+                    taskTools.cancelAll()
                     requests.clear()
                     while (rpc.events.tryReceive().isSuccess) {}
                     publish()
@@ -319,6 +326,7 @@ constructor(
                             "Unexpected Codex account"
                         }
                         codexHome = init.str("codexHome")
+                        verifiedTaskGeneration = rpc.generation
                         val modes =
                             try {
                                 CollaborationModePreset.parse(
@@ -356,6 +364,8 @@ constructor(
                             else -> e.javaClass.simpleName
                         }
                         Log.w("RemoteCodexConnection", reason)
+                        verifiedTaskGeneration = null
+                        taskTools.cancelAll()
                         rpc.close()
                         resetApprovalContexts()
                         requests.clear()
@@ -397,6 +407,8 @@ constructor(
                 local.saveToken(value.trim())
                 connectionJob?.cancel()
                 connectionJob = null
+                verifiedTaskGeneration = null
+                taskTools.cancelAll()
                 rpc.close()
                 _state.update { it.copy(configured = true, page = "home", ready = false) }
                 showList(false)
@@ -1792,6 +1804,7 @@ constructor(
                             "historyMode" to s("paginated"),
                             "ephemeral" to JsonPrimitive(false),
                             "threadSource" to s("agent_created_thread"),
+                            "dynamicTools" to ReadOnlyTaskToolSpecs.definitions,
                             "projectId" to (projectId?.let(::s) ?: JsonNull),
                             "model" to journal.str("model").ifBlank { null }?.let(::s),
                             "serviceTier" to journal.str("serviceTier").ifBlank { null }?.let(::s),
@@ -2324,6 +2337,8 @@ constructor(
     private fun handle(event: JsonObject) {
         if (event.str("_epoch").toLongOrNull()?.let { it != rpc.generation } == true) return
         if (event.str("method") == "connection/lost") {
+            verifiedTaskGeneration = null
+            taskTools.cancelAll()
             cancelStreamingHaptics()
             activityMonitor.disconnected()
             resetApprovalContexts()
@@ -2369,6 +2384,13 @@ constructor(
         activityMonitor.event(event)
         if (_state.value.page == "chat") fileApprovalContexts.ensureSelected(_state.value.thread, rpc.generation)
         fileApprovalContexts.event(event.str("method"), event.map("params"), rpc.generation)
+        if (event.containsKey("id") &&
+            ServerRequests.route(event.str("method"), event["params"]) == ServerRequestRoute.TaskTool) {
+            taskTools.handle(event)
+            return
+        }
+        if (event.str("method") == "serverRequest/resolved")
+            event.map("params")["requestId"]?.let(taskTools::resolved)
         if (event.containsKey("id") || event.str("method") == "serverRequest/resolved") {
             applyEvent(event)
             return
@@ -2633,6 +2655,7 @@ constructor(
     }
 
     override fun onCleared() {
+        taskTools.cancelAll()
         network.unregisterNetworkCallback(callback)
         rpc.dispose()
     }

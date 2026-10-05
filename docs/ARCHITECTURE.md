@@ -236,6 +236,45 @@ found` just after creation. This is retried only on history/resume reads, for a
 bounded interval. The first live turn already has a subscription and is rendered
 from its events, without an immediate resume call.
 
+New Android tasks (including report tasks) advertise exactly `codex_app.list_threads`
+and `codex_app.read_thread` through stock `thread/start.dynamicTools`, using the
+installed 0.159.2 namespaced `DynamicToolSpec` contract with eager tool loading.
+Experimental API negotiation is already enabled during initialization. These
+schemas describe the implemented subset, including defaults, bounds, required
+thread identity, and rejection of additional arguments. Stock normalizes the
+model-facing schema and drops numeric bounds/defaults, so descriptions repeat
+those constraints and the adapter enforces them independently. Existing tasks retain
+their persisted tool definitions; stock `thread/resume` has no tool-registration
+field, so this change does not retrofit their tools or add a parallel MCP server.
+
+Selected `codex_app` calls received through `item/tool/call` execute read-only task
+tools on the verified active WSS account. `list_threads` returns a bounded recent
+snapshot of active user tasks (default 10, maximum 50); query-based finding,
+archives, and exhaustive inventory stay with agent-side `codex-tasks`.
+`read_thread` uses metadata-only `thread/read` and descending `thread/turns/list`
+with `itemsView: full`, preserving server status, timestamps, and opaque history
+cursors. It never resumes or opens the inspected task. Its coordinator JSON shape
+and item projection follow the saved ChatGPT Android 1.2026.258 reference and
+installed Codex desktop 26.901.51231; pagination completeness was checked against
+the installed stock 0.159.2 schema.
+
+Task tools accept only their supported arguments. Reads default to one turn and
+omit diagnostic outputs; the maximum is ten turns. Opt-in outputs are explicitly
+truncated to the requested per-item bound (default 2,000, maximum 20,000 characters)
+and a shared 20,000-character response budget. MCP/dynamic-tool result payloads
+and function outputs remain omitted. Oversized responses fail explicitly rather
+than silently truncating messages or history. Each operation has a 30-second
+deadline; stock rejection, invalid arguments, or unavailable history return a
+failed tool result without exposing raw server errors in logs.
+
+Returned task summaries include the active `HostIdentity.id`. Omitted `hostId`
+selects that connection; explicit IDs must match it, and desktop `local` is not
+aliased to Grace. The adapter takes the active identity rather than hardcoding
+Grace, allowing a later host picker to replace the connection. Tool jobs run off
+the UI/event collector, are canceled on request resolution/disconnect, and use
+the shared connection-generation and response-attempt guard. No task mutation,
+CLI invocation, secondary connection, or general MCP bridge is introduced.
+
 Approvals are connection-scoped. Resolved requests disappear even if answered by
 another client. File-change details are retained independently of timeline pages,
 using matching thread, turn, item, and connection generation. Stock 0.159.2 emits

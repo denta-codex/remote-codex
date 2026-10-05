@@ -159,6 +159,7 @@ internal class BugReportSubmission(private val rpc: RemoteSession, private val h
         if (draft.journal.str("stage") == "uploaded") {
             record("creatingTask")
             val task = rpc.call("thread/start", obj("cwd" to s(cwd), "projectId" to s(draft.journal.str("projectId")),
+                "dynamicTools" to ReadOnlyTaskToolSpecs.definitions,
                 "ephemeral" to JsonPrimitive(false), "historyMode" to s("paginated"), "threadSource" to s("agent_created_thread"))).map("thread")
             require(task.str("id").isNotBlank()) { "The task response omitted its identity. Check and continue to inspect the host." }
             require(task.str("projectId") == draft.journal.str("projectId")) { "The new task did not retain the reporting project. Inspect the retained workspace." }

@@ -7,17 +7,13 @@ import kotlinx.serialization.json.JsonPrimitive
 
 sealed interface ServerRequestRoute {
     data object Interactive : ServerRequestRoute
+    data object TaskTool : ServerRequestRoute
     data class Result(val result: JsonObject) : ServerRequestRoute
     data class Error(val code: Int, val message: String) : ServerRequestRoute
 }
 
 /** Stock server requests have one destination; unsupported requests never enter the UI. */
 object ServerRequests {
-    private val readThreadUnavailable = toolFailure(
-        "This client does not execute codex_app.read_thread. The tool was not executed. " +
-            "Use the available codex-tasks skill to read or find tasks on an explicitly configured Grace endpoint. " +
-            "Desktop hostId values are not CLI target selectors.",
-    )
     private val unsupported = ServerRequestRoute.Error(-32601, "This client does not support this server request.")
     private val routes = mapOf(
         "item/commandExecution/requestApproval" to ServerRequestRoute.Interactive,
@@ -43,8 +39,8 @@ object ServerRequests {
             ))
         }
         if (method == "item/tool/call" && params is JsonObject &&
-            params["namespace"] == s("codex_app") && params["tool"] == s("read_thread"))
-            return readThreadUnavailable
+            params["namespace"] == s("codex_app") && params["tool"] in setOf(s("list_threads"), s("read_thread")))
+            return ServerRequestRoute.TaskTool
         return routes[method] ?: unsupported
     }
 

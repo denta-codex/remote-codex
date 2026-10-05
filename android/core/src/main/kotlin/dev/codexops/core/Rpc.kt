@@ -44,7 +44,7 @@ class ConnectionFailure(val httpStatus: Int?, val transport: String) :
     Exception("Connection failed: ${httpStatus ?: transport}")
 
 private const val CONNECT_TIMEOUT_MS = 10_000
-private const val RPC_MESSAGE_MAX_BYTES = 100 * 1024 * 1024
+const val RPC_MESSAGE_MAX_BYTES = 100 * 1024 * 1024
 private const val OUTBOUND_FRAGMENT_BYTES = 256 * 1024
 private val rejectedStatus =
     Regex("^Invalid status code received: ([0-9]{3}) Status line: HTTP/1\\.[01] ([0-9]{3})(?: .*)?$")
@@ -189,10 +189,14 @@ class Rpc(
         method: String,
         params: JsonObject = obj(),
         timeoutMillis: Long = 30000,
+        expectedGeneration: Long? = null,
     ): JsonObject {
         val id = next.incrementAndGet()
         val waiter = CompletableDeferred<JsonObject>()
+        val context = currentCoroutineContext()
         synchronized(guard) {
+            context.ensureActive()
+            if (expectedGeneration != null && generation != expectedGeneration) throw ConnectionLost()
             pending[id.toString()] = waiter
             try {
                 send(obj("id" to JsonPrimitive(id), "method" to s(method), "params" to params))
@@ -250,7 +254,7 @@ class Rpc(
                 if (serverRequests.containsKey(id)) return
                 serverRequests[id] = ServerRequestState.Pending
                 when (val route = ServerRequests.route(message.str("method"), message["params"], clockMillis)) {
-                    ServerRequestRoute.Interactive -> Unit
+                    ServerRequestRoute.Interactive, ServerRequestRoute.TaskTool -> Unit
                     is ServerRequestRoute.Result -> {
                         respond(id, route.result, epoch)
                         return

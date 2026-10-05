@@ -195,6 +195,78 @@ class ServerRequestDispatchTest {
         }
     }
 
+    @Test
+    fun nativeTaskReadsCanIssueNestedRpcWithoutConsumingTheTriggerReply() = runBlocking {
+        val stockReads = AtomicInteger()
+        Fixture { peer, message ->
+            when (message.str("method")) {
+                "trigger-native" -> {
+                    for (id in listOf(message.getValue("id"), s(message.str("id")))) {
+                        val tool = obj("id" to id, "method" to s("item/tool/call"),
+                            "params" to obj("namespace" to s("codex_app"), "tool" to s("list_threads"), "arguments" to obj()))
+                        peer.send(tool.toString())
+                        peer.send(tool.toString())
+                    }
+                    peer.send(obj("id" to message["id"], "result" to obj("trigger" to s("accepted"))).toString())
+                }
+                "thread/list" -> {
+                    stockReads.incrementAndGet()
+                    peer.send(obj("id" to message["id"], "result" to obj("data" to JsonArray(emptyList()))).toString())
+                }
+            }
+        }.use { fixture ->
+            fixture.connect()
+            val tools = TaskToolRequests(this, { fixture.rpc.generation }, { "grace" },
+                { method, params, epoch -> fixture.rpc.call(method, params, expectedGeneration = epoch) },
+                fixture.rpc::respond)
+            val collector = launch {
+                for (event in fixture.rpc.events) tools.handle(event)
+            }
+            try {
+                assertEquals("accepted", fixture.rpc.call("trigger-native").str("trigger"))
+                val replies = listOf(fixture.reply(), fixture.reply())
+                assertEquals(setOf(false, true), replies.map { it.getValue("id").jsonPrimitive.isString }.toSet())
+                replies.forEach { assertEquals(JsonPrimitive(true), it.map("result")["success"]) }
+                assertEquals(2, stockReads.get())
+                assertEquals(2, fixture.replyCount())
+            } finally { collector.cancelAndJoin(); tools.cancelAll() }
+        }
+    }
+
+    @Test
+    fun nativeTaskRequestsUseTheSharedTypedIdAndResolutionGuard() = runBlocking {
+        Fixture().use { fixture ->
+            fixture.connect()
+            val epoch = fixture.rpc.generation
+            for (id in listOf(JsonPrimitive(7), s("7"))) {
+                val tool = obj("id" to id, "method" to s("item/tool/call"),
+                    "params" to obj("namespace" to s("codex_app"), "tool" to s("list_threads"), "arguments" to obj()))
+                fixture.send(tool)
+                fixture.send(tool)
+                assertEquals(id, withTimeout(5000) { fixture.rpc.events.receive() }["id"])
+                fixture.rpc.respond(id, obj("success" to JsonPrimitive(true)), epoch)
+                assertEquals(id, fixture.reply()["id"])
+                fixture.send(tool)
+            }
+            assertEquals(2, fixture.replyCount())
+            assertTrue(fixture.rpc.events.tryReceive().isFailure)
+            val resolved = s("resolved-tool")
+            fixture.send(obj("id" to resolved, "method" to s("item/tool/call"),
+                "params" to obj("namespace" to s("codex_app"), "tool" to s("read_thread"))))
+            withTimeout(5000) { fixture.rpc.events.receive() }
+            fixture.send(obj("method" to s("serverRequest/resolved"), "params" to obj("requestId" to resolved)))
+            withTimeout(5000) { fixture.rpc.events.receive() }
+            fixture.rpc.respond(resolved, obj("success" to JsonPrimitive(true)), epoch)
+            assertEquals(2, fixture.replyCount())
+            fixture.connect()
+            try {
+                fixture.rpc.call("thread/read", obj("threadId" to s("task")), expectedGeneration = epoch)
+                fail("A stale read reached the new connection")
+            } catch (_: ConnectionLost) { }
+            assertEquals(2, fixture.replyCount())
+        }
+    }
+
     private class Fixture(
         clockMillis: () -> Long = System::currentTimeMillis,
         private val onMessage: (WebSocket, JsonObject) -> Unit = { _, _ -> },

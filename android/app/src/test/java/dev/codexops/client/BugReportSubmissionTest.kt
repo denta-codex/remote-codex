@@ -233,6 +233,7 @@ class BugReportSubmissionTest {
             }
             "thread/start" -> {
                 startParams = params
+                assertEquals(ReadOnlyTaskToolSpecs.definitions, params["dynamicTools"])
                 mutation("start")
                 obj("thread" to obj("id" to s("fix-task"), "projectId" to s("project")))
             }

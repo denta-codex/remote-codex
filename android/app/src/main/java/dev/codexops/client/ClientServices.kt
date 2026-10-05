@@ -18,6 +18,11 @@ interface RemoteSession {
     suspend fun callWithTimeout(method: String, params: JsonObject, timeoutMillis: Long): JsonObject =
         call(method, params)
 
+    suspend fun callForGeneration(method: String, params: JsonObject, epoch: Long): JsonObject {
+        if (generation != epoch) throw ConnectionLost()
+        return call(method, params)
+    }
+
     suspend fun createDirectory(path: String) {
         call(
             "fs/createDirectory",
@@ -60,6 +65,9 @@ class StockRemoteSession(allowLoopbackTest: Boolean = false) : RemoteSession {
 
     override suspend fun callWithTimeout(method: String, params: JsonObject, timeoutMillis: Long) =
         rpc.call(method, params, timeoutMillis)
+
+    override suspend fun callForGeneration(method: String, params: JsonObject, epoch: Long) =
+        rpc.call(method, params, expectedGeneration = epoch)
 
     override suspend fun createDirectory(path: String) = rpc.createDirectory(path)
 
