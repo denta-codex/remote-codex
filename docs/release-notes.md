@@ -1,5 +1,5 @@
-- Add a subtle estimated chat-cost badge with price sources and explanations for unknown, partial, or stale estimates. Estimates use the server's published catalog and recorded request history; subscription usage is not an extra charge.
-- Add send feedback and fading streaming haptics.
-- Support stock question forms, MCP elicitation forms, URL consent, and complete approval choices.
-- Recover file approval details across reconnects.
-- Improve client-time responses and guidance for task tools.
+- Support native read-only task discovery and history tools
+- Add floating worktree and chat spend summary
+- Support grouped credential inject approvals on Android
+- Add contextual follow-up suggestions above the mobile composer
+- Merge Android grouped inject approvals
