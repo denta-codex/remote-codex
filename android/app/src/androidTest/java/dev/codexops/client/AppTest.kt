@@ -85,13 +85,16 @@ class AppTest {
     }
 
     @Test
-    fun taskSwipeMarksUnread() {
+    fun taskSwipeTogglesUnread() {
         compose.onNodeWithText("Fixture task").performTouchInput { swipeRight() }
         compose.waitUntil(5000) { model.state.value.chatActivity["task-test"]?.unread == true }
         compose.onNodeWithContentDescription("Unread reply").assertExists()
-        // Repeating the same gesture does not toggle the task back to read.
+        // The same gesture acknowledges an unread task without opening it.
         compose.onNodeWithTag("task-row-task-test").performTouchInput { swipeRight() }
-        compose.onNodeWithContentDescription("Unread reply").assertExists()
+        compose.waitUntil(5000) { model.state.value.taskNotice?.message == "Marked read" }
+        compose.onNodeWithContentDescription("Unread reply").assertDoesNotExist()
+        compose.onNodeWithTag("task-row-task-test").performTouchInput { swipeRight() }
+        compose.waitUntil(5000) { model.state.value.chatActivity["task-test"]?.unread == true }
         compose.runOnUiThread {
             store.clear()
             model = ClientModel(app, "ws://127.0.0.1:${server.port}/rpc", "/fixture", true)
@@ -155,6 +158,10 @@ class AppTest {
             actions.single { it.label == "Mark unread" }.action()
         }
         compose.waitUntil(5000) { model.state.value.chatActivity["task-test"]?.unread == true }
+        val readAction = row.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.CustomActions].single { it.label == "Mark read" }
+        compose.runOnUiThread { readAction.action() }
+        compose.waitUntil(5000) { model.state.value.taskNotice?.message == "Marked read" }
+        compose.onNodeWithContentDescription("Unread reply").assertDoesNotExist()
         val archiveAction = row.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.CustomActions].single { it.label == "Archive" }
         compose.runOnUiThread {
             archiveAction.action()

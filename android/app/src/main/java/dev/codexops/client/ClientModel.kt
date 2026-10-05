@@ -486,15 +486,15 @@ constructor(
             listFailed = false, listIndex = 0, listOffset = 0) }
     }
 
-    override fun markTaskUnread(id: String) {
+    override fun toggleTaskUnread(id: String) {
         if (_state.value.tasks.none { it.str("id") == id }) return
         viewModelScope.launch {
             try {
-                activityMonitor.markUnread(id)
-                _state.update { it.copy(taskNotice = TaskNotice(UUID.randomUUID().toString(), "Marked unread")) }
+                val unread = activityMonitor.toggleUnread(id)
+                _state.update { it.copy(taskNotice = TaskNotice(UUID.randomUUID().toString(), if (unread) "Marked unread" else "Marked read")) }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                _state.update { it.copy(error = "Could not save the unread reminder.") }
+                _state.update { it.copy(error = "Could not save the read status.") }
             }
         }
     }

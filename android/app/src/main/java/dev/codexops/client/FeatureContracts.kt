@@ -222,7 +222,7 @@ interface HomeActions {
 
     fun archiveTask(id: String, archived: Boolean)
 
-    fun markTaskUnread(id: String)
+    fun toggleTaskUnread(id: String)
 
     fun undoTaskAction(noticeId: String)
 

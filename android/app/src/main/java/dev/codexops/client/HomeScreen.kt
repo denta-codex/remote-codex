@@ -136,7 +136,7 @@ private fun ChatBrowser(st: ScreenState, actions: HomeActions) {
                         onOpen = { if (!pending && !st.listLoading) actions.openTask(id) },
                         onCopy = { copyThreadDeeplink(context, id) },
                         onArchive = { actions.archiveTask(id, !st.archived) },
-                        onUnread = { actions.markTaskUnread(id) },
+                        onToggleUnread = { actions.toggleTaskUnread(id) },
                     ) {
                     Column(Modifier.fillMaxWidth()
                         .heightIn(min = 64.dp).padding(vertical = 14.dp)) {
