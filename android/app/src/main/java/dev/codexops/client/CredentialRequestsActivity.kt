@@ -50,7 +50,7 @@ class CredentialRequestsActivity : ComponentActivity() {
         }
         val padding = (16 * resources.displayMetrics.density).toInt()
         ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime())
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime() or WindowInsetsCompat.Type.displayCutout())
             v.setPadding(padding + bars.left, padding + bars.top, padding + bars.right, padding + bars.bottom)
             insets
         }

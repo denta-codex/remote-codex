@@ -179,6 +179,9 @@ data class Entry(val turn: String, val raw: JsonObject) {
 /** Updated only on the owning UI coroutine. Snapshots replace, deltas append. */
 class Timeline {
     private val entries = linkedMapOf<String, Entry>()
+    private val statuses = linkedMapOf<String, String>()
+    val turnStatuses: Map<String, String>
+        get() = statuses.toMap()
     var activeTurn: String? = null
         private set
 
@@ -186,13 +189,17 @@ class Timeline {
 
     fun clear() {
         entries.clear()
+        statuses.clear()
         activeTurn = null
     }
 
     fun snapshot(turns: List<JsonObject>, prepend: Boolean = false) {
         val page = linkedMapOf<String, Entry>()
         turns.forEach { turn ->
-            if (turn.str("status") == "inProgress") activeTurn = turn.str("id")
+            // Older pages must not overwrite the outcome of a turn already updated live.
+            if (!prepend || turn.str("id") !in statuses)
+                statuses[turn.str("id")] = turn.str("status")
+            if (statuses[turn.str("id")] == "inProgress") activeTurn = turn.str("id")
             else if (activeTurn == turn.str("id")) activeTurn = null
             turn.list("items").forEach { item ->
                 // History items are authoritative completed snapshots.
@@ -260,8 +267,15 @@ class Timeline {
     fun event(method: String, p: JsonObject) {
         val turn = p.str("turnId")
         when (method) {
-            "turn/started" -> activeTurn = p.map("turn").str("id")
-            "turn/completed" -> if (activeTurn == p.map("turn").str("id")) activeTurn = null
+            "turn/started" -> {
+                activeTurn = p.map("turn").str("id")
+                statuses[p.map("turn").str("id")] = "inProgress"
+            }
+            "turn/completed" -> {
+                val completedTurn = p.map("turn")
+                statuses[completedTurn.str("id")] = completedTurn.str("status")
+                if (activeTurn == completedTurn.str("id")) activeTurn = null
+            }
             "item/started",
             "item/completed" -> {
                 val item =
