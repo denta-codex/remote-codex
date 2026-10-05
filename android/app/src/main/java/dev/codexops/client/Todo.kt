@@ -11,7 +11,8 @@ data class TodoItem(
     val description: String = "", val notes: List<String> = emptyList(),
 )
 
-data class TodoEditor(val original: TodoItem? = null, val title: String = "", val description: String = "") {
+data class TodoEditor(val original: TodoItem? = null, val title: String = "", val description: String = "",
+    val creationStatus: String = "To Do") {
     val dirty: Boolean get() = title != (original?.title ?: "") || description != (original?.description ?: "")
 }
 
@@ -104,15 +105,21 @@ internal class StockTodoOperations(private val rpc: RemoteSession) : TodoOperati
         task(call(listOf("show", id.toString()), false, "task").getValue("task"), true).also { require(it.id == id) }
 
     override suspend fun save(editor: TodoEditor): TodoItem {
+        require(editor.creationStatus in todoStatuses)
         val original = editor.original
         val args = if (original == null) listOf("add", "--description=${editor.description}", "--", editor.title)
         else listOf("edit", original.id.toString(), "--expect-revision", original.revision.toString(),
             "--title=${editor.title}", "--description=${editor.description}")
-        return task(call(args, true, "task").getValue("task"), true).also {
+        val saved = task(call(args, true, "task").getValue("task"), true).also {
             require(it.title == editor.title.trim() && it.description == editor.description)
             require(if (original == null) it.revision == 1L && it.status == "To Do"
                 else it.id == original.id && it.revision == original.revision + 1 && it.status == original.status)
         }
+        if (original != null || editor.creationStatus == "To Do") return saved
+        // Creation has committed. Even a rejected move must keep the journal locked
+        // for review rather than offer a second create of the same draft.
+        return try { move(saved, editor.creationStatus) }
+        catch (e: TodoRejected) { throw IllegalStateException("Created task; status change rejected", e) }
     }
 
     override suspend fun move(task: TodoItem, status: String): TodoItem {
@@ -168,7 +175,7 @@ internal class TodoController(
     fun select(status: String) { if (status in todoStatuses) update(state.copy(status = status)) }
 
     fun new() {
-        if (canWrite()) update(state.copy(editor = TodoEditor(), error = null))
+        if (canWrite()) update(state.copy(editor = TodoEditor(creationStatus = state.status), error = null))
     }
 
     fun open(id: Long) {

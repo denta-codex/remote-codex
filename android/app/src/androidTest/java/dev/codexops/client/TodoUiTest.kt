@@ -37,7 +37,7 @@ class TodoUiTest {
         override suspend fun save(editor: TodoEditor): TodoItem {
             saves++
             val old = editor.original
-            val saved = TodoItem(old?.id ?: 2, editor.title, old?.status ?: "To Do", (old?.revision ?: 0) + 1, editor.description)
+            val saved = TodoItem(old?.id ?: 2, editor.title, old?.status ?: editor.creationStatus, (old?.revision ?: 0) + 1, editor.description)
             tasks.removeAll { it.id == saved.id }; tasks += saved
             check(!loseReply)
             return saved
@@ -131,6 +131,27 @@ class TodoUiTest {
         } finally { compose.mainClock.autoAdvance = true }
         compose.waitUntil(5000) { state.value.todo.items.first().id == 20L && !state.value.todo.busy }
         assertEquals(0, saves)
+    }
+
+    @Test fun addUsesTheVisibleColumnAfterTabNavigation() {
+        show(cover = true)
+        compose.onNodeWithContentDescription("Refresh Todo").assertIsDisplayed()
+        compose.onNodeWithTag("todo-tab-1").performClick()
+        compose.waitUntil(5000) { state.value.todo.status == "In Progress" }
+        compose.onNodeWithText("Add").performClick()
+        compose.onNodeWithTag("todo-title").performTextInput("Started task")
+        compose.onNodeWithTag("todo-save").performClick()
+        compose.onNodeWithTag("todo-tab-1").assertIsSelected()
+        compose.onNodeWithText("Started task").assertIsDisplayed()
+        assertEquals("In Progress", tasks.single { it.title == "Started task" }.status)
+        compose.onNodeWithTag("todo-tab-2").performClick()
+        compose.waitUntil(5000) { state.value.todo.status == "Done" }
+        compose.onNodeWithText("Add").performClick()
+        compose.onNodeWithTag("todo-title").performTextInput("Finished task")
+        compose.onNodeWithTag("todo-save").performClick()
+        compose.onNodeWithTag("todo-tab-2").assertIsSelected()
+        compose.onNodeWithText("Finished task").assertIsDisplayed()
+        assertEquals("Done", tasks.single { it.title == "Finished task" }.status)
     }
 
     @Test fun addsEditsAndMovesATaskThroughNativeControls() {
