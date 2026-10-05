@@ -15,7 +15,7 @@ class ServerRequestDispatchTest {
         "item/permissions/requestApproval", "item/tool/requestUserInput",
     )
     private val unsupported = listOf(
-        "currentTime/read", "applyPatchApproval", "execCommandApproval",
+        "applyPatchApproval", "execCommandApproval",
         "account/chatgptAuthTokens/refresh", "attestation/generate", "future/request",
     )
 
@@ -28,13 +28,13 @@ class ServerRequestDispatchTest {
             if (message.str("method") == "initialize") {
                 // This ID collides with the outstanding initialize call in the opposite direction.
                 peer.send(request(message.getValue("id"), unsupported.first()).toString())
-                (unsupported.drop(1) + "item/tool/call" + "mcpServer/elicitation/request" + interactive)
+                (unsupported.drop(1) + "item/tool/call" + "mcpServer/elicitation/request" + "currentTime/read" + interactive)
                     .forEach { peer.send(request(s(it), it).toString()) }
                 peer.send(obj("method" to s("future/notification"), "params" to obj()).toString())
             }
         }.use { fixture ->
             fixture.connect()
-            repeat(unsupported.size + 2) {
+            repeat(unsupported.size + 3) {
                 val reply = fixture.reply()
                 when (reply["id"]) {
                     s("item/tool/call") -> {
@@ -42,6 +42,7 @@ class ServerRequestDispatchTest {
                         assertEquals("inputText", reply.map("result").list("contentItems").single().str("type"))
                     }
                     s("mcpServer/elicitation/request") -> assertEquals(obj("action" to s("cancel")), reply["result"])
+                    s("currentTime/read") -> assertTrue(reply.map("result")["currentTimeAt"]!!.jsonPrimitive.long > 0)
                     else -> {
                         assertEquals(setOf("id", "error"), reply.keys)
                         assertEquals("-32601", reply.map("error").str("code"))
@@ -54,7 +55,69 @@ class ServerRequestDispatchTest {
                 assertEquals(fixture.rpc.generation.toString(), event.str("_epoch"))
             }
             assertEquals("future/notification", withTimeout(5000) { fixture.rpc.events.receive() }.str("method"))
-            assertEquals(unsupported.size + 2, fixture.replyCount())
+            assertEquals(unsupported.size + 3, fixture.replyCount())
+        }
+    }
+
+    @Test
+    fun currentTimeUsesWholeWallClockSeconds() {
+        listOf(2_200_000_000_999L to 2_200_000_000L, 1000L to 1L, 999L to 0L, -1L to -1L)
+            .forEach { (millis, seconds) ->
+                val route = ServerRequests.route("currentTime/read") { millis } as ServerRequestRoute.Result
+                assertEquals(obj("currentTimeAt" to JsonPrimitive(seconds)), route.result)
+                assertFalse(route.result.getValue("currentTimeAt").jsonPrimitive.isString)
+            }
+    }
+
+    @Test
+    fun currentTimeRepliesOncePerTypedIdAndSamplesEachNewRequest() = runBlocking {
+        var now = 2_200_000_000_999L
+        val samples = AtomicInteger()
+        Fixture(clockMillis = { samples.incrementAndGet(); now }).use { fixture ->
+            fixture.connect()
+            listOf(JsonPrimitive(7), s("7")).forEachIndexed { index, id ->
+                now += index * 1000L
+                val request = obj("id" to id, "method" to s("currentTime/read"),
+                    "params" to obj("threadId" to s("unselected-thread")))
+                fixture.send(request)
+                fixture.send(request)
+                val reply = fixture.reply()
+                assertEquals(id, reply["id"])
+                assertEquals(obj("currentTimeAt" to JsonPrimitive(Math.floorDiv(now, 1000L))), reply["result"])
+                fixture.send(request)
+            }
+            assertEquals(2, fixture.replyCount())
+            assertEquals(2, samples.get())
+            assertTrue(fixture.rpc.events.tryReceive().isFailure)
+        }
+    }
+
+    @Test
+    fun currentTimeDoesNotReplayAfterDisconnectAndUsesFreshClockOnNewDelivery() = runBlocking {
+        var now = 1000L
+        var closeAfterReply = true
+        Fixture(clockMillis = { now }, onMessage = { peer, message ->
+            if (message.str("method").isEmpty() && closeAfterReply) {
+                closeAfterReply = false
+                peer.close(1000, "fixture disconnect after receipt")
+            }
+        }).use { fixture ->
+            fixture.connect()
+            val epoch = fixture.rpc.generation
+            val id = s("time")
+            val request = obj("id" to id, "method" to s("currentTime/read"),
+                "params" to obj("threadId" to s("thread")))
+            fixture.send(request)
+            assertEquals(obj("currentTimeAt" to JsonPrimitive(1L)), fixture.reply()["result"])
+            assertEquals("connection/lost", withTimeout(5000) { fixture.rpc.events.receive() }.str("method"))
+            now = 2999L
+            fixture.connect()
+            assertThrows(ConnectionLost::class.java) { fixture.rpc.respond(id, obj(), epoch) }
+            assertEquals(1, fixture.replyCount())
+            fixture.send(request)
+            assertEquals(obj("currentTimeAt" to JsonPrimitive(2L)), fixture.reply()["result"])
+            assertEquals(2, fixture.replyCount())
+            assertTrue(fixture.rpc.events.tryReceive().isFailure)
         }
     }
 
@@ -132,8 +195,11 @@ class ServerRequestDispatchTest {
         }
     }
 
-    private class Fixture(private val onMessage: (WebSocket, JsonObject) -> Unit = { _, _ -> }) : AutoCloseable {
-        val rpc = Rpc(true)
+    private class Fixture(
+        clockMillis: () -> Long = System::currentTimeMillis,
+        private val onMessage: (WebSocket, JsonObject) -> Unit = { _, _ -> },
+    ) : AutoCloseable {
+        val rpc = Rpc(true, clockMillis)
         private val server = MockWebServer()
         private val replies = Channel<JsonObject>(Channel.UNLIMITED)
         private val count = AtomicInteger()

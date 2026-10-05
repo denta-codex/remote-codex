@@ -26,12 +26,16 @@ object ServerRequests {
             ))),
         )),
         "mcpServer/elicitation/request" to ServerRequestRoute.Result(obj("action" to s("cancel"))),
-        "currentTime/read" to unsupported,
         "applyPatchApproval" to unsupported,
         "execCommandApproval" to unsupported,
         "account/chatgptAuthTokens/refresh" to unsupported,
         "attestation/generate" to unsupported,
     )
 
-    fun route(method: String): ServerRequestRoute = routes[method] ?: unsupported
+    fun route(method: String, clockMillis: () -> Long = System::currentTimeMillis): ServerRequestRoute =
+        if (method == "currentTime/read") {
+            ServerRequestRoute.Result(obj(
+                "currentTimeAt" to JsonPrimitive(Math.floorDiv(clockMillis(), 1000L)),
+            ))
+        } else routes[method] ?: unsupported
 }

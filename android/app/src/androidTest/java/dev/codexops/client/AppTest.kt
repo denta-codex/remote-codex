@@ -4045,10 +4045,17 @@ class AppTest {
         compose.waitUntil(10000) { heldHistoryRequests.isNotEmpty() }
         fun request(id: String, method: String, params: JsonObject = obj()) =
             obj("id" to s(id), "method" to s(method), "params" to params)
-        peer!!.send(request("time", "currentTime/read").toString())
+        val beforeTime = Math.floorDiv(System.currentTimeMillis(), 1000L)
+        val timeRequest = request("time", "currentTime/read", obj("threadId" to s("unselected-thread")))
+        peer!!.send(timeRequest.toString())
+        peer!!.send(timeRequest.toString())
         peer!!.send(request("elicitation", "mcpServer/elicitation/request").toString())
         compose.waitUntil(5000) { serverRequestResponses.size == 2 }
-        assertEquals("-32601", serverRequestResponses.first { it.str("id") == "time" }.map("error").str("code"))
+        val timeReply = serverRequestResponses.first { it.str("id") == "time" }
+        assertEquals(setOf("id", "result"), timeReply.keys)
+        val seconds = timeReply.map("result").getValue("currentTimeAt").jsonPrimitive
+        assertFalse(seconds.isString)
+        assertTrue(seconds.long in beforeTime..Math.floorDiv(System.currentTimeMillis(), 1000L))
         assertEquals("cancel", serverRequestResponses.first { it.str("id") == "elicitation" }.map("result").str("action"))
         assertTrue(model.state.value.decisions.isEmpty())
 
