@@ -4100,6 +4100,74 @@ class AppTest {
         assertTrue(model.state.value.decisions.isEmpty())
     }
 
+    private fun showQuestionForm(question: JsonObject, blocking: Boolean = true, requestId: Int = 88,
+        questions: List<JsonObject> = listOf(question)) {
+        compose.runOnUiThread { model.foreground(true); model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy }
+        peer!!.send(obj("id" to JsonPrimitive(requestId), "method" to s("item/tool/requestUserInput"),
+            "params" to obj("threadId" to s("task-test"), "turnId" to s("turn-test"), "itemId" to s("question"),
+                "isBlocking" to JsonPrimitive(blocking), "questions" to JsonArray(questions))).toString())
+        compose.waitUntil(5000) { model.state.value.decisions.size == 1 }
+    }
+
+    private fun formQuestion(other: Boolean = false, secret: Boolean = false, options: Boolean = true) =
+        obj("id" to s("answer"), "header" to s("Choice"), "question" to s("Choose an approach"),
+            "isOther" to JsonPrimitive(other), "isSecret" to JsonPrimitive(secret),
+            "options" to if (options) JsonArray(listOf(
+                obj("label" to s("First"), "description" to s("First approach")),
+                obj("label" to s("Second"), "description" to s("Second approach")),
+            )) else JsonNull)
+
+    @Test fun questionChoicesPreserveSupplementalNotesAndOther() {
+        showQuestionForm(formQuestion(other = true), blocking = false)
+        compose.onNodeWithText("Question available").assertIsDisplayed()
+        compose.onNodeWithText("Your input is needed").assertDoesNotExist()
+        compose.onNodeWithText("First", useUnmergedTree = true).performClick()
+        compose.onNodeWithTag("question-text-answer").performTextInput("My details")
+        compose.onNodeWithText("Second", useUnmergedTree = true).performClick()
+        compose.onNodeWithText(Decisions.OTHER_ANSWER, useUnmergedTree = true).performClick()
+        compose.onNodeWithTag("question-text-answer").assertTextContains("My details")
+        compose.onNodeWithText("Submit answers").performScrollTo().performClick()
+        compose.waitUntil(5000) { userInputResponses.size == 1 }
+        assertEquals(JsonArray(listOf(s(Decisions.OTHER_ANSWER), s("My details"))),
+            userInputResponses.single().map("answers").map("answer")["answers"])
+    }
+
+    @Test fun secretTextQuestionsStayMaskedAndResolvedFormsDiscardDrafts() {
+        showQuestionForm(formQuestion(secret = true, options = false))
+        compose.onNodeWithTag("question-text-answer")
+            .assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Password))
+            .performTextInput("fixture-secret")
+        emit(peer!!, "serverRequest/resolved", obj("requestId" to JsonPrimitive(88)))
+        compose.waitUntil(5000) { model.state.value.decisions.isEmpty() }
+        compose.onNodeWithTag("question-text-answer").assertDoesNotExist()
+        assertTrue(userInputResponses.isEmpty())
+        showQuestionForm(formQuestion(secret = true, options = false), requestId = 89)
+        compose.onNodeWithTag("question-text-answer").assert(SemanticsMatcher.expectValue(
+            SemanticsProperties.EditableText, androidx.compose.ui.text.AnnotatedString("")))
+            .performTextInput("new-fixture-secret")
+        compose.onNodeWithText("Submit answers").performScrollTo().performClick()
+        compose.waitUntil(5000) { userInputResponses.size == 1 }
+        assertEquals(JsonArray(listOf(s("new-fixture-secret"))),
+            userInputResponses.single().map("answers").map("answer")["answers"])
+    }
+
+    @Test fun unansweredQuestionsRequireConfirmationAndSubmitEmptyArrays() {
+        val question = formQuestion()
+        val more = obj("id" to s("more"), "header" to s("More"), "question" to s("Any further details?"))
+        showQuestionForm(question, questions = listOf(question, more))
+        compose.onNodeWithText(Decisions.OTHER_ANSWER).assertDoesNotExist()
+        compose.onNodeWithText("Submit answers").performScrollTo().performClick()
+        compose.onNodeWithText("Submit with unanswered questions?").assertIsDisplayed()
+        assertTrue(userInputResponses.isEmpty())
+        compose.onNodeWithText("Keep answering").performClick()
+        compose.onNodeWithText("Submit answers").performClick()
+        compose.onNodeWithTag("confirm-unanswered").performClick()
+        compose.waitUntil(5000) { userInputResponses.size == 1 }
+        assertEquals(JsonArray(emptyList()), userInputResponses.single().map("answers").map("answer")["answers"])
+        assertEquals(JsonArray(emptyList()), userInputResponses.single().map("answers").map("more")["answers"])
+    }
+
     @Test
     fun planModeQuestionCanBeAnswered() {
         askPlanQuestion = true
