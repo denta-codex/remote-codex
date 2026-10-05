@@ -52,9 +52,9 @@ internal fun TurnChangesViewer(changes: ConversationRow.Changes, onDismiss: () -
     var selectedPath by rememberSaveable(changes.turn) { mutableStateOf<String?>(null) }
     val file = changes.files.firstOrNull { it.path == selectedPath }
     val back = { if (file == null) onDismiss() else selectedPath = null }
-    Dialog(onDismissRequest = back, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(onDismissRequest = back, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Surface(Modifier.fillMaxSize().testTag("turn-changes-fullscreen"), color = MaterialTheme.colorScheme.background) {
-            Column(Modifier.fillMaxSize().systemBarsPadding()) {
+            Column(Modifier.fillMaxSize().safeDrawingPadding()) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically) {
                     IconButton(back, Modifier.testTag("changes-back")) { Glyph(R.drawable.ic_back, "Back") }

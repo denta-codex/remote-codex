@@ -26,7 +26,7 @@ decisions responsive to available width, height, and font scale, including when
 the user changes the external display mode. Avoid scaling down the entire phone
 UI or forcing a device-specific full-screen mode.
 
-Full-screen image, file, plan, visualization, and merge dialogs own their window
+Full-screen image, file, plan, visualization, and recorded-change dialogs own their window
 insets independently of the app shell. Their backgrounds fill the window while
 their content uses safe-drawing padding; full-screen dialog windows explicitly
 disable decor fitting so clearance is applied once. The project/sort and

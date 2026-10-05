@@ -150,6 +150,7 @@ class AppTest {
             }
         }
         compose.onNodeWithTag("turn-changes-compact").assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
+        assertCoverDialogAvoidsCutouts(compose.onNodeWithTag("changes-back"))
         compose.onNodeWithText(path).assertIsDisplayed()
         compose.onNodeWithTag("changed-file-$path").assertHeightIsAtLeast(56.dp).performClick()
         compose.onNodeWithText("-old\n+new").assertIsDisplayed()
