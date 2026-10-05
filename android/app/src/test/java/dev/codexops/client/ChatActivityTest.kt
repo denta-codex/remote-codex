@@ -153,6 +153,28 @@ class ChatActivityTest {
         } finally { scope.cancel() }
     }
 
+    @Test fun nonblockingQuestionsAndTheirResolutionDoNotOverrideServerStatus() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            var result = ChatActivity()
+            val monitor = ChatActivityMonitor(scope, MemoryStore(), Session(), "host") { _, state -> result = state }
+            fun question() = monitor.event(obj("id" to JsonPrimitive(9), "method" to s("item/tool/requestUserInput"),
+                "params" to obj("threadId" to s("chat"), "isBlocking" to JsonPrimitive(false))))
+            for (expected in listOf("active", "idle", "systemError")) {
+                monitor.event(obj("method" to s("thread/status/changed"),
+                    "params" to obj("threadId" to s("chat"), "status" to status(expected))))
+                question()
+                assertEquals(runtimeIndicator(status(expected)), result.indicator)
+                monitor.event(obj("method" to s("serverRequest/resolved"), "params" to obj("requestId" to JsonPrimitive(9))))
+                assertEquals(runtimeIndicator(status(expected)), result.indicator)
+            }
+            monitor.event(obj("id" to JsonPrimitive(8), "method" to s("item/commandExecution/requestApproval"),
+                "params" to obj("threadId" to s("chat"))))
+            question()
+            assertEquals(ChatIndicator.Approval, result.indicator)
+        } finally { scope.cancel() }
+    }
+
     private class MemoryStore : ClientStore {
         val values = mutableMapOf<String, String>()
         override suspend fun get(id: String) = values[id].orEmpty()
