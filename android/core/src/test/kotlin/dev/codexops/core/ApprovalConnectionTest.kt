@@ -12,6 +12,41 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ApprovalConnectionTest {
+    @Test fun batchReleaseUsesOneCompletePayloadAndReconnectOnlyChecksStatus() = runBlocking {
+        MockWebServer().use { server ->
+            val releases = AtomicInteger()
+            val reads = AtomicInteger()
+            val listener = object : WebSocketListener() {
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(1000, "") }
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    val message = wire.parseToJsonElement(text).jsonObject
+                    if (message.str("method") == "release_batch") {
+                        val values = message.list("values")
+                        if (values.size == 2 && values[0].str("value") == "FIXTURE_A" && values[1].str("value") == "") releases.incrementAndGet()
+                        webSocket.close(1000, "")
+                    } else {
+                        if (message.str("method") == "list") assertTrue((message["capabilities"] as JsonArray).contains(s(APPROVAL_BATCH_CAPABILITY)))
+                        reads.incrementAndGet()
+                        webSocket.send(obj("version" to JsonPrimitive(1), "id" to message["id"], "requests" to JsonArray(emptyList())).toString())
+                    }
+                }
+            }
+            repeat(2) { server.enqueue(MockResponse().withWebSocketUpgrade(listener)) }; server.start()
+            val connection = ApprovalConnection(true)
+            val endpoint = "ws://127.0.0.1:${server.port}/codex/rpc"
+            try {
+                connection.connect(endpoint, "fixture")
+                val submission = connection.prepare("release_batch", "fixture", values = JsonArray(listOf(
+                    obj("id" to s("f1"), "value" to s("FIXTURE_A")), obj("id" to s("f2"), "value" to s("")))))
+                try { connection.send(submission); fail("lost response reported success") } catch (_: ApprovalFailure) { }
+                connection.connect(endpoint, "fixture")
+                connection.call("get", "fixture"); connection.call("list")
+                try { connection.send(submission); fail("submission replayed") }
+                catch (error: ApprovalFailure) { assertEquals("already_submitted", error.kind) }
+                assertEquals(1, releases.get()); assertEquals(2, reads.get())
+            } finally { connection.close() }
+        }
+    }
     @Test fun rejectsInsecureProductionTransport() = runBlocking {
         val connection = ApprovalConnection()
         try { connection.connect("ws://127.0.0.1:1234/codex/rpc", "fixture"); fail("accepted insecure transport") }

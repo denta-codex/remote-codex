@@ -14,6 +14,12 @@ import org.java_websocket.handshake.ServerHandshake
 
 class ApprovalFailure(val kind: String) : Exception("Credential approval connection failed")
 
+/** A prepared mutation holds transient transport text and can be consumed once. */
+class ApprovalSubmission internal constructor(internal val id: String, private var payload: String?) {
+    @Synchronized internal fun take(): String = payload?.also { payload = null } ?: throw ApprovalFailure("already_submitted")
+    @Synchronized fun discard() { payload = null }
+}
+
 /** Separate protocol: never initializes a stock Codex session and never retries a mutation. */
 class ApprovalConnection(private val allowLoopbackTest: Boolean = false) {
     private val pending = ConcurrentHashMap<String, CompletableDeferred<JsonObject>>()
@@ -57,15 +63,43 @@ class ApprovalConnection(private val allowLoopbackTest: Boolean = false) {
         catch (error: Exception) { close(); throw error }
     }
 
-    suspend fun call(method: String, requestId: String = "", value: String? = null): JsonObject {
-        val current = socket ?: throw ApprovalFailure("disconnected")
-        if (!current.isOpen) throw ApprovalFailure("disconnected")
+    fun prepare(method: String, requestId: String = "", value: String? = null, values: JsonArray? = null): ApprovalSubmission {
         val id = sequence.incrementAndGet().toString()
+        return ApprovalSubmission(id, encode(id, method, requestId, value, values))
+    }
+
+    fun releaseFits(requestId: String, value: String? = null, values: JsonArray? = null): Boolean = try {
+        encode((sequence.get() + 1).toString(), if (values == null) "release" else "release_batch", requestId, value, values)
+        true
+    } catch (_: ApprovalFailure) { false }
+
+    private fun encode(id: String, method: String, requestId: String, value: String?, values: JsonArray?): String {
+        if (value != null && !approvalValueFits(value)) throw ApprovalFailure("invalid_value")
+        if (values != null && values.any { entry ->
+                val field = entry as? JsonObject
+                val selected = field?.get("value") as? JsonPrimitive
+                selected?.isString != true || !approvalValueFits(selected.content)
+            }) throw ApprovalFailure("invalid_value")
+        val encoded = obj("version" to JsonPrimitive(1), "id" to s(id), "method" to s(method),
+            "request_id" to requestId.takeIf { it.isNotEmpty() }?.let(::s), "value" to value?.let(::s), "values" to values,
+            "capabilities" to if (method == "list") JsonArray(listOf(s(APPROVAL_BATCH_CAPABILITY))) else null).toString()
+        if (encoded.toByteArray(Charsets.UTF_8).size > APPROVAL_WIRE_LIMIT) throw ApprovalFailure("request_limit")
+        return encoded
+    }
+
+    suspend fun call(method: String, requestId: String = "", value: String? = null): JsonObject = send(prepare(method, requestId, value))
+
+    suspend fun send(submission: ApprovalSubmission): JsonObject {
+        // An unavailable connection discards the payload too: a submitted
+        // mutation never becomes an automatic retry buffer.
+        val current = socket ?: run { submission.discard(); throw ApprovalFailure("disconnected") }
+        if (!current.isOpen) { submission.discard(); throw ApprovalFailure("disconnected") }
+        val encoded = submission.take()
+        val id = submission.id
         val waiter = CompletableDeferred<JsonObject>()
         pending[id] = waiter
         try {
-            current.send(obj("version" to JsonPrimitive(1), "id" to s(id), "method" to s(method),
-                "request_id" to requestId.takeIf { it.isNotEmpty() }?.let(::s), "value" to value?.let(::s)).toString())
+            current.send(encoded)
             return withTimeout(10000) { waiter.await() }
         } finally { pending.remove(id) }
     }
