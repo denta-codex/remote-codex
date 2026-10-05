@@ -59,6 +59,19 @@ deterministic path under `CODEX_HOME/worktrees/remote-codex-<operation>/workspac
 Project identity remains the selected stock `projectId`; it is not inferred from
 or replaced by the worktree path.
 
+The new-task project picker also offers Add project for an existing host folder.
+A folder-only browser uses stock filesystem reads; pasted paths resolve through
+argument-safe, read-only host realpath execution. Before registration, the client
+pages the catalog and compares canonical roots, reusing a unique match or asking
+which matching project to use. Unmatched folders are registered once through
+stock `project/create`. A host/account-scoped local record is persisted before
+sending and retains the operation key and any acknowledged project ID. Lost
+replies, restarts, and failed catalog refreshes offer read-only reconciliation;
+they never replay creation. Selection preserves the draft and attachments and
+uses the matched server root, including a non-primary root, in Current workspace.
+This does not edit desktop remote-project records, create directories, clone
+repositories, or submit a task.
+
 Task rows use physical left swipe to archive (unarchive in Archived), right swipe
 to mark unread, and long press to copy the existing `codex://threads/<id>` deep
 link. TalkBack custom actions provide the same operations. A deliberate distance
@@ -85,6 +98,23 @@ The command shape and `dangerFullAccess` policy match the host-verified
 adapter only resolves `origin/HEAD`, creates the destination directory, adds a
 detached worktree, and reads `git worktree list --porcelain` for reconciliation.
 It never fetches, creates a branch, removes a worktree, or manages general Git state.
+
+Explicit new-chat model and reasoning selections save Codex defaults immediately
+through `config/batchWrite`, then refresh `config/read`. Writes are serialized;
+lost acknowledgements are reported and never replayed. Existing-chat overrides
+remain scoped to that chat. Consuming the new-chat draft clears its local options,
+and subsequent chats resolve the saved server config, including project overrides.
+Automatic (inherit) removes the draft override without clearing server defaults.
+The active profile determines the model and effort key paths.
+
+Reference inspection on October 5, 2026: Android 1.2026.258 (2625815),
+`defpackage/y1f.java` builds model/effort config edits and `o5f.n0` dispatches them
+via `i7f`; the installed Mac ChatGPT `app.asar` bundles
+`app-initial-576fc7ca620e.js` and `app-shared-b72e16382796.js` call
+`setDefaultModelConfig` and `writeModel`, using `upsert` edits for `model` and
+`model_reasoning_effort` with an optional `profiles.<profile>.` prefix and
+`reloadUserConfig: true`. Android's combined settings write also includes speed;
+Remote Codex keeps its separate speed flow.
 
 Each mutating setup/send stage is journaled before dispatch: destination creation,
 worktree addition, task creation, attachment directory/file writes, and input
@@ -289,6 +319,49 @@ recovery state; rollback and Desktop Restart remain explicit. Forwarder deployme
 keeps narrow Ansible backups of the old binary and unit until live acceptance
 succeeds. If deployment fails, retain the reported backup paths for explicit
 recovery; remove them once recovery and verification are complete.
+
+## Native Todo
+
+The Todo destination is a Compose board, independent of Codex chat tasks. It
+invokes the installed `todo` CLI using argv through authenticated stock
+`command/exec`, with explicit database and working-directory paths. Reads use
+the stock read-only sandbox; writes use the existing command transport's
+`dangerFullAccess` sandbox. No shell, HTTP endpoint, preview, or WebView is used.
+The Grace database must already be initialized by CLI installation.
+
+The adapter validates JSON schema 1, result kind, task IDs, revisions, status,
+and mutation results. All edits/moves carry the revision last read. A malformed
+or truncated result, an output-delivery error, a transport failure, or a changed
+connection generation leaves the mutation outcome uncertain. Documented CLI
+validation/not-found/conflict/database errors prove the transaction did not
+commit. The adapter does not log task content or raw errors.
+
+Before sending a write, the controller persists a human-readable pending intent
+in Room, scoped by endpoint and Codex home. It removes the record only after a
+confirmed result or a definitive rejection. An uncertain outcome locks writes
+across restarts. Read-only refresh and task inspection remain available. After a
+successful board refresh, the user can explicitly acknowledge review to unlock;
+this does not infer success or replay the command. Creation cannot be reconciled
+automatically because the CLI has no idempotency keys or mutation receipts.
+
+Task snapshots and ordinary editor text are memory-only. Disconnecting hides
+the board and disables saves while retaining an open draft in memory. A pending
+intent is a recovery record, not an offline queue. Opening/foregrounding Todo,
+reconnecting while it is visible, pull-to-refresh, and confirmed mutations trigger
+reads; there is no periodic Todo polling. Dirty text requires explicit discard
+before closing, and a revision conflict retains it for comparison. This first
+version provides add/edit/move and read-only work notes; archives and note writes
+remain in the CLI.
+
+Todo cards use physical left/right swipes to move one status at a time through
+To Do, In Progress, and Done. Tabs select the visible column; pager swiping is
+disabled to avoid competing with card gestures. Long-press dragging reorders
+within a column, with scrolling at the viewport edges and accessibility actions
+for moving up/down. The CLI has no custom ordering field, so this presentation
+order is persisted in the phone's ClientStore, scoped by host endpoint and Codex
+home. It survives board refresh and app restart but is not shared with Grace or
+other clients. Status moves retain the existing revision checks and pending-save
+journal; uncertain mutations are never replayed.
 
 ## Inbox activity and phone-local unread
 

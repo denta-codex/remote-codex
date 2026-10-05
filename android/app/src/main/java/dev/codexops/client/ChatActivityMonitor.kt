@@ -70,9 +70,15 @@ internal class ChatActivityMonitor(
         persist { lock.withLock { save(id, marker(id).seen(signature)) } }
     }
 
-    suspend fun markUnread(id: String) {
+    suspend fun toggleUnread(id: String): Boolean {
         changed(id)
-        lock.withLock { save(id, marker(id).copy(manualUnread = true)) }
+        return lock.withLock {
+            val old = marker(id)
+            val next = if (old.unread) old.copy(read = old.observed, manualUnread = false)
+                else old.copy(manualUnread = true)
+            save(id, next)
+            next.unread
+        }
     }
 
     /** Opening clears a manual reminder; automatic unread still waits for the reply to be viewed. */

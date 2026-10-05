@@ -37,7 +37,7 @@ class HomeScreenTest {
         }
         override fun listPosition(index: Int, offset: Int) = Unit
         override fun archiveTask(id: String, archived: Boolean) = Unit
-        override fun markTaskUnread(id: String) = Unit
+        override fun toggleTaskUnread(id: String) = Unit
         override fun undoTaskAction(noticeId: String) = Unit
         override fun dismissTaskNotice(noticeId: String) = Unit
         override fun retryList() { retries++ }

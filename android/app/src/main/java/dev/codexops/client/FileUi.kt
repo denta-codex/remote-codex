@@ -163,17 +163,18 @@ internal fun FilePreviewDialog(
     val cover = LocalAppWindowClass.current.coverScreen
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = !cover),
+        properties = DialogProperties(usePlatformDefaultWidth = !cover, decorFitsSystemWindows = !cover),
     ) {
         Surface(
-            (if (cover) Modifier.fillMaxSize().systemBarsPadding()
+            (if (cover) Modifier.fillMaxSize()
                 else Modifier.fillMaxWidth().heightIn(max = 720.dp))
                 .testTag("file-preview"),
             shape = if (cover) androidx.compose.foundation.shape.RoundedCornerShape(0.dp)
                 else MaterialTheme.shapes.large,
         ) {
             Column(
-                Modifier.padding(if (cover) 12.dp else 16.dp),
+                (if (cover) Modifier.safeDrawingPadding() else Modifier)
+                    .padding(if (cover) 12.dp else 16.dp),
                 verticalArrangement = Arrangement.spacedBy(if (cover) 8.dp else 12.dp),
             ) {
                 Text(preview.reference.displayName, style = MaterialTheme.typography.titleMedium)

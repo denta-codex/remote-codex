@@ -39,7 +39,7 @@ internal fun TaskSwipeRow(
     onOpen: () -> Unit,
     onCopy: () -> Unit,
     onArchive: () -> Unit,
-    onUnread: () -> Unit,
+    onToggleUnread: () -> Unit,
     content: @Composable () -> Unit,
 ) {
     var width by remember { mutableIntStateOf(0) }
@@ -49,18 +49,19 @@ internal fun TaskSwipeRow(
     val maxThreshold = with(LocalDensity.current) { 112.dp.toPx() }
     val threshold = (width * 0.35f).coerceAtMost(maxThreshold).coerceAtLeast(1f)
     val haptics by rememberUpdatedState(LocalAppHaptics.current)
+    val unreadLabel = if (unread) "Mark read" else "Mark unread"
     val archiveLabel = if (archived) "Unarchive" else "Archive"
     val open by rememberUpdatedState(onOpen)
     val copy by rememberUpdatedState(onCopy)
     val archive by rememberUpdatedState(onArchive)
-    val markUnread by rememberUpdatedState(onUnread)
+    val toggleUnread by rememberUpdatedState(onToggleUnread)
     val offset by animateFloatAsState(
         drag,
         animationSpec = if (dragging) snap() else spring(),
         label = "Task swipe return",
     )
     // A reconnect, filter change, or mutation completion must never retain an armed gesture.
-    LaunchedEffect(archiveEnabled, unreadEnabled, archived) {
+    LaunchedEffect(archiveEnabled, unreadEnabled, archived, unread) {
         drag = 0f
         dragging = false
         armed = false
@@ -84,7 +85,7 @@ internal fun TaskSwipeRow(
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        if (offset < 0) archiveLabel else "Unread",
+                        if (offset < 0) archiveLabel else if (unread) "Read" else "Unread",
                         color = MaterialTheme.colorScheme.onSecondaryContainer,
                     )
                 }
@@ -104,7 +105,7 @@ internal fun TaskSwipeRow(
                         if (archiveEnabled)
                             add(CustomAccessibilityAction(archiveLabel) { archive(); true })
                         if (unreadEnabled)
-                            add(CustomAccessibilityAction("Mark unread") { markUnread(); true })
+                            add(CustomAccessibilityAction(unreadLabel) { toggleUnread(); true })
                         add(CustomAccessibilityAction("Copy deep link") { copy(); true })
                     }
                 }
@@ -115,7 +116,7 @@ internal fun TaskSwipeRow(
                         onDragEnd = {
                             val action = if (abs(drag) >= threshold) {
                                 if (drag < 0 && archiveEnabled) archive
-                                else if (drag > 0 && unreadEnabled) markUnread else null
+                                else if (drag > 0 && unreadEnabled) toggleUnread else null
                             } else null
                             dragging = false
                             drag = 0f

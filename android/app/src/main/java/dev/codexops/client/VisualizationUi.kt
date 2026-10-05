@@ -115,9 +115,9 @@ private fun InlineVisualization(reference: VisualizationRef, stateKey: String, c
         }
         if (!expanded) content(false)
     }
-    if (expanded) Dialog(onDismissRequest = { expanded = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    if (expanded) Dialog(onDismissRequest = { expanded = false }, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Surface(Modifier.fillMaxSize().testTag("visualization-fullscreen")) {
-            Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
+            Column(Modifier.fillMaxSize().safeDrawingPadding()) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(reference.title, Modifier.weight(1f))
                     TextButton(onClick = { expanded = false }, modifier = Modifier.testTag("close-visualization")) { Text("Close") }

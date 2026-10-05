@@ -1,5 +1,95 @@
 # Validation
 
+## 2026-10-05 — Android 0.4.3 (35)
+
+- Source revision: `7d5d301598d487c6e1bff5c18d2b812735adcceb`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `f6b3b3f75a9e79bc1010c43b53e664033b08dddaf86b1ba8f6f8f0068e2dab89`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/home/agent/workspaces/remote-codex/artifacts/releases/run-20261005T140856Z-xmOxLl.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
+## 2026-10-05 — Android 0.4.2 (34)
+
+- Source revision: `16fb5189ad3e49e3af8926f7033d51adbfffabc8`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `a15638526b2a38fa9d9c19aa00bfdc741b6c42b7340dfcd2f009631e0577a734`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/home/agent/workspaces/remote-codex/artifacts/releases/run-20261005T024924Z-bz5dlw.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
+## 2026-10-04 — Android 0.4.1 (33)
+
+- Source revision: `e806ce0280b1058fb9bd44caffa1a0ea3db40492`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `8fb48cf547412d85e6657517f9ac9b2c439e475befd771b4b764c468f9830c88`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/home/agent/.codex/worktrees/remote-codex-native-todo/artifacts/releases/run-20261004T175305Z-QB12gk.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
+## 2026-10-04 — Backlog replacement step 1 audit
+
+- The requested base `f815d49` already has no Todo integration. The integration
+  commit `dbdf40b` is not its ancestor; their merge base is `769f46a`.
+  Kept the requested base and all unrelated source changes intact.
+- Inspected the original integration and viewport fix against the current tree:
+  the Todo entry point, board WebView, controller, state/actions, preview commands,
+  operation journal handling, fixtures, dedicated tests, and feature documentation
+  are absent. No production removal was necessary at this revision.
+- Added `AppTest#homeNavigationHasNoTodoDestination` to assert Todo is absent
+  while Home, Settings, New chat, and return navigation remain functional.
+- Passed `:core:test`, `:app:testDebugUnitTest`, `:app:lintDebug`, and
+  `:app:assembleDebugAndroidTest` using the existing managed JDK and Android SDK.
+- Focused Android 16 emulator tests passed:
+  `compactArchivesRestoreAndNavigation`,
+  `visualizationLoadsFromHistoryExpandsAndShowsMissingFileRecovery`, and
+  `remoteTextFileUsesMetadataAndOpensAReadablePreview`.
+  A second focused run passed `homeNavigationHasNoTodoDestination` and
+  `coverScreenDestinationsRemainReachable`, both in cover-screen mode:
+  `env 'ORG_GRADLE_PROJECT_android.testInstrumentationRunnerArguments.coverScreen=true' scripts/emulator-test --tests AppTest#homeNavigationHasNoTodoDestination AppTest#coverScreenDestinationsRemainReachable`.
+- Remaining validation limitation: the existing
+  `coverChatToolbarAvoidsCutoutWithHiddenStatusBar` failed on the unchanged base
+  instrumentation APK at its first chat-toolbar assertion. The title bounds began
+  at y=90 px, above the simulated 96 px cutout boundary. The broader destination
+  layout test passed; the separate cutout issue remains outside this change.
+- Left the host Todo workspace/data, installed Backlog CLI, shared preview
+  tooling, and live previews untouched. No replacement board, CLI, database,
+  import, release, deployment, phone installation, push, or shared-main merge.
+
+## 2026-10-04 — Android 0.4.0 (32)
+
+- Source revision: `030e67043c4a617f508b331dd686e6ca1e16ecfd`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `58ea4b65ed4df584e09bc0e64e6c840bf7cc8d930e02a35b5d675c3f27f41af7`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/home/agent/workspaces/remote-codex/artifacts/releases/run-20261004T170035Z-VT3VBY.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
+## 2026-10-03 — Add existing host projects from Android
+
+- Added a folder-only browser and pasted-path entry to the new-task project
+  picker. Canonical roots reuse existing host registrations; ambiguous matches
+  require a choice. New registrations use stock project/create with a durable
+  host/account-scoped operation record. Desktop records and workspace files are
+  not changed.
+- All 106 app unit tests passed, including 17 new project-addition tests covering
+  pagination, canonical aliases, unavailable roots, duplicate taps, explicit
+  rejection, lost replies, persistence failures, restart recovery, and stale
+  navigation/connection results. Draft text and attachments are preserved.
+- Android debug lint and instrumentation APK assembly passed.
+- All five selected Android 16 emulator tests passed in bounded batches:
+  AppTest#addProjectBrowsesAndPersistsWithoutStartingTask,
+  AppTest#addProjectPasteReusesHostProjectAndReportsInvalidPath,
+  AppTest#addProjectLostReplyRecoversAfterRestartWithoutReplay,
+  AppTest#addProjectCoverPickerKeepsActionsReachable, and
+  AppTest#selectedProjectSurvivesDraftRecreationAndStartsInItsRoot.
+- An earlier emulator run was interrupted externally. A subsequent five-test
+  batch hit the existing three-minute limit after a Kotlin incremental compiler
+  fallback consumed startup time; the final runs used smaller batches and
+  completed successfully without changing test timeouts.
+- No live projects were registered, no release was published, and no phone
+  installation or forwarder deployment was performed.
+
 ## 2026-10-03 — Android 0.3.2 (29)
 
 - Source revision: `b07340d7dd07b2faa7ac1efbd04a483f7937b5b0`.
@@ -1048,3 +1138,33 @@ gesture are still pending user-authorized live deployment and delivery.
   `scripts/emulator-test --tests AppTest#systemScreenshotOffersReportWithTheCapturedWindow`
   passed (one test, managed Android 16). No release workflow, deployment, or
   phone installation was performed.
+
+## Completed-turn recorded changes and fullscreen diffs — 2026-10-04
+
+- Started from local main `bcce5d0` (Android 0.4.1), which contains the reported
+  Git banner and grouped activity. Removed the persistent banner and its automatic
+  Git commands. Successful recorded file edits now produce one feed row only
+  after their turn reports `completed`; discussion, failed, interrupted, and
+  unfinished turns do not produce that row.
+- Unit coverage verifies distinct paths, ordered repeated patches, failed and
+  declined edits, missing patch text, chronological placement, and consistent
+  live/history projection. `:core:test` and `:app:testDebugUnitTest` passed.
+- Four new managed Android 16 tests passed in two bounded batches:
+  `recordedChangesAppearAfterFinishedReply`, `discussionHasNoChangesChrome`,
+  `recordedChangesSurviveHistoryReload`, and
+  `recordedChangesSupportCompactLargeText`. Coverage includes fullscreen file
+  selection, stored diff content, hardware Back returning to the file list,
+  absent binary text, reload without duplication, and compact large-text access.
+- `groupedToolActivityStreamsAndPreservesExpandedDetails` passed in the initial
+  five-test batch. That batch exhausted its three-minute bound during the final
+  test after first-build/startup overhead. The discussion assertion was corrected
+  to await rendered Markdown and layout, rather than only model hydration; the
+  affected tests passed in the subsequent smaller batches.
+- Final `:app:lintDebug` passed with the existing managed JDK and a command-local
+  `-Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8 -XX:+UseSerialGC"` override.
+  The preceding lint attempt crashed in the JDK's
+  `G1ParScanThreadState::trim_queue_to_threshold`; no shared JVM configuration or
+  toolchain was changed. `git diff --check` passed.
+- Fixture screenshots of the fullscreen file list and highlighted diff were
+  inspected and retained under ignored `artifacts/completed-turn-changes/`.
+  No release, deployment, or phone installation was performed.

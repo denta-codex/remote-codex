@@ -73,6 +73,9 @@ class Rpc(private val allowLoopbackTest: Boolean = false) {
     val events = Channel<JsonObject>(1024)
     private val next = AtomicLong()
     private val pending = ConcurrentHashMap<String, CompletableDeferred<JsonObject>>()
+    private enum class ServerRequestState { Pending, Terminal }
+    // IDs are retained until disconnect, including resolved and attempted replies.
+    private val serverRequests = mutableMapOf<JsonElement, ServerRequestState>()
     @Volatile private var socket: WebSocketClient? = null
     private var opened = CompletableDeferred<Unit>()
     private val guard = Any()
@@ -120,14 +123,7 @@ class Rpc(private val allowLoopbackTest: Boolean = false) {
                         val message = wire.parseToJsonElement(text).jsonObject
                         // Request IDs are independent in the two directions.
                         if (message.str("method").isNotEmpty()) {
-                            if (
-                                !events
-                                    .trySend(
-                                        JsonObject(message + ("_epoch" to JsonPrimitive(epoch)))
-                                    )
-                                    .isSuccess
-                            )
-                                failed(epoch)
+                            dispatch(message, epoch)
                         } else {
                             val waiter = pending.remove(message["id"].toString()) ?: return
                             val error = message["error"] as? JsonObject
@@ -233,9 +229,56 @@ class Rpc(private val allowLoopbackTest: Boolean = false) {
     }
 
     fun respond(id: JsonElement, result: JsonObject, epoch: Long) {
+        respondOnce(id, obj("id" to id, "result" to result), epoch)
+    }
+
+    fun respondError(id: JsonElement, code: Int, message: String, epoch: Long) {
+        respondOnce(id, obj("id" to id, "error" to obj(
+            "code" to JsonPrimitive(code), "message" to s(message),
+        )), epoch)
+    }
+
+    private fun dispatch(message: JsonObject, epoch: Long) {
+        synchronized(guard) {
+            if (generation != epoch) return
+            if (message.containsKey("id")) {
+                val id = message.getValue("id")
+                require(id is JsonPrimitive && (id.isString || id.longOrNull != null))
+                if (serverRequests.containsKey(id)) return
+                serverRequests[id] = ServerRequestState.Pending
+                when (val route = ServerRequests.route(message.str("method"))) {
+                    ServerRequestRoute.Interactive -> Unit
+                    is ServerRequestRoute.Result -> {
+                        respond(id, route.result, epoch)
+                        return
+                    }
+                    is ServerRequestRoute.Error -> {
+                        respondError(id, route.code, route.message, epoch)
+                        return
+                    }
+                }
+            } else if (message.str("method") == "serverRequest/resolved") {
+                message.map("params")["requestId"]?.let {
+                    serverRequests[it] = ServerRequestState.Terminal
+                }
+            }
+            if (!events.trySend(JsonObject(message + ("_epoch" to JsonPrimitive(epoch)))).isSuccess)
+                failed(epoch)
+        }
+    }
+
+    private fun respondOnce(id: JsonElement, message: JsonObject, epoch: Long) {
         synchronized(guard) {
             if (generation != epoch) throw ConnectionLost()
-            send(obj("id" to id, "result" to result))
+            if (serverRequests[id] != ServerRequestState.Pending) return
+            // Reserve before sending, including fragmented writes with uncertain delivery.
+            serverRequests[id] = ServerRequestState.Terminal
+            try {
+                send(message)
+            } catch (e: Exception) {
+                failed(epoch)
+                throw e
+            }
         }
     }
 
@@ -268,7 +311,7 @@ class Rpc(private val allowLoopbackTest: Boolean = false) {
         synchronized(guard) {
             if (generation != epoch) return
             close()
-            events.trySend(obj("method" to s("connection/lost")))
+            events.trySend(obj("method" to s("connection/lost"), "_epoch" to JsonPrimitive(generation)))
         }
     }
 
@@ -280,6 +323,7 @@ class Rpc(private val allowLoopbackTest: Boolean = false) {
             opened.completeExceptionally(ConnectionLost())
             pending.values.forEach { it.completeExceptionally(ConnectionLost()) }
             pending.clear()
+            serverRequests.clear()
         }
     }
 

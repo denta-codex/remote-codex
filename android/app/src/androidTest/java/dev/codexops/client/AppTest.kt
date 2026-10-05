@@ -10,6 +10,8 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -183,6 +185,154 @@ class AppTest {
         compose.waitUntil(5000) { recorder.ticks.get() == 4 }
     }
 
+    private fun recordedEdit(id: String = "edit", status: String = "completed") = obj(
+        "id" to s(id), "type" to s("fileChange"), "status" to s(status),
+        "changes" to JsonArray(listOf(
+            obj("path" to s("src/main.kt"), "kind" to obj("type" to s("update")),
+                "diff" to s("@@ -1 +1 @@\n-old content\n+new content")),
+            obj("path" to s("image.png"), "kind" to obj("type" to s("add")), "diff" to s("")),
+        )),
+    )
+
+    @Test
+    fun recordedChangesAppearAfterFinishedReply() {
+        historyOverride = obj("data" to JsonArray(emptyList()))
+        compose.runOnUiThread { model.foreground(true); model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy }
+        compose.onNodeWithTag("git-changes").assertDoesNotExist()
+        emit(peer!!, "turn/started", obj("turn" to obj("id" to s("edits-turn"), "status" to s("inProgress"))))
+        emit(peer!!, "item/completed", obj("turnId" to s("edits-turn"), "item" to recordedEdit()))
+        emit(peer!!, "item/completed", obj("turnId" to s("edits-turn"), "item" to obj(
+            "id" to s("reply"), "type" to s("agentMessage"), "text" to s("Updated the files."))))
+        compose.waitUntil(5000) { model.state.value.entries.size == 2 }
+        compose.onNodeWithTag("turn-changes-edits-turn").assertDoesNotExist()
+        emit(peer!!, "turn/completed", obj("turn" to obj("id" to s("edits-turn"), "status" to s("completed"))))
+        compose.waitUntil(5000) { model.state.value.turnStatuses["edits-turn"] == "completed" }
+        val changes = compose.onNodeWithTag("turn-changes-edits-turn")
+        changes.assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp)
+        compose.onNodeWithText("2 files changed").assertIsDisplayed()
+        assertTrue(changes.fetchSemanticsNode().boundsInRoot.top >=
+            compose.onNodeWithText("Updated the files.").fetchSemanticsNode().boundsInRoot.bottom)
+        compose.onNodeWithTag("tool-call-toggle-edits-turn/edit").assertDoesNotExist()
+        changes.performClick()
+        compose.onNodeWithTag("turn-changes-fullscreen").assertIsDisplayed()
+        captureComposer("recorded-changes-files.png")
+        compose.onNodeWithTag("changed-file-src/main.kt").performClick()
+        compose.onNodeWithTag("recorded-diff").assertIsDisplayed()
+        compose.onNodeWithText("@@ -1 +1 @@\n-old content\n+new content").assertIsDisplayed()
+        captureComposer("recorded-changes-diff.png")
+        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        compose.onNodeWithTag("changed-files").assertIsDisplayed()
+        compose.onNodeWithTag("changed-file-image.png").performClick()
+        compose.onNodeWithText("No text diff recorded").assertIsDisplayed()
+        compose.onNodeWithTag("changes-back").performClick()
+        compose.onNodeWithTag("changes-back").performClick()
+        compose.onNodeWithTag("turn-changes-fullscreen").assertDoesNotExist()
+        compose.onNodeWithTag("timeline").assertIsDisplayed()
+    }
+
+    @Test
+    fun discussionHasNoChangesChrome() {
+        val gitReads = AtomicInteger()
+        browserResponse = { method, params ->
+            if (method == "command/exec" && params.toString().contains("remote-codex-changes")) gitReads.incrementAndGet()
+            null
+        }
+        historyOverride = obj("data" to JsonArray(listOf(obj("id" to s("discussion"), "status" to s("completed"),
+            "items" to JsonArray(listOf(obj("id" to s("reply"), "type" to s("agentMessage"), "text" to s("Here is the explanation."))))))))
+        compose.runOnUiThread { model.foreground(true); model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.entries.size == 1 && !model.state.value.busy }
+        compose.waitUntil(5000) {
+            runCatching { compose.onNodeWithText("Here is the explanation.").assertIsDisplayed() }.isSuccess
+        }
+        captureComposer("recorded-changes-discussion.png")
+        compose.onNodeWithTag("git-changes").assertDoesNotExist()
+        compose.onNodeWithTag("refresh-git-changes").assertDoesNotExist()
+        compose.onNodeWithTag("turn-changes-discussion").assertDoesNotExist()
+        assertEquals(0, gitReads.get())
+    }
+
+    @Test
+    fun recordedChangesSurviveHistoryReload() {
+        historyOverride = obj("data" to JsonArray(listOf(obj("id" to s("saved-turn"), "status" to s("completed"),
+            "items" to JsonArray(listOf(recordedEdit(), obj("id" to s("reply"), "type" to s("agentMessage"),
+                "text" to s("Saved changes."))))))))
+        fun open() {
+            compose.runOnUiThread { model.foreground(true); model.openTask("task-test") }
+            compose.waitUntil(10000) { model.state.value.entries.size == 2 && !model.state.value.busy }
+        }
+        open()
+        compose.onNodeWithTag("turn-changes-saved-turn").assertIsDisplayed()
+        compose.runOnUiThread { model.home() }
+        compose.waitUntil(5000) { model.state.value.page == "home" }
+        open()
+        compose.onAllNodesWithTag("turn-changes-saved-turn").assertCountEquals(1)
+        compose.onNodeWithTag("turn-changes-saved-turn").performClick()
+        compose.onNodeWithTag("changed-file-src/main.kt").performClick()
+        compose.onNodeWithText("@@ -1 +1 @@\n-old content\n+new content").assertIsDisplayed()
+    }
+
+    @Test
+    fun recordedChangesSupportCompactLargeText() {
+        val path = "src/a long directory/a very long filename.kt"
+        val changes = ConversationRow.Changes("compact", listOf(RecordedFileChanges(path,
+            listOf(obj("diff" to s("-old\n+new"))))))
+        val density = compose.activity.resources.displayMetrics.density
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(density, 1.8f)) {
+                    RemoteTheme(darkTheme = true) {
+                        var open by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+                        Box(Modifier.size(240.dp, 440.dp)) { TurnChangesRow(changes) { open = true } }
+                        if (open) TurnChangesViewer(changes) { open = false }
+                    }
+                }
+            }
+        }
+        compose.onNodeWithTag("turn-changes-compact").assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
+        assertCoverDialogAvoidsCutouts(compose.onNodeWithTag("changes-back"))
+        compose.onNodeWithText(path).assertIsDisplayed()
+        compose.onNodeWithTag("changed-file-$path").assertHeightIsAtLeast(56.dp).performClick()
+        compose.onNodeWithText("-old\n+new").assertIsDisplayed()
+        compose.onNodeWithTag("changes-back").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Changed files").assertIsDisplayed()
+    }
+
+    @Test
+    fun nativeTodoOpensWithoutPreviewAndReturnsToChats() {
+        val todoCommands = CopyOnWriteArrayList<List<String>>()
+        browserResponse = { method, params ->
+            val command = (params["command"] as? JsonArray)?.map { it.jsonPrimitive.content }.orEmpty()
+            if (method == "command/exec" && command.firstOrNull() == StockTodoOperations.PROGRAM) {
+                todoCommands += command
+                obj("exitCode" to JsonPrimitive(0), "stdout" to s(obj("schema_version" to JsonPrimitive(1),
+                    "ok" to JsonPrimitive(true), "kind" to s("task-list"), "tasks" to JsonArray(emptyList())).toString()))
+            } else null
+        }
+        compose.runOnUiThread { model.foreground(true) }
+        compose.onNodeWithText("Todo").assertIsDisplayed().performClick()
+        compose.waitUntil(5000) { model.state.value.todo.loaded }
+        compose.onNodeWithTag("todo-screen").assertIsDisplayed()
+        compose.onNodeWithText("No tasks to do.").assertIsDisplayed()
+        compose.onNodeWithText("Start board").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.onNodeWithText("Scan setup QR").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.onNodeWithTag("todo-screen").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.onNodeWithContentDescription("New chat").assertIsDisplayed().performClick()
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
+        compose.onNodeWithTag("composer").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
+        compose.onNodeWithTag("composer").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.onNodeWithContentDescription("New chat").assertIsDisplayed()
+        assertTrue(todoCommands.isNotEmpty())
+        assertTrue(todoCommands.all { it == listOf(StockTodoOperations.PROGRAM, "--db", StockTodoOperations.DATABASE, "--json", "list") })
+    }
+
     @Test
     fun conversationMenuArchivesAndUnarchives() {
         // Opening directly must work even when the task is absent from the loaded list.
@@ -225,13 +375,16 @@ class AppTest {
     }
 
     @Test
-    fun taskSwipeMarksUnread() {
+    fun taskSwipeTogglesUnread() {
         compose.onNodeWithText("Fixture task").performTouchInput { swipeRight() }
         compose.waitUntil(5000) { model.state.value.chatActivity["task-test"]?.unread == true }
         compose.onNodeWithContentDescription("Unread reply").assertExists()
-        // Repeating the same gesture does not toggle the task back to read.
+        // The same gesture acknowledges an unread task without opening it.
         compose.onNodeWithTag("task-row-task-test").performTouchInput { swipeRight() }
-        compose.onNodeWithContentDescription("Unread reply").assertExists()
+        compose.waitUntil(5000) { model.state.value.taskNotice?.message == "Marked read" }
+        compose.onNodeWithContentDescription("Unread reply").assertDoesNotExist()
+        compose.onNodeWithTag("task-row-task-test").performTouchInput { swipeRight() }
+        compose.waitUntil(5000) { model.state.value.chatActivity["task-test"]?.unread == true }
         compose.runOnUiThread {
             store.clear()
             model = ClientModel(app, "ws://127.0.0.1:${server.port}/rpc", "/fixture", true)
@@ -295,6 +448,10 @@ class AppTest {
             actions.single { it.label == "Mark unread" }.action()
         }
         compose.waitUntil(5000) { model.state.value.chatActivity["task-test"]?.unread == true }
+        val readAction = row.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.CustomActions].single { it.label == "Mark read" }
+        compose.runOnUiThread { readAction.action() }
+        compose.waitUntil(5000) { model.state.value.taskNotice?.message == "Marked read" }
+        compose.onNodeWithContentDescription("Unread reply").assertDoesNotExist()
         val archiveAction = row.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.CustomActions].single { it.label == "Archive" }
         compose.runOnUiThread {
             archiveAction.action()
@@ -381,10 +538,6 @@ class AppTest {
     @Volatile private var heldSpeedRequest: JsonObject? = null
     private val sent = AtomicInteger()
 
-    private val mergeCommands = CopyOnWriteArrayList<String>()
-    @Volatile private var mergeConflict = false
-    @Volatile private var mergeUncommitted = false
-    @Volatile private var dropMergeReply = false
     private val archivedTaskIds = ConcurrentHashMap.newKeySet<String>()
     private val archiveMutations = CopyOnWriteArrayList<JsonObject>()
     @Volatile private var dropArchiveReply = false
@@ -404,6 +557,10 @@ class AppTest {
     @Volatile private var acceptedInput = JsonArray(emptyList())
     private val remoteFiles = ConcurrentHashMap<String, String>()
     @Volatile private var lastThreadStartParams: JsonObject? = null
+    @Volatile private var savedDefaultModel = "gpt-fixture"
+    @Volatile private var savedDefaultEffort = "high"
+    private val modelDefaultWrites = AtomicInteger()
+    @Volatile private var dropModelDefaultReply = false
     @Volatile private var lastTurnStartParams: JsonObject? = null
     @Volatile private var historyOverride: JsonObject? = null
     @Volatile private var emptyTaskList = false
@@ -435,6 +592,9 @@ class AppTest {
     @Volatile private var rejectSteer = false
     @Volatile private var rejectQueueRead = false
     private val userInputResponses = CopyOnWriteArrayList<JsonObject>()
+    private val serverRequestResponses = CopyOnWriteArrayList<JsonObject>()
+    @Volatile private var holdHistoryReply = false
+    private val heldHistoryRequests = CopyOnWriteArrayList<JsonElement>()
     private val app
         get() = ApplicationProvider.getApplicationContext<Application>()
     private val demo by lazy {
@@ -456,9 +616,57 @@ class AppTest {
         if (demo) SystemClock.sleep(milliseconds)
     }
 
+    private fun assertCoverDialogAvoidsCutouts(vararg controls: androidx.compose.ui.test.SemanticsNodeInteraction) {
+        if (!coverScreen) return
+        val top = 96
+        val bottom = 160
+        var height = 0
+        // Dialog focus arrives after composition. Inject into that window, and
+        // keep the fixture insets when Android sends its subsequent update.
+        try {
+            compose.waitUntil(5000) {
+                android.view.inspector.WindowInspector.getGlobalWindowViews().any {
+                    it !== compose.activity.window.decorView && it.isShown && it.hasWindowFocus()
+                }
+            }
+        } catch (e: androidx.compose.ui.test.ComposeTimeoutException) {
+            val windows = android.view.inspector.WindowInspector.getGlobalWindowViews().map {
+                "${it.javaClass.simpleName}:shown=${it.isShown},focus=${it.hasWindowFocus()},size=${it.width}x${it.height}"
+            }
+            val nodes = controls.map { runCatching { it.fetchSemanticsNode().boundsInRoot.toString() }.getOrDefault("absent") }
+            throw AssertionError("Dialog did not gain focus: windows=$windows controls=$nodes", e)
+        }
+        compose.runOnUiThread {
+            val view = android.view.inspector.WindowInspector.getGlobalWindowViews()
+                .last { it.isShown && it.hasWindowFocus() }
+            height = view.height
+            val insets = androidx.core.view.WindowInsetsCompat.Builder()
+                .setInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars(), androidx.core.graphics.Insets.NONE)
+                .setInsets(androidx.core.view.WindowInsetsCompat.Type.ime(), androidx.core.graphics.Insets.NONE)
+                .setVisible(androidx.core.view.WindowInsetsCompat.Type.statusBars(), false)
+                .setDisplayCutout(androidx.core.view.DisplayCutoutCompat(
+                    android.graphics.Rect(0, top, 0, bottom),
+                    listOf(android.graphics.Rect(0, 0, 100, top),
+                        android.graphics.Rect(view.width - 200, height - bottom, view.width, height)),
+                ))
+                .build()
+            androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(view) { _, _ -> insets }
+            androidx.core.view.ViewCompat.dispatchApplyWindowInsets(view, insets)
+        }
+        compose.waitForIdle()
+        controls.forEach { control ->
+            val bounds = control.assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            assertTrue("Dialog control overlaps the top cutout: $bounds", bounds.top >= top)
+            assertTrue("Dialog control overlaps the bottom cutout: $bounds", bounds.bottom <= height - bottom)
+            val full = control.getUnclippedBoundsInRoot()
+            val density = compose.activity.resources.displayMetrics.density
+            assertEquals("Dialog control is clipped", (full.bottom - full.top).value * density, bounds.height, 1f)
+        }
+    }
+
     @Before
     fun setup() {
-        reportCoverOverride = testName.methodName in setOf("systemScreenshotOffersReportWithTheCapturedWindow", "commandTrayCoverLargeTextKeepsActionsReachable", "coverCameraDockKeepsActionsLeftAndFunctional", "coverChatToolbarAvoidsCutoutWithHiddenStatusBar")
+        reportCoverOverride = testName.methodName in setOf("systemScreenshotOffersReportWithTheCapturedWindow", "commandTrayCoverLargeTextKeepsActionsReachable", "coverCameraDockKeepsActionsLeftAndFunctional", "coverChatToolbarAvoidsCutoutWithHiddenStatusBar", "coverComposerUsesAvailableHeightAboveBottomCutout", "addProjectCoverPickerKeepsActionsReachable")
         if (coverScreen || landscapeScreen || reportCoverOverride) {
             shell(if (landscapeScreen) "wm size 2992x1224" else "wm size 1080x1272")
             shell(when {
@@ -495,11 +703,16 @@ class AppTest {
                                             ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
                                             ?: emptyList()
                                     if (method.isEmpty()) {
-                                        if (m["id"] == JsonPrimitive(88))
+                                        serverRequestResponses.add(m)
+                                        if (m["id"] in setOf(JsonPrimitive(88), JsonPrimitive(89)))
                                             userInputResponses.add(m.map("result"))
                                         return
                                     }
                                     if (method == "initialized") return
+                                    if (method == "thread/turns/list" && holdHistoryReply) {
+                                        heldHistoryRequests.add(m.getValue("id"))
+                                        return
+                                    }
                                     if (method == "thread/settings/update") {
                                         speedMutations.add(params)
                                         if (rejectSpeed) {
@@ -546,8 +759,23 @@ class AppTest {
                                     val result = browserResponse?.invoke(method, params) ?: when (method) {
                                             "initialize" -> obj("codexHome" to s("/fixture"))
                                             "configRequirements/read" -> obj("requirements" to JsonNull)
+                                            "config/batchWrite" -> {
+                                                modelDefaultWrites.incrementAndGet()
+                                                params.list("edits").forEach { edit ->
+                                                    when (edit.str("keyPath")) {
+                                                        "model" -> savedDefaultModel = edit.str("value")
+                                                        "model_reasoning_effort" -> savedDefaultEffort = edit.str("value")
+                                                    }
+                                                }
+                                                if (dropModelDefaultReply) {
+                                                    dropModelDefaultReply = false
+                                                    ws.close(1011, "fixture default acknowledgement lost")
+                                                    return
+                                                }
+                                                obj("status" to s("ok"))
+                                            }
                                             "config/read" -> obj(
-                                                "config" to obj("model" to s("gpt-fixture"), "model_reasoning_effort" to s("high")),
+                                                "config" to obj("model" to s(savedDefaultModel), "model_reasoning_effort" to s(savedDefaultEffort)),
                                                 "origins" to obj("model" to obj("name" to obj("type" to s(if (params.str("cwd") == "/fixture/remote-codex") "project" else "user"))),
                                                     "model_reasoning_effort" to obj("name" to obj("type" to s("user")))))
                                             "collaborationMode/list" ->
@@ -702,37 +930,6 @@ class AppTest {
                                             }
                                             "command/exec" -> {
                                                 when {
-                                                    command.getOrNull(3) == "remote-codex-merge" -> {
-                                                        val action = command[4]
-                                                        mergeCommands.add(action)
-                                                        if (action == "merge" && dropMergeReply) {
-                                                            ws.cancel()
-                                                            return
-                                                        }
-                                                        val state = if (action != "inspect") "succeeded" else if (mergeConflict) "blocked" else "ready"
-                                                        val report = obj(
-                                                            "status" to s(state),
-                                                            "reason" to s(when (state) {
-                                                                "succeeded" -> "Merged into local main."
-                                                                "blocked" -> "Merge conflicts must be resolved before this button can be used."
-                                                                else -> "Ready to merge committed changes into local main."
-                                                            }),
-                                                            "source" to s("/fixture/remote-codex"),
-                                                            "destination" to s("/fixture/main"),
-                                                            "common" to s("/fixture/main/.git"),
-                                                            "sourceRef" to s("feature/direct-merge"),
-                                                            "sourceHead" to s("a".repeat(40)),
-                                                            "targetHead" to s("b".repeat(40)),
-                                                            "result" to s(if (state == "succeeded") "a".repeat(40) else ""),
-                                                            "count" to JsonPrimitive(1), "fileCount" to JsonPrimitive(1),
-                                                            "uncommittedCount" to JsonPrimitive(if (mergeUncommitted) 1 else 0),
-                                                            "uncommitted" to JsonArray(if (mergeUncommitted) listOf(s("NewTaskFile.kt")) else emptyList()),
-                                                            "commits" to JsonArray(listOf(s("aaaaaaa Add direct merge control"))),
-                                                            "files" to JsonArray(listOf(s("MergeControl.kt"))),
-                                                            "conflicts" to JsonArray(if (mergeConflict) listOf(s("Conflict.kt")) else emptyList()),
-                                                        )
-                                                        obj("exitCode" to JsonPrimitive(0), "stdout" to s(report.toString()))
-                                                    }
                                                     "get-url" in command -> obj("exitCode" to JsonPrimitive(0), "stdout" to s("git@github.com:denta-codex/remote-codex.git\n"))
                                                     "remote-codex-environment" in command -> {
                                                         environmentSetups.incrementAndGet()
@@ -1051,7 +1248,6 @@ class AppTest {
                     "attachments/new",
                     "draft/task-test",
                     "journal/task-test",
-                    "git-merge/task-test",
                     "attachments/task-test",
                     "draft/project-task",
                     "journal/project-task",
@@ -1309,6 +1505,120 @@ class AppTest {
     private fun latestReply() = compose.onNodeWithText("Latest reply — ready for review.", substring = true)
 
     @Test
+    fun groupedToolActivityStreamsAndPreservesExpandedDetails() {
+        fun command(index: Int, status: String = "completed") = obj(
+            "id" to s("tool-$index"), "type" to s("commandExecution"),
+            "command" to s("echo fixture-$index"), "aggregatedOutput" to s("Fixture output $index"),
+            "status" to s(status), "exitCode" to if (status == "completed") JsonPrimitive(0) else JsonNull,
+        )
+        historyOverride = obj("data" to JsonArray(listOf(obj("id" to s("tools-turn"),
+            "status" to s("completed"), "items" to JsonArray((1..8).map { command(it) })))))
+        compose.runOnUiThread { model.foreground(true); model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.entries.size == 8 && !model.state.value.busy }
+        val groupKey = "tools/tools-turn/tool-1"
+        val toggle = "tool-activity-toggle-$groupKey"
+        compose.onNodeWithText("8 commands").assertIsDisplayed()
+        captureComposer("tool-activity-collapsed.png")
+        compose.onNodeWithTag(toggle).assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed"))
+        compose.onNodeWithTag("tool-call-toggle-tools-turn/tool-8").assertDoesNotExist()
+        compose.onNodeWithTag(toggle).performClick()
+        compose.onNodeWithTag("tool-call-toggle-tools-turn/tool-8").performScrollTo().performClick()
+        compose.onNodeWithText("Fixture output 8").assertExists()
+        emit(peer!!, "turn/started", obj("turn" to obj("id" to s("tools-turn"), "status" to s("inProgress"))))
+        emit(peer!!, "item/started", obj("turnId" to s("tools-turn"), "item" to command(9, "inProgress")))
+        compose.waitUntil(5000) { model.state.value.entries.size == 9 && model.state.value.activeTurn == "tools-turn" }
+        compose.onNodeWithTag("tool-activity-details-$groupKey").assertExists()
+        compose.onNodeWithTag("tool-call-details-tools-turn/tool-8").assertExists()
+        compose.onNodeWithText("Fixture output 8").assertExists()
+        compose.onNodeWithTag("tool-call-toggle-tools-turn/tool-9").assertExists()
+        compose.onNodeWithTag(toggle).assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "In progress · Expanded"))
+        compose.onNodeWithText("Working on Grace").assertDoesNotExist()
+        compose.onNodeWithTag(toggle).performScrollTo().performClick()
+        compose.onNodeWithText("Running commands").assertIsDisplayed()
+        if (android.animation.ValueAnimator.areAnimatorsEnabled())
+            compose.onNodeWithTag("tool-activity-shimmer", useUnmergedTree = true).assertExists()
+        emit(peer!!, "item/completed", obj("turnId" to s("tools-turn"), "item" to command(9)))
+        emit(peer!!, "turn/completed", obj("turn" to obj("id" to s("tools-turn"), "status" to s("completed"))))
+        compose.waitUntil(5000) { model.state.value.activeTurn == null && model.state.value.entries.last().completed }
+        compose.onNodeWithText("9 commands").assertIsDisplayed()
+        compose.onNodeWithTag("tool-activity-shimmer", useUnmergedTree = true).assertDoesNotExist()
+        compose.onNodeWithTag(toggle).assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed"))
+    }
+
+    @Test
+    fun groupedWebActivityFormatsDetailsAndStopsOnInterruption() {
+        val call = obj("id" to s("search"), "type" to s("webSearch"), "query" to s("fixture median wages"),
+            "action" to obj("type" to s("search"), "queries" to JsonArray(listOf(s("fixture median wages")))),
+            "results" to JsonNull)
+        historyOverride = obj("data" to JsonArray(emptyList()))
+        compose.runOnUiThread { model.foreground(true); model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy }
+        emit(peer!!, "turn/started", obj("turn" to obj("id" to s("web-turn"), "status" to s("inProgress"))))
+        emit(peer!!, "item/started", obj("turnId" to s("web-turn"), "item" to call))
+        compose.waitUntil(5000) { model.state.value.entries.size == 1 }
+        compose.onNodeWithText("Searching the web").assertIsDisplayed()
+        if (android.animation.ValueAnimator.areAnimatorsEnabled())
+            compose.onNodeWithTag("tool-activity-shimmer", useUnmergedTree = true).assertExists()
+        compose.onNodeWithTag("tool-activity-toggle-tools/web-turn/search").performClick()
+        compose.onNodeWithTag("tool-call-toggle-web-turn/search").performClick()
+        compose.onNodeWithText("Queries").assertExists()
+        compose.onNodeWithText("fixture median wages").assertExists()
+        captureComposer("tool-activity-details.png")
+        compose.onNodeWithTag("tool-technical-details-web-turn/search").assertDoesNotExist()
+        compose.onNodeWithTag("tool-technical-toggle-web-turn/search").performClick()
+        val technical = compose.onNodeWithTag("tool-technical-details-web-turn/search").fetchSemanticsNode()
+            .config[SemanticsProperties.Text].joinToString { it.text }
+        assertFalse(technical.contains("_completed"))
+        emit(peer!!, "turn/completed", obj("turn" to obj("id" to s("web-turn"), "status" to s("interrupted"))))
+        compose.waitUntil(5000) { model.state.value.turnStatuses["web-turn"] == "interrupted" }
+        compose.onNodeWithText("Interrupted · 1 web search").assertExists()
+        compose.onNodeWithTag("tool-activity-shimmer", useUnmergedTree = true).assertDoesNotExist()
+        compose.onNodeWithTag("tool-call-toggle-web-turn/search").assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Interrupted · Expanded"))
+    }
+
+    @Test
+    fun groupedActivitySupportsCompactLargeTextAndReducedMotion() {
+        val entry = Entry("compact", obj("id" to s("tool"), "type" to s("futureTool"),
+            "_completed" to JsonPrimitive(false), "opaque" to obj("value" to s("Fixture detail"))))
+        val group = conversationRows(listOf(entry), "compact", true).single() as ConversationRow.Activity
+        val dark = androidx.compose.runtime.mutableStateOf(true)
+        val animate = androidx.compose.runtime.mutableStateOf(false)
+        val foreground = androidx.compose.runtime.mutableStateOf(true)
+        val density = compose.activity.resources.displayMetrics.density
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides
+                    androidx.compose.ui.unit.Density(density, 1.8f)) {
+                    RemoteTheme(darkTheme = dark.value) {
+                        Box(Modifier.size(240.dp, 440.dp)) {
+                            ToolActivityRow(group, "fixture", model, foreground = foreground.value, animationsEnabled = animate.value)
+                        }
+                    }
+                }
+            }
+        }
+        val toggle = compose.onNodeWithTag("tool-activity-toggle-tools/compact/tool")
+        toggle.assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp)
+        toggle.assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, androidx.compose.ui.semantics.Role.Button))
+        compose.onNodeWithTag("tool-activity-shimmer", useUnmergedTree = true).assertDoesNotExist()
+        toggle.performClick()
+        compose.onNodeWithTag("tool-call-toggle-compact/tool").performClick()
+        compose.onNodeWithText("Details unavailable").assertIsDisplayed()
+        compose.runOnUiThread { dark.value = false }
+        compose.onNodeWithTag("tool-call-details-compact/tool").assertIsDisplayed()
+        toggle.performClick()
+        compose.onNodeWithTag("tool-activity-details-tools/compact/tool").assertDoesNotExist()
+        compose.runOnUiThread { animate.value = true }
+        compose.onNodeWithTag("tool-activity-shimmer", useUnmergedTree = true).assertExists()
+        compose.runOnUiThread { foreground.value = false }
+        compose.onNodeWithTag("tool-activity-shimmer", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
     fun streamingTallReplyKeepsVisibleParagraphStillWhenReading() {
         openLongHistory(tallLastMessage = true)
         compose.onNodeWithTag("timeline").performTouchInput {
@@ -1512,31 +1822,83 @@ class AppTest {
         }
         compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy }
         val cutoutTop = 96
+        fun assertToolbar(title: String, action: String) {
+            compose.waitForIdle()
+            compose.runOnUiThread {
+                val insets = androidx.core.view.WindowInsetsCompat.Builder()
+                    .setInsets(androidx.core.view.WindowInsetsCompat.Type.statusBars(), androidx.core.graphics.Insets.NONE)
+                    .setVisible(androidx.core.view.WindowInsetsCompat.Type.statusBars(), false)
+                    .setDisplayCutout(androidx.core.view.DisplayCutoutCompat(
+                        android.graphics.Rect(0, cutoutTop, 0, 0),
+                        listOf(android.graphics.Rect(0, 0, 100, cutoutTop)),
+                    ))
+                    .build()
+                androidx.core.view.ViewCompat.dispatchApplyWindowInsets(compose.activity.window.decorView, insets)
+            }
+            compose.waitForIdle()
+            for (node in listOf(
+                compose.onNodeWithText(title, useUnmergedTree = true),
+                compose.onNodeWithText(model.state.value.connection, useUnmergedTree = true),
+                compose.onNodeWithContentDescription(action),
+                compose.onNodeWithContentDescription("Settings"),
+            )) {
+                node.assertIsDisplayed()
+                val visible = node.fetchSemanticsNode().boundsInRoot
+                val full = node.getUnclippedBoundsInRoot()
+                val density = compose.activity.resources.displayMetrics.density
+                assertTrue("Toolbar overlaps the cutout: $visible", visible.top >= cutoutTop)
+                assertEquals("Toolbar content is clipped", (full.bottom - full.top).value * density, visible.height, 1f)
+            }
+        }
+        assertToolbar("Fixture task", "Copy deeplink")
+        compose.onNodeWithContentDescription("Back").performClick()
+        assertToolbar("Chats", "New chat")
+        // The cover display can be entered while the app is already running.
+        // Exercise remeasurement with larger text on the same home toolbar.
         compose.runOnUiThread {
-            val insets = androidx.core.view.WindowInsetsCompat.Builder()
-                .setInsets(androidx.core.view.WindowInsetsCompat.Type.statusBars(), androidx.core.graphics.Insets.NONE)
-                .setVisible(androidx.core.view.WindowInsetsCompat.Type.statusBars(), false)
-                .setDisplayCutout(androidx.core.view.DisplayCutoutCompat(
-                    android.graphics.Rect(0, cutoutTop, 0, 0),
-                    listOf(android.graphics.Rect(0, 0, 100, cutoutTop)),
-                ))
-                .build()
-            androidx.core.view.ViewCompat.dispatchApplyWindowInsets(compose.activity.window.decorView, insets)
+            compose.activity.setContent {
+                RemoteTheme {
+                    val density = androidx.compose.ui.platform.LocalDensity.current
+                    CompositionLocalProvider(
+                        androidx.compose.ui.platform.LocalDensity provides
+                            androidx.compose.ui.unit.Density(density.density, fontScale = 2f),
+                    ) { App(model) }
+                }
+            }
         }
         compose.waitForIdle()
-        for (node in listOf(
-            compose.onNodeWithText("Fixture task", useUnmergedTree = true),
-            compose.onNodeWithText(model.state.value.connection, useUnmergedTree = true),
-            compose.onNodeWithContentDescription("Back"),
-            compose.onNodeWithContentDescription("Copy deeplink"),
-            compose.onNodeWithContentDescription("Settings"),
-        )) {
-            node.assertIsDisplayed()
-            val visible = node.fetchSemanticsNode().boundsInRoot
-            val full = node.getUnclippedBoundsInRoot()
-            val density = compose.activity.resources.displayMetrics.density
-            assertTrue("Toolbar overlaps the cutout: $visible", visible.top >= cutoutTop)
-            assertEquals("Toolbar content is clipped", (full.bottom - full.top).value * density, visible.height, 1f)
+        assertToolbar("Chats", "New chat")
+    }
+
+    @Test
+    fun coverComposerUsesAvailableHeightAboveBottomCutout() {
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy }
+        val density = compose.activity.resources.displayMetrics.density
+        val rootHeight = compose.onRoot().fetchSemanticsNode().boundsInRoot.height
+        // Both cover-screen modes: full height and the camera band excluded by Android.
+        for (bottom in listOf(0, 272)) {
+            compose.runOnUiThread {
+                val insets = androidx.core.view.WindowInsetsCompat.Builder()
+                    .setInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars(), androidx.core.graphics.Insets.NONE)
+                    .setVisible(androidx.core.view.WindowInsetsCompat.Type.statusBars(), false)
+                    .setInsets(androidx.core.view.WindowInsetsCompat.Type.ime(), androidx.core.graphics.Insets.NONE)
+                    .setDisplayCutout(androidx.core.view.DisplayCutoutCompat(
+                        android.graphics.Rect(0, 0, 0, bottom),
+                        if (bottom == 0) emptyList() else listOf(
+                            android.graphics.Rect(600, rootHeight.toInt() - bottom, 1080, rootHeight.toInt()),
+                        ),
+                    ))
+                    .build()
+                androidx.core.view.ViewCompat.dispatchApplyWindowInsets(compose.activity.window.decorView, insets)
+            }
+            compose.waitForIdle()
+            val dock = compose.onNodeWithTag("cover-camera-dock").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            assertEquals("Use the available height without a second camera reservation",
+                rootHeight - bottom - 16 * density, dock.bottom, 2f)
+            assertEquals("Keep the action row at its touch-target height", 48 * density, dock.height, 1f)
+            compose.onNodeWithTag("timeline").assertIsDisplayed()
+            compose.onNodeWithTag("composer").assertIsDisplayed()
         }
     }
 
@@ -1602,9 +1964,9 @@ class AppTest {
         compose.onNodeWithTag("send").assertIsDisplayed()
         openConversationTray()
         compose.onNodeWithTag("model-selector").performScrollTo().performClick()
-        compose.onNodeWithText("Fixture Fast").performClick()
+        compose.onNodeWithTag("model-option-gpt-fixture-fast").performClick()
         compose.onNodeWithTag("reasoning-selector").performScrollTo().performClick()
-        compose.onNodeWithText("Medium").performClick()
+        compose.onNodeWithTag("reasoning-option-medium").performClick()
         closeConversationTray()
         assertEquals("gpt-fixture-fast", model.state.value.newTaskOptions.model)
         assertEquals("medium", model.state.value.newTaskOptions.reasoningEffort)
@@ -1665,108 +2027,6 @@ class AppTest {
         }
         compose.onNodeWithText("Hello from Grace").assertIsDisplayed()
         demoPause(3000)
-    }
-
-    @Test
-    fun directMergePreviewsCancelsAndMergesWithoutAnAgentTurn() {
-        compose.runOnUiThread { model.openTask("task-test") }
-        compose.waitUntil(10000) { model.state.value.canInspectMerge() }
-        val image = fixtureImage("merge-draft.png")
-        compose.runOnUiThread {
-            model.draft("Keep this draft")
-            model.addAttachments(listOf(Uri.fromFile(image)))
-        }
-        compose.waitUntil(5000) { model.state.value.attachments.size == 1 }
-        demoPause(1800)
-        compose.onNodeWithTag("app-menu").performClick()
-        compose.onNodeWithTag("report-bug").assertExists()
-        demoPause(1500)
-        compose.onNodeWithTag("merge-main-menu").performClick()
-        compose.waitUntil(5000) { model.state.value.merge.report?.str("status") == "ready" }
-        compose.onNodeWithTag("confirm-merge").assertIsDisplayed().assertIsEnabled()
-        compose.onNodeWithText("aaaaaaa Add direct merge control").performScrollTo().assertIsDisplayed()
-        demoPause(4000)
-        compose.onNodeWithText("Close").performClick()
-        assertFalse(mergeCommands.contains("merge"))
-        demoPause(1500)
-        compose.onNodeWithTag("app-menu").performClick()
-        compose.onNodeWithTag("merge-main-menu").performClick()
-        compose.waitUntil(5000) { model.state.value.merge.report?.str("status") == "ready" && !model.state.value.merge.working }
-        demoPause(2500)
-        compose.onNodeWithTag("confirm-merge").performClick()
-        compose.waitUntil(5000) { model.state.value.merge.report?.str("status") == "succeeded" }
-        compose.onNodeWithText("Merged into local main.").assertIsDisplayed()
-        demoPause(3500)
-        compose.onNodeWithText("Close").performClick()
-        assertEquals(1, mergeCommands.count { it == "merge" })
-        assertEquals(0, sent.get())
-        assertTrue(turnRequests.isEmpty())
-        assertEquals("Keep this draft", model.state.value.draft)
-        assertEquals(1, model.state.value.attachments.size)
-        demoPause(2000)
-    }
-
-    @Test
-    fun directMergeOffersCommitAndMergeForTaskFiles() {
-        mergeUncommitted = true
-        compose.runOnUiThread { model.openTask("task-test") }
-        compose.waitUntil(10000) { model.state.value.canInspectMerge() }
-        compose.onNodeWithTag("app-menu").performClick()
-        compose.onNodeWithTag("merge-main-menu").performClick()
-        compose.waitUntil(5000) { model.state.value.merge.report?.str("status") == "ready" }
-        compose.onNodeWithTag("confirm-merge").assertTextContains("Commit and merge into main").assertIsEnabled()
-        compose.onNodeWithText("NewTaskFile.kt").performScrollTo().assertIsDisplayed()
-        assertFalse(mergeCommands.contains("merge"))
-        compose.onNodeWithTag("confirm-merge").performClick()
-        compose.waitUntil(5000) { model.state.value.merge.report?.str("status") == "succeeded" }
-        assertEquals(1, mergeCommands.count { it == "merge" })
-        assertEquals(0, sent.get())
-    }
-
-    @Test
-    fun directMergeConflictsDisableConfirmation() {
-        mergeConflict = true
-        compose.runOnUiThread { model.openTask("task-test") }
-        compose.waitUntil(10000) { model.state.value.canInspectMerge() }
-        compose.onNodeWithTag("app-menu").performClick()
-        compose.onNodeWithTag("merge-main-menu").performClick()
-        compose.waitUntil(5000) { model.state.value.merge.report?.str("status") == "blocked" }
-        compose.onNodeWithTag("confirm-merge").assertIsNotEnabled()
-        compose.onNodeWithText("Conflict.kt").performScrollTo().assertIsDisplayed()
-        compose.runOnUiThread { model.mergeIntoMain() }
-        assertEquals(listOf("inspect"), mergeCommands.toList())
-        assertEquals(0, sent.get())
-    }
-
-    @Test
-    fun directMergeLostReplySurvivesRestartAndReconcilesWithoutReplay() {
-        dropMergeReply = true
-        compose.runOnUiThread { model.openTask("task-test") }
-        compose.waitUntil(10000) { model.state.value.canInspectMerge() }
-        compose.runOnUiThread { model.draft("Keep this draft") }
-        compose.onNodeWithTag("app-menu").performClick()
-        compose.onNodeWithTag("merge-main-menu").performClick()
-        compose.waitUntil(5000) { model.state.value.merge.report?.str("status") == "ready" }
-        compose.onNodeWithTag("confirm-merge").performClick()
-        compose.waitUntil(15000) { model.state.value.merge.pending != null && !model.state.value.merge.working }
-        compose.runOnUiThread {
-            store.clear()
-            model = ClientModel(app, "ws://127.0.0.1:${server.port}/rpc", "/fixture", true, "/fixture/remote-codex")
-            store.put("fixture", model)
-            compose.activity.setContent { RemoteTheme { App(model) } }
-            model.connect()
-        }
-        compose.waitUntil(10000) { model.state.value.ready }
-        compose.runOnUiThread { model.openTask("task-test") }
-        compose.waitUntil(10000) { model.state.value.merge.pending != null && !model.state.value.busy }
-        compose.onNodeWithTag("send").assertIsNotEnabled()
-        compose.onNodeWithTag("app-menu").performClick()
-        compose.onNodeWithTag("merge-main-menu").performClick()
-        compose.waitUntil(5000) { model.state.value.merge.report?.str("status") == "succeeded" }
-        assertEquals(1, mergeCommands.count { it == "merge" })
-        assertEquals(1, mergeCommands.count { it == "reconcile" })
-        assertEquals(0, sent.get())
-        assertEquals("Keep this draft", model.state.value.draft)
     }
 
     @Test
@@ -2126,7 +2386,7 @@ class AppTest {
         compose.waitUntil(5000) { model.state.value.inheritedSettings.cwd == "/fixture/remote-codex" }
         compose.onNodeWithTag("model-selector").assertTextContains("From project")
         compose.onNodeWithTag("model-selector").performScrollTo().performClick()
-        compose.onNodeWithText("Fixture Fast").performClick()
+        compose.onNodeWithTag("model-option-gpt-fixture-fast").performClick()
         assertEquals("gpt-fixture-fast", model.state.value.newTaskOptions.model)
         compose.onNodeWithTag("model-selector").performScrollTo().performClick()
         compose.onNodeWithTag("model-automatic").performClick()
@@ -2268,17 +2528,20 @@ class AppTest {
         compose.onNodeWithTag("model-selector").performScrollTo().performClick()
         compose.onNodeWithText("Refresh models").assertDoesNotExist()
         demoPause()
-        compose.onNodeWithText("Fixture Fast").performClick()
+        compose.onNodeWithTag("model-option-gpt-fixture-fast").performClick()
         assertEquals("gpt-fixture-fast", model.state.value.newTaskOptions.model)
         demoPause()
 
         compose.onNodeWithTag("reasoning-selector").performScrollTo().performClick()
-        compose.onNodeWithText("Medium").assertExists()
+        compose.onNodeWithTag("reasoning-option-medium").assertExists()
         compose.onNodeWithText("Low").assertDoesNotExist()
         demoPause()
-        compose.onNodeWithText("Medium").performClick()
+        compose.onNodeWithTag("reasoning-option-medium").performClick()
         assertEquals("medium", model.state.value.newTaskOptions.reasoningEffort)
         demoPause()
+
+        compose.waitUntil(5000) { modelDefaultWrites.get() == 2 && model.state.value.inheritedSettings.effort == "medium" }
+        assertEquals("gpt-fixture-fast", savedDefaultModel)
 
         closeConversationTray()
         compose.onNodeWithTag("composer").performTextInput("Use the selected model")
@@ -2290,17 +2553,32 @@ class AppTest {
         assertEquals("medium", lastTurnStartParams!!.str("effort"))
         demoPause(2500)
 
-        // Existing tasks reset per-turn overrides when resumed. Reconcile the
-        // saved new-chat preferences so this checks catalog changes rather than
-        // racing that independent reset during reconnect.
         compose.waitUntil(5000) { !model.state.value.busy }
+        compose.runOnUiThread {
+            model.updateNewTaskOptions(model.state.value.newTaskOptions.copy(model = "gpt-fixture", reasoningEffort = "high"))
+        }
+        assertEquals(2, modelDefaultWrites.get())
+        // Recreate the client after the draft has been consumed. Defaults must
+        // come from server config, not the draft or the previous task.
+        compose.runOnUiThread {
+            store.clear()
+            model = ClientModel(app, "ws://127.0.0.1:${server.port}/rpc", "/fixture", true)
+            store.put("fixture", model)
+            compose.activity.setContent { RemoteTheme { App(model) } }
+            model.foreground(true)
+        }
+        compose.waitUntil(15000) { model.state.value.ready && model.state.value.modelCatalogStatus == ModelCatalogStatus.Ready }
         compose.runOnUiThread { model.newChat() }
         compose.waitUntil(5000) { model.state.value.thread == null && !model.state.value.busy }
+        compose.waitUntil(5000) { model.state.value.inheritedSettings.status == ModelCatalogStatus.Ready }
+        assertNull(model.state.value.newTaskOptions.model)
+        assertEquals("gpt-fixture-fast", model.state.value.composerSettings().modelId)
+        assertEquals("Medium", model.state.value.composerSettings().effort)
         openConversationTray()
         compose.onNodeWithTag("model-selector").performScrollTo().performClick()
-        compose.onNodeWithText("Fixture Fast").performClick()
+        compose.onNodeWithTag("model-option-gpt-fixture-fast").performClick()
         compose.onNodeWithTag("reasoning-selector").performScrollTo().performClick()
-        compose.onNodeWithText("Medium").performClick()
+        compose.onNodeWithTag("reasoning-option-medium").performClick()
         assertEquals("gpt-fixture-fast", model.state.value.newTaskOptions.model)
         assertEquals("medium", model.state.value.newTaskOptions.reasoningEffort)
         val previousLists = modelLists.get()
@@ -2315,6 +2593,23 @@ class AppTest {
         assertNull(model.state.value.newTaskOptions.reasoningEffort)
         compose.onNodeWithText("Unsupported overrides were cleared", substring = true).assertExists()
         demoPause(3000)
+    }
+
+    @Test
+    fun uncertainModelDefaultSaveIsReadOnReconnectWithoutReplay() {
+        compose.runOnUiThread { model.newChat() }
+        compose.waitUntil(5000) { model.state.value.thread == null && model.state.value.inheritedSettings.status == ModelCatalogStatus.Ready }
+        dropModelDefaultReply = true
+        compose.runOnUiThread {
+            // Observe the disconnected outcome before allowing automatic reconnect.
+            model.foreground(false)
+            model.updateNewTaskOptions(model.state.value.newTaskOptions.copy(model = "gpt-fixture-fast"))
+        }
+        compose.waitUntil(10000) { model.state.value.modelCatalogMessage.orEmpty().contains("outcome unknown") }
+        assertEquals(1, modelDefaultWrites.get())
+        compose.runOnUiThread { model.foreground(true) }
+        compose.waitUntil(15000) { model.state.value.ready && model.state.value.inheritedSettings.model == "gpt-fixture-fast" }
+        assertEquals(1, modelDefaultWrites.get())
     }
 
     @Test
@@ -2504,6 +2799,7 @@ class AppTest {
             compose.onAllNodesWithTag("message-image").fetchSemanticsNodes().isNotEmpty()
         }
         compose.onAllNodesWithTag("message-image")[0].performClick()
+        assertCoverDialogAvoidsCutouts(compose.onNodeWithTag("close-image"))
         compose.onNodeWithContentDescription("Expanded conversation image")
             .performTouchInput { doubleClick() }
         val viewport = compose.onNodeWithTag("image-viewport")
@@ -2574,8 +2870,11 @@ class AppTest {
         compose.waitUntil(15000) { compose.onAllNodesWithTag("visualization-webview").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Before the chart.").assertExists()
         compose.onNodeWithText("After the chart.").assertExists()
-        compose.onNodeWithTag("expand-visualization").performClick()
-        compose.onNodeWithTag("visualization-fullscreen").assertIsDisplayed()
+        compose.onNodeWithTag("expand-visualization").performScrollTo().assertIsDisplayed().performClick()
+        assertCoverDialogAvoidsCutouts(compose.onNodeWithTag("close-visualization"))
+        compose.waitUntil(5000) {
+            runCatching { compose.onNodeWithTag("visualization-fullscreen").assertIsDisplayed() }.isSuccess
+        }
         compose.onNodeWithTag("close-visualization").performClick()
         compose.onNodeWithTag("visualization-fullscreen").assertDoesNotExist()
         compose.runOnUiThread { model.home() }
@@ -2605,6 +2904,7 @@ class AppTest {
         assertEquals(FilePreviewKind.TEXT, model.state.value.filePreview?.kind)
         assertEquals("hello from remote one", model.state.value.filePreview?.text)
         compose.onNodeWithTag("file-preview").assertIsDisplayed()
+        assertCoverDialogAvoidsCutouts(compose.onNodeWithText("Close"))
         compose.onNodeWithText("hello from remote one").assertIsDisplayed()
         compose.onNodeWithText("Close").performClick()
         compose.onNodeWithTag("file-preview").assertDoesNotExist()
@@ -3044,6 +3344,146 @@ class AppTest {
         assertEquals("/fixture/remote-codex", lastThreadStart?.str("cwd"))
         assertEquals(0, prepared.get())
         demoPause(3000)
+    }
+
+    private val projectCreations = CopyOnWriteArrayList<JsonObject>()
+
+    private fun installProjectAdditionFixture(dropReply: Boolean = false) {
+        val projects = CopyOnWriteArrayList(listOf(
+            project("project-remote", "Remote Codex", "/fixture/remote-codex"),
+            project("project-notes", "Notes", "/fixture/notes")))
+        browserResponse = { method, params ->
+            when (method) {
+                "fs/getMetadata" -> if (params.str("path") == "/missing")
+                    obj("_fixtureError" to obj("code" to JsonPrimitive(-32000), "message" to s("Missing folder")))
+                    else obj("isDirectory" to JsonPrimitive(true))
+                "fs/readDirectory" -> obj("entries" to JsonArray(
+                    if (params.str("path") == "/home/agent/workspaces") listOf(
+                        obj("fileName" to s("op bridge"), "isDirectory" to JsonPrimitive(true)),
+                        obj("fileName" to s("README"), "isDirectory" to JsonPrimitive(false))) else emptyList()))
+                "command/exec" -> {
+                    val command = (params["command"] as? JsonArray)?.map { it.jsonPrimitive.content }.orEmpty()
+                    if (command.firstOrNull() == "realpath") obj("exitCode" to JsonPrimitive(0), "stdout" to s(command.last() + "\n")) else null
+                }
+                "project/list" -> obj("data" to JsonArray(projects.toList()))
+                "project/create" -> {
+                    projectCreations.add(params)
+                    val created = project("added-project", params.str("name"), params.list("roots").single().str("path"))
+                    projects.add(created)
+                    if (dropReply) peer?.cancel()
+                    obj("project" to created)
+                }
+                else -> null
+            }
+        }
+    }
+
+    private fun openProjectAddition() {
+        openConversationTray()
+        compose.onNodeWithTag("project-selector").performClick()
+        compose.onNodeWithTag("add-project").performClick()
+        compose.waitUntil(5000) { model.state.value.projectAddition.loadedPath != null }
+        compose.onNodeWithTag("add-project-sheet").assertIsDisplayed()
+    }
+
+    @Test
+    fun addProjectBrowsesAndPersistsWithoutStartingTask() {
+        installProjectAdditionFixture()
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
+        compose.runOnUiThread { model.draft("Keep this project draft") }
+        openProjectAddition()
+        compose.onNodeWithTag("project-folder-README").assertDoesNotExist()
+        compose.onNodeWithTag("project-folder-op bridge").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.value.projectAddition.loadedPath == "/home/agent/workspaces/op bridge" }
+        compose.onNodeWithText("No subfolders. You can use this folder.").assertIsDisplayed()
+        compose.onNodeWithTag("project-folder-up").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.value.projectAddition.loadedPath == "/home/agent/workspaces" }
+        compose.onNodeWithTag("project-folder-op bridge").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.value.projectAddition.loadedPath == "/home/agent/workspaces/op bridge" }
+        compose.onNodeWithTag("use-project-folder").performClick()
+        compose.onNodeWithTag("project-name").performTextReplacement("Op Bridge")
+        compose.onNodeWithTag("confirm-add-project").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.value.newTaskOptions.projectId == "added-project" && !model.state.value.projectAddition.visible }
+        assertEquals("Keep this project draft", model.state.value.draft)
+        assertEquals("/home/agent/workspaces/op bridge", model.state.value.newTaskOptions.workingDirectory)
+        assertEquals(ExecutionTarget.CurrentWorkspace, model.state.value.newTaskOptions.executionTarget)
+        assertEquals(1, projectCreations.size)
+        assertEquals("Op Bridge", projectCreations.single().str("name"))
+        assertTrue(projectCreations.single().str("idempotencyKey").isNotBlank())
+        assertEquals(0, threadStarts.get())
+        assertEquals(0, sent.get())
+        recreateProjectDraft()
+        compose.waitUntil(15000) { model.state.value.ready && model.state.value.newTaskOptions.projectId == "added-project" }
+        assertEquals("Keep this project draft", model.state.value.draft)
+        assertEquals(1, projectCreations.size)
+    }
+
+    @Test
+    fun addProjectPasteReusesHostProjectAndReportsInvalidPath() {
+        installProjectAdditionFixture()
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
+        openProjectAddition()
+        compose.onNodeWithTag("project-folder-path").performTextReplacement("/missing")
+        compose.onNodeWithTag("open-project-folder").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.value.projectAddition.error != null }
+        compose.onNodeWithTag("use-project-folder").assertIsNotEnabled()
+        compose.onNodeWithTag("project-folder-path").performTextReplacement("/fixture/notes")
+        compose.onNodeWithTag("open-project-folder").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.value.projectAddition.loadedPath == "/fixture/notes" }
+        compose.onNodeWithTag("use-project-folder").performClick()
+        compose.onNodeWithTag("confirm-add-project").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.value.newTaskOptions.projectId == "project-notes" }
+        assertTrue(projectCreations.isEmpty())
+        assertEquals("Notes", model.state.value.projects.single { it.id == "project-notes" }.name)
+    }
+
+    private fun recreateProjectDraft() {
+        compose.runOnUiThread {
+            store.clear()
+            model = ClientModel(app, "ws://127.0.0.1:${server.port}/rpc", "/fixture", true)
+            store.put("fixture", model)
+            compose.activity.setContent { RemoteTheme { App(model) } }
+            model.newChat()
+            model.connect()
+        }
+    }
+
+    @Test
+    fun addProjectLostReplyRecoversAfterRestartWithoutReplay() {
+        installProjectAdditionFixture(dropReply = true)
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
+        openProjectAddition()
+        compose.onNodeWithTag("project-folder-op bridge").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.value.projectAddition.loadedPath == "/home/agent/workspaces/op bridge" }
+        compose.onNodeWithTag("use-project-folder").performClick()
+        compose.onNodeWithTag("confirm-add-project").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.value.projectAddition.pending != null && !model.state.value.projectAddition.working }
+        assertEquals(1, projectCreations.size)
+        recreateProjectDraft()
+        compose.waitUntil(15000) { model.state.value.ready && model.state.value.projects.size == 3 }
+        compose.runOnUiThread { model.openAddProject() }
+        compose.waitUntil(5000) { model.state.value.projectAddition.pending != null }
+        compose.onNodeWithTag("check-project-registration").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.value.newTaskOptions.projectId == "added-project" }
+        assertEquals(1, projectCreations.size)
+        assertEquals(0, threadStarts.get())
+    }
+
+    @Test
+    fun addProjectCoverPickerKeepsActionsReachable() {
+        installProjectAdditionFixture()
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
+        openProjectAddition()
+        compose.onNodeWithTag("project-folder-op bridge").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.value.projectAddition.loadedPath == "/home/agent/workspaces/op bridge" }
+        compose.onNodeWithTag("use-project-folder").assertIsDisplayed().performClick()
+        compose.onNodeWithTag("confirm-add-project").performScrollTo().assertIsDisplayed().performClick()
+        compose.waitUntil(5000) { model.state.value.newTaskOptions.projectId == "added-project" }
+        assertEquals(1, projectCreations.size)
     }
 
     @Test
@@ -3643,6 +4083,7 @@ class AppTest {
         compose.onNodeWithTag("plan-fullscreen").assertIsDisplayed()
         assertCompactTitle("plan-fullscreen")
         compose.onNodeWithTag("implement-plan-fullscreen").assertIsDisplayed()
+        assertCoverDialogAvoidsCutouts(compose.onNodeWithTag("close-plan-fullscreen"), compose.onNodeWithTag("implement-plan-fullscreen"))
         compose.onNodeWithTag("close-plan-fullscreen").performClick()
         compose.onNodeWithTag("plan-fullscreen").assertDoesNotExist()
     }
@@ -3656,7 +4097,7 @@ class AppTest {
         openConversationTray()
         compose.onNodeWithTag("mode-plan").performScrollTo().performClick()
         closeConversationTray()
-        compose.onNodeWithTag("conversation-settings").assertTextContains("Plan", substring = true)
+        compose.onNodeWithTag("conversation-settings").assert(hasContentDescription("Plan", substring = true))
         closeConversationTray()
         compose.onNodeWithTag("composer").performTextInput("Propose a safe change")
         compose.onNodeWithTag("send").performClick()
@@ -3705,6 +4146,102 @@ class AppTest {
     }
 
     @Test
+    fun unsupportedToolsFailOnHomeAndDuringHistoryLoading() {
+        val failure = obj("success" to JsonPrimitive(false), "contentItems" to JsonArray(listOf(obj(
+            "type" to s("inputText"), "text" to s("This client does not support client-executed tools. The tool was not executed.")
+        ))))
+        fun request(id: Int) = obj("id" to JsonPrimitive(id), "method" to s("item/tool/call"),
+            "params" to obj("threadId" to s("task-test"), "namespace" to s("arbitrary"), "tool" to s("any_tool"), "arguments" to JsonNull))
+        assertEquals("home", model.state.value.page)
+        peer!!.send(request(88).toString())
+        peer!!.send(request(88).toString())
+        compose.waitUntil(5000) { userInputResponses.size == 1 }
+        assertEquals(failure, userInputResponses.single())
+        assertTrue(model.state.value.decisions.isEmpty())
+        assertEquals("home", model.state.value.page)
+
+        holdHistoryReply = true
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { heldHistoryRequests.isNotEmpty() }
+        assertTrue(model.state.value.busy)
+        peer!!.send(request(89).toString())
+        compose.waitUntil(5000) { userInputResponses.size == 2 }
+        assertEquals(failure, userInputResponses.last())
+        assertTrue(model.state.value.busy)
+        assertTrue(model.state.value.decisions.isEmpty())
+        holdHistoryReply = false
+        heldHistoryRequests.forEach { peer!!.send(obj("id" to it, "result" to history()).toString()) }
+        compose.waitUntil(10000) { !model.state.value.busy }
+        emit(peer!!, "turn/completed", obj("turnId" to s("turn-test"), "turn" to obj("id" to s("turn-test"), "status" to s("completed"))))
+        compose.waitForIdle()
+        assertEquals(2, userInputResponses.size)
+        assertTrue(model.state.value.decisions.isEmpty())
+        compose.onNodeWithText("Your input is needed").assertDoesNotExist()
+    }
+
+    @Test
+    fun requestsAndResolutionBypassHistoryLoading() {
+        holdHistoryReply = true
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { heldHistoryRequests.isNotEmpty() }
+        fun request(id: String, method: String, params: JsonObject = obj()) =
+            obj("id" to s(id), "method" to s(method), "params" to params)
+        peer!!.send(request("time", "currentTime/read").toString())
+        peer!!.send(request("elicitation", "mcpServer/elicitation/request").toString())
+        compose.waitUntil(5000) { serverRequestResponses.size == 2 }
+        assertEquals("-32601", serverRequestResponses.first { it.str("id") == "time" }.map("error").str("code"))
+        assertEquals("cancel", serverRequestResponses.first { it.str("id") == "elicitation" }.map("result").str("action"))
+        assertTrue(model.state.value.decisions.isEmpty())
+
+        val question = request("question", "item/tool/requestUserInput", obj(
+            "threadId" to s("task-test"), "turnId" to s("turn-test"), "itemId" to s("question"),
+            "questions" to JsonArray(listOf(obj("id" to s("scope"), "question" to s("Choose the scope")))),
+        ))
+        peer!!.send(question.toString())
+        peer!!.send(question.toString())
+        compose.waitUntil(5000) { model.state.value.decisions.size == 1 }
+        assertTrue(model.state.value.busy)
+        assertEquals(2, serverRequestResponses.size)
+        val staleDecision = model.state.value.decisions.single()
+        peer!!.send(obj("method" to s("serverRequest/resolved"), "params" to obj("requestId" to s("question"))).toString())
+        compose.waitUntil(5000) { model.state.value.decisions.isEmpty() }
+        compose.runOnUiThread { model.answer(staleDecision, Decisions.answers(mapOf("scope" to "Old answer"))) }
+
+        val nextQuestion = JsonObject(question + ("id" to s("next-question")))
+        peer!!.send(nextQuestion.toString())
+        compose.waitUntil(5000) { model.state.value.decisions.size == 1 }
+        compose.onNodeWithText("Your answer").performTextInput("Current workspace")
+        compose.onNodeWithText("Submit answers").performScrollTo().performClick()
+        compose.waitUntil(5000) { serverRequestResponses.size == 3 }
+        assertEquals("next-question", serverRequestResponses.last().str("id"))
+        assertEquals(Decisions.answers(mapOf("scope" to "Current workspace")), serverRequestResponses.last()["result"])
+        assertTrue(model.state.value.decisions.isEmpty())
+        assertTrue(model.state.value.busy)
+
+        holdHistoryReply = false
+        heldHistoryRequests.forEach { peer!!.send(obj("id" to it, "result" to history()).toString()) }
+        compose.waitUntil(10000) { !model.state.value.busy }
+        assertTrue(model.state.value.decisions.isEmpty())
+        compose.onNodeWithText("Your input is needed").assertDoesNotExist()
+        assertEquals(3, serverRequestResponses.size)
+    }
+
+    @Test
+    fun approvalStillWaitsForPhoneDecision() {
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy }
+        peer!!.send(obj("id" to JsonPrimitive(88), "method" to s("item/commandExecution/requestApproval"), "params" to obj(
+            "threadId" to s("task-test"), "turnId" to s("turn-test"), "itemId" to s("command"), "command" to s("printf fixture")
+        )).toString())
+        compose.waitUntil(5000) { model.state.value.decisions.size == 1 }
+        assertTrue(userInputResponses.isEmpty())
+        compose.onNodeWithText("Approve once").performScrollTo().performClick()
+        compose.waitUntil(5000) { userInputResponses.size == 1 }
+        assertEquals(obj("decision" to s("accept")), userInputResponses.single())
+        assertTrue(model.state.value.decisions.isEmpty())
+    }
+
+    @Test
     fun planModeQuestionCanBeAnswered() {
         askPlanQuestion = true
         compose.onNodeWithContentDescription("New chat").performClick()
@@ -3722,7 +4259,7 @@ class AppTest {
             compose.onNodeWithTag("composer").assertDoesNotExist()
         } else {
             compose.onNodeWithTag("composer-status")
-                .assertTextContains("Follow-up guides the active turn")
+                .assertTextContains("Plan selected · send when the task is idle")
             val actionHeight =
                 compose.onNodeWithTag("composer-actions").fetchSemanticsNode().boundsInRoot.height
             val maxActionHeight = 64 * compose.activity.resources.displayMetrics.density

@@ -69,6 +69,21 @@ class CredentialRequestsTest {
             ActivityScenario.launch<CredentialRequestsActivity>(fixture(server)).use { scenario ->
                 assertTrue(connected.await(10, TimeUnit.SECONDS))
                 scenario.onActivity {
+                    val content = it.findViewById<ViewGroup>(android.R.id.content)
+                    val root = (content.getChildAt(0) as ViewGroup).getChildAt(0)
+                    val insets = androidx.core.view.WindowInsetsCompat.Builder()
+                        .setInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars(), androidx.core.graphics.Insets.of(0, 24, 0, 48))
+                        .setInsets(androidx.core.view.WindowInsetsCompat.Type.ime(), androidx.core.graphics.Insets.of(0, 0, 0, 240))
+                        .setDisplayCutout(androidx.core.view.DisplayCutoutCompat(
+                            android.graphics.Rect(0, 96, 0, 160),
+                            listOf(android.graphics.Rect(0, 0, 100, 96)),
+                        ))
+                        .build()
+                    androidx.core.view.ViewCompat.dispatchApplyWindowInsets(root, insets)
+                    val padding = (16 * it.resources.displayMetrics.density).toInt()
+                    assertEquals(padding + 96, root.paddingTop)
+                    assertEquals(padding + 240, root.paddingBottom)
+                    androidx.core.view.ViewCompat.requestApplyInsets(root)
                     it.selectRequest(request())
                     it.secret.setText("HARMLESS_AUTOFILL_FIXTURE")
                     val submit = button(it.window.decorView, "Release once")!!

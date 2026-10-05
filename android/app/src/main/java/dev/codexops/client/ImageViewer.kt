@@ -48,10 +48,10 @@ internal fun ImageViewer(bitmap: Bitmap, description: String, onDismiss: () -> U
 
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
-        Surface(Modifier.fillMaxSize().systemBarsPadding()) {
-            Column {
+        Surface(Modifier.fillMaxSize()) {
+            Column(Modifier.safeDrawingPadding()) {
                 Row(
                     Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     verticalAlignment = Alignment.CenterVertically,

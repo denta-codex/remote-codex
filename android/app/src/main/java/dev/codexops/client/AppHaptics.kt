@@ -20,6 +20,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 /** The hardware boundary is replaceable by a recorder in fixture-backed UI tests. */
 internal interface HapticDriver {
     fun tick()
+    fun longPress() = tick()
     fun stream(scale: Float)
     fun cancel()
 }
@@ -29,6 +30,7 @@ internal val LocalAppHaptics = staticCompositionLocalOf { AppHaptics(null, false
 
 internal class AppHaptics(private val driver: HapticDriver?, private val enabled: Boolean) {
     fun tick() { if (enabled) driver?.tick() }
+    fun longPress() { if (enabled) driver?.longPress() }
     fun stream(scale: Float) { if (enabled) driver?.stream(scale) }
     fun cancel() { driver?.cancel() }
 }
@@ -75,6 +77,10 @@ private class AndroidHapticDriver(private val context: Context, private val view
 
     override fun tick() {
         if (allowed()) view.performHapticFeedback(HapticFeedbackConstants.TEXT_HANDLE_MOVE)
+    }
+
+    override fun longPress() {
+        if (allowed()) view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
     }
 
     override fun stream(scale: Float) {
