@@ -452,6 +452,7 @@ class AppTest {
     @Volatile private var rejectSteer = false
     @Volatile private var rejectQueueRead = false
     private val userInputResponses = CopyOnWriteArrayList<JsonObject>()
+    private val serverRequestResponses = CopyOnWriteArrayList<JsonObject>()
     @Volatile private var holdHistoryReply = false
     private val heldHistoryRequests = CopyOnWriteArrayList<JsonElement>()
     private val app
@@ -562,6 +563,7 @@ class AppTest {
                                             ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
                                             ?: emptyList()
                                     if (method.isEmpty()) {
+                                        serverRequestResponses.add(m)
                                         if (m["id"] in setOf(JsonPrimitive(88), JsonPrimitive(89)))
                                             userInputResponses.add(m.map("result"))
                                         return
@@ -4034,6 +4036,53 @@ class AppTest {
         assertEquals(2, userInputResponses.size)
         assertTrue(model.state.value.decisions.isEmpty())
         compose.onNodeWithText("Your input is needed").assertDoesNotExist()
+    }
+
+    @Test
+    fun requestsAndResolutionBypassHistoryLoading() {
+        holdHistoryReply = true
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { heldHistoryRequests.isNotEmpty() }
+        fun request(id: String, method: String, params: JsonObject = obj()) =
+            obj("id" to s(id), "method" to s(method), "params" to params)
+        peer!!.send(request("time", "currentTime/read").toString())
+        peer!!.send(request("elicitation", "mcpServer/elicitation/request").toString())
+        compose.waitUntil(5000) { serverRequestResponses.size == 2 }
+        assertEquals("-32601", serverRequestResponses.first { it.str("id") == "time" }.map("error").str("code"))
+        assertEquals("cancel", serverRequestResponses.first { it.str("id") == "elicitation" }.map("result").str("action"))
+        assertTrue(model.state.value.decisions.isEmpty())
+
+        val question = request("question", "item/tool/requestUserInput", obj(
+            "threadId" to s("task-test"), "turnId" to s("turn-test"), "itemId" to s("question"),
+            "questions" to JsonArray(listOf(obj("id" to s("scope"), "question" to s("Choose the scope")))),
+        ))
+        peer!!.send(question.toString())
+        peer!!.send(question.toString())
+        compose.waitUntil(5000) { model.state.value.decisions.size == 1 }
+        assertTrue(model.state.value.busy)
+        assertEquals(2, serverRequestResponses.size)
+        val staleDecision = model.state.value.decisions.single()
+        peer!!.send(obj("method" to s("serverRequest/resolved"), "params" to obj("requestId" to s("question"))).toString())
+        compose.waitUntil(5000) { model.state.value.decisions.isEmpty() }
+        compose.runOnUiThread { model.answer(staleDecision, Decisions.answers(mapOf("scope" to "Old answer"))) }
+
+        val nextQuestion = JsonObject(question + ("id" to s("next-question")))
+        peer!!.send(nextQuestion.toString())
+        compose.waitUntil(5000) { model.state.value.decisions.size == 1 }
+        compose.onNodeWithText("Your answer").performTextInput("Current workspace")
+        compose.onNodeWithText("Submit answers").performScrollTo().performClick()
+        compose.waitUntil(5000) { serverRequestResponses.size == 3 }
+        assertEquals("next-question", serverRequestResponses.last().str("id"))
+        assertEquals(Decisions.answers(mapOf("scope" to "Current workspace")), serverRequestResponses.last()["result"])
+        assertTrue(model.state.value.decisions.isEmpty())
+        assertTrue(model.state.value.busy)
+
+        holdHistoryReply = false
+        heldHistoryRequests.forEach { peer!!.send(obj("id" to it, "result" to history()).toString()) }
+        compose.waitUntil(10000) { !model.state.value.busy }
+        assertTrue(model.state.value.decisions.isEmpty())
+        compose.onNodeWithText("Your input is needed").assertDoesNotExist()
+        assertEquals(3, serverRequestResponses.size)
     }
 
     @Test

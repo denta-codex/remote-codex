@@ -587,7 +587,7 @@ private fun DecisionCard(d: Decision, st: ScreenState, actions: ConversationActi
                         Text("Approve once")
                     }
                 }
-            } else Text("This request requires the desktop client: ${d.method}")
+            }
         }
     }
 }

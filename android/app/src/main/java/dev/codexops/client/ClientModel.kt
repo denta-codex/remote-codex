@@ -2199,11 +2199,10 @@ constructor(
         reports.actions.add("answer", decision.key, decision.method)
         viewModelScope.launch {
             guarded {
-                if (requests[decision.key] != decision || !_state.value.ready)
-                    throw ConnectionLost()
-                rpc.respond(decision.id, result, decision.epoch)
+                if (requests[decision.key] != decision || !_state.value.ready) return@guarded
                 requests.remove(decision.key)
                 publish()
+                rpc.respond(decision.id, result, decision.epoch)
             }
         }
     }
@@ -2213,6 +2212,7 @@ constructor(
         if (event.str("method") == "connection/lost") {
             activityMonitor.disconnected()
             requests.clear()
+            buffered.clear()
             _state.update {
                 it.copy(
                     ready = false,
@@ -2250,6 +2250,10 @@ constructor(
             return
         }
         activityMonitor.event(event)
+        if (event.containsKey("id") || event.str("method") == "serverRequest/resolved") {
+            applyEvent(event)
+            return
+        }
         if (hydrating) {
             buffered.add(event)
             return
@@ -2258,9 +2262,11 @@ constructor(
     }
 
     private fun applyEvent(event: JsonObject) {
+        if (event.str("_epoch").toLongOrNull()?.let { it != rpc.generation } == true) return
         val method = event.str("method")
         val p = event.map("params")
         if (event.containsKey("id")) {
+            if (ServerRequests.route(method) != ServerRequestRoute.Interactive) return
             val d =
                 Decision(
                     event["id"]!!,
@@ -2268,7 +2274,7 @@ constructor(
                     p,
                     event.str("_epoch").toLongOrNull() ?: rpc.generation,
                 )
-            requests[d.key] = d
+            requests.putIfAbsent(d.key, d)
             publish()
             return
         }
