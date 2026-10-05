@@ -45,6 +45,146 @@ import org.junit.rules.TestName
 import org.junit.Assert.*
 
 class AppTest {
+    private class HapticRecorder : HapticDriver {
+        val ticks = AtomicInteger()
+        val scales = CopyOnWriteArrayList<Float>()
+        override fun tick() { ticks.incrementAndGet() }
+        override fun stream(scale: Float) { scales.add(scale) }
+        override fun cancel() {}
+    }
+
+    private fun recordHaptics(recorder: HapticRecorder) {
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                CompositionLocalProvider(LocalHapticDriver provides recorder) { RemoteTheme { App(model) } }
+            }
+            model.foreground(true)
+        }
+        compose.waitUntil(5000) { model.state.value.hapticsLoaded }
+    }
+
+    @Test
+    fun streamingHapticsFollowRenderedTextAndCancelAcrossLifecycleAndHistory() {
+        val recorder = HapticRecorder()
+        recordHaptics(recorder)
+        holdTurnOpen = true
+        compose.onNodeWithText("Fixture task").performClick()
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.queueReady }
+        assertTrue(recorder.scales.isEmpty())
+        compose.onNodeWithTag("composer").performTextInput("A haptic fixture reply")
+        compose.onNodeWithTag("send").performClick()
+        compose.waitUntil(10000) { recorder.scales.isNotEmpty() && !model.state.value.busy }
+        assertEquals(1, recorder.ticks.get())
+        assertEquals(0.30f, recorder.scales.first(), 0.00001f)
+        compose.onNodeWithText("Hello from Grace").assertIsDisplayed()
+        val firstCount = recorder.scales.size
+
+        // Layout/recomposition and an authoritative duplicate completion are silent.
+        compose.runOnUiThread { model.draft("A different draft") }
+        emit(peer!!, "item/completed", obj("turnId" to s("turn-test"), "item" to
+            obj("id" to s("a"), "type" to s("agentMessage"), "text" to s("Hello from Grace"))))
+        compose.waitUntil(5000) { model.state.value.entries.any { it.id == "a" && it.completed } }
+        compose.waitForIdle()
+        assertEquals(firstCount, recorder.scales.size)
+
+        SystemClock.sleep(80)
+        emit(peer!!, "item/agentMessage/delta", obj("turnId" to s("turn-test"), "itemId" to s("commentary"),
+            "delta" to s("More text in the same turn.")))
+        compose.waitUntil(5000) { recorder.scales.size > firstCount }
+        assertTrue(recorder.scales.last() < recorder.scales.first())
+        val beforeNavigation = recorder.scales.size
+        compose.runOnUiThread { model.home() }
+        compose.waitUntil(5000) { model.state.value.page == "home" }
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.queueReady }
+        compose.waitForIdle()
+        assertEquals(beforeNavigation, recorder.scales.size)
+        emit(peer!!, "item/agentMessage/delta", obj("turnId" to s("turn-test"), "itemId" to s("a"),
+            "delta" to s(" Existing turn after reopening.")))
+        compose.waitUntil(5000) { model.state.value.entries.any { it.text.contains("after reopening") } }
+        compose.waitForIdle()
+        assertEquals(beforeNavigation, recorder.scales.size)
+
+        emit(peer!!, "turn/started", obj("turn" to obj("id" to s("next-turn"))))
+        emit(peer!!, "item/agentMessage/delta", obj("turnId" to s("next-turn"), "itemId" to s("next-answer"),
+            "delta" to s("A new turn gets a fresh fade.")))
+        compose.waitUntil(5000) { recorder.scales.size > beforeNavigation }
+        assertEquals(0.30f, recorder.scales.last(), 0.00001f)
+        val beforeBackground = recorder.scales.size
+        compose.runOnUiThread { model.foreground(false) }
+        emit(peer!!, "item/agentMessage/delta", obj("turnId" to s("next-turn"), "itemId" to s("next-answer"),
+            "delta" to s(" Text in the background.")))
+        compose.waitUntil(5000) { model.state.value.entries.any { it.text.contains("background") } }
+        compose.runOnUiThread { model.foreground(true) }
+        emit(peer!!, "item/agentMessage/delta", obj("turnId" to s("next-turn"), "itemId" to s("next-answer"),
+            "delta" to s(" Text after resuming.")))
+        compose.waitUntil(5000) { model.state.value.entries.any { it.text.contains("after resuming") } }
+        compose.waitForIdle()
+        assertEquals(beforeBackground, recorder.scales.size)
+
+        // A disconnect also cancels, even when the same turn survives reconnection.
+        val resumesBeforeReconnect = threadResumes.get()
+        emit(peer!!, "connection/lost", obj())
+        compose.waitUntil(15000) { threadResumes.get() > resumesBeforeReconnect &&
+            model.state.value.ready && !model.state.value.busy && model.state.value.queueReady }
+        compose.waitForIdle()
+        val afterReconnect = recorder.scales.size
+        emit(peer!!, "item/agentMessage/delta", obj("turnId" to s("turn-test"), "itemId" to s("a"),
+            "delta" to s(" Reconciled turn stays silent.")))
+        compose.waitUntil(5000) { model.state.value.entries.any { it.text.contains("stays silent") } }
+        compose.waitForIdle()
+        assertEquals(afterReconnect, recorder.scales.size)
+        assertEquals(1, recorder.ticks.get())
+    }
+
+    @Test
+    fun hapticPreferencePersistsAndControlsSendQueueAndSwipeFeedback() {
+        val recorder = HapticRecorder()
+        recordHaptics(recorder)
+        compose.onNodeWithTag("task-row-task-test").performTouchInput { swipeRight() }
+        compose.waitUntil(5000) { recorder.ticks.get() == 1 }
+        openRunningQueueFixture()
+        compose.waitUntil(10000) { recorder.ticks.get() == 2 && recorder.scales.isNotEmpty() }
+        val beforeQueue = recorder.scales.size
+        enqueueFixture()
+        compose.waitUntil(5000) { recorder.ticks.get() == 3 }
+        compose.waitForIdle()
+        assertEquals(beforeQueue, recorder.scales.size)
+        compose.onNodeWithTag("send").assertIsNotEnabled().performTouchInput { click() }
+        assertEquals(3, recorder.ticks.get())
+
+        compose.runOnUiThread { model.settings() }
+        compose.onNodeWithTag("haptic-feedback-toggle").performScrollTo().assertIsOn().performClick()
+        compose.waitUntil(5000) { !model.state.value.hapticsEnabled }
+        runBlocking { withTimeout(5000) {
+            while (LocalStore(app).get("haptics/enabled") != "false") delay(10)
+        } }
+        compose.runOnUiThread {
+            store.clear()
+            model = ClientModel(app, "ws://127.0.0.1:${server.port}/rpc", "/fixture", true)
+            store.put("fixture", model)
+        }
+        recordHaptics(recorder)
+        compose.waitUntil(15000) { model.state.value.ready && model.state.value.tasks.isNotEmpty() }
+        assertFalse(model.state.value.hapticsEnabled)
+        compose.onNodeWithTag("task-row-task-test").performTouchInput { swipeRight() }
+        compose.waitForIdle()
+        assertEquals(3, recorder.ticks.get())
+        compose.onNodeWithText("Fixture task").performClick()
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.queueReady }
+        enqueueFixture("A silent queued send")
+        compose.waitForIdle()
+        assertEquals(3, recorder.ticks.get())
+        assertEquals(beforeQueue, recorder.scales.size)
+        compose.runOnUiThread { model.settings() }
+        compose.onNodeWithTag("haptic-feedback-toggle").performScrollTo().assertIsOff().performClick()
+        compose.waitUntil(5000) { model.state.value.hapticsEnabled }
+        compose.runOnUiThread { model.home() }
+        compose.waitUntil(5000) { model.state.value.page == "home" && !model.state.value.listLoading }
+        compose.onNodeWithTag("task-row-task-test").performTouchInput { swipeRight() }
+        compose.waitUntil(5000) { recorder.ticks.get() == 4 }
+    }
+
     private fun recordedEdit(id: String = "edit", status: String = "completed") = obj(
         "id" to s(id), "type" to s("fileChange"), "status" to s(status),
         "changes" to JsonArray(listOf(
@@ -1115,6 +1255,7 @@ class AppTest {
                     "bug-report/shake",
                     "bug-report/screenshot",
                     "bug-report/last-task",
+                    "haptics/enabled",
                 )
                 .forEach { local.remove(it) }
         }
@@ -4009,6 +4150,11 @@ class AppTest {
         val failure = obj("success" to JsonPrimitive(false), "contentItems" to JsonArray(listOf(obj(
             "type" to s("inputText"), "text" to s("This client does not support client-executed tools. The tool was not executed.")
         ))))
+        val readThreadFailure = obj("success" to JsonPrimitive(false), "contentItems" to JsonArray(listOf(obj(
+            "type" to s("inputText"), "text" to s("This client does not execute codex_app.read_thread. The tool was not executed. " +
+                "Use the available codex-tasks skill to read or find tasks on an explicitly configured Grace endpoint. " +
+                "Desktop hostId values are not CLI target selectors.")
+        ))))
         fun request(id: Int) = obj("id" to JsonPrimitive(id), "method" to s("item/tool/call"),
             "params" to obj("threadId" to s("task-test"), "namespace" to s("arbitrary"), "tool" to s("any_tool"), "arguments" to JsonNull))
         assertEquals("home", model.state.value.page)
@@ -4023,9 +4169,12 @@ class AppTest {
         compose.runOnUiThread { model.openTask("task-test") }
         compose.waitUntil(10000) { heldHistoryRequests.isNotEmpty() }
         assertTrue(model.state.value.busy)
-        peer!!.send(request(89).toString())
+        peer!!.send(obj("id" to JsonPrimitive(89), "method" to s("item/tool/call"),
+            "params" to obj("threadId" to s("task-test"), "namespace" to s("codex_app"), "tool" to s("read_thread"),
+                "arguments" to obj("threadId" to s("task-test"), "hostId" to s("local"),
+                    "turnLimit" to JsonPrimitive(20), "maxOutputCharsPerItem" to JsonPrimitive(32000)))).toString())
         compose.waitUntil(5000) { userInputResponses.size == 2 }
-        assertEquals(failure, userInputResponses.last())
+        assertEquals(readThreadFailure, userInputResponses.last())
         assertTrue(model.state.value.busy)
         assertTrue(model.state.value.decisions.isEmpty())
         holdHistoryReply = false

@@ -10,6 +10,15 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ClientToolCallsTest {
+    private val readThreadFailure = obj(
+        "success" to JsonPrimitive(false),
+        "contentItems" to JsonArray(listOf(obj(
+            "type" to s("inputText"),
+            "text" to s("This client does not execute codex_app.read_thread. The tool was not executed. " +
+                "Use the available codex-tasks skill to read or find tasks on an explicitly configured Grace endpoint. " +
+                "Desktop hostId values are not CLI target selectors."),
+        ))),
+    )
     private val failure = obj(
         "success" to JsonPrimitive(false),
         "contentItems" to JsonArray(listOf(obj(
@@ -32,7 +41,9 @@ class ClientToolCallsTest {
                     when (m.str("method")) {
                         "initialize" -> {
                             // A server request may collide with an outstanding client request ID.
-                            val first = request(m.getValue("id"), obj("namespace" to s("codex_app"), "tool" to s("read_thread")))
+                            val first = request(m.getValue("id"), obj("namespace" to s("codex_app"), "tool" to s("read_thread"),
+                                "arguments" to obj("threadId" to s("task-fixture"), "hostId" to s("local"),
+                                    "turnLimit" to JsonPrimitive(20), "maxOutputCharsPerItem" to JsonPrimitive(32000))))
                             ws.send(first.toString())
                             ws.send(first.toString())
                             ws.send(request(s("arbitrary"), obj("tool" to s("anything"), "arguments" to JsonPrimitive(42))).toString())
@@ -48,11 +59,33 @@ class ClientToolCallsTest {
             val rpc = Rpc(true)
             try {
                 assertEquals("/test", rpc.connect("ws://127.0.0.1:${server.port}", "fixture").str("codexHome"))
-                repeat(3) { assertEquals(failure, withTimeout(5000) { replies.receive() }.map("result")) }
+                val known = withTimeout(5000) { replies.receive() }
+                assertTrue((known["id"] as JsonPrimitive).isString.not())
+                assertEquals(readThreadFailure, known.map("result"))
+                for (id in listOf("arbitrary", "no-parameters")) {
+                    val reply = withTimeout(5000) { replies.receive() }
+                    assertEquals(s(id), reply["id"])
+                    assertEquals(failure, reply.map("result"))
+                }
                 assertEquals("3", rpc.call("barrier").str("count"))
                 assertTrue(rpc.events.tryReceive().isFailure)
             } finally { rpc.dispose(); replies.close() }
         }
+    }
+
+    @Test
+    fun onlyExactReadThreadNamesReceiveHostSideGuidance() {
+        val params = obj("namespace" to s("codex_app"), "tool" to s("read_thread"), "arguments" to JsonPrimitive(42))
+        assertEquals(ServerRequestRoute.Result(readThreadFailure), ServerRequests.route("item/tool/call", params))
+        val unsupportedParams = listOf(
+            JsonNull, JsonArray(emptyList()), JsonPrimitive(42), obj(),
+            obj("namespace" to s("other_app"), "tool" to s("read_thread")),
+            obj("namespace" to s("codex_app"), "tool" to s("archive_thread")),
+            obj("namespace" to s("codex_app"), "tool" to s("READ_THREAD")),
+            obj("namespace" to JsonPrimitive(42), "tool" to s("read_thread")),
+            obj("namespace" to s("codex_app"), "tool" to JsonArray(listOf(s("read_thread")))),
+        )
+        unsupportedParams.forEach { assertEquals(ServerRequestRoute.Result(failure), ServerRequests.route("item/tool/call", it)) }
     }
 
     @Test
