@@ -391,6 +391,12 @@ class AppTest {
     @Volatile private var browserResponse: ((String, JsonObject) -> JsonObject?)? = null
     private val speedMutations = CopyOnWriteArrayList<JsonObject>()
     private val threadResumes = AtomicInteger()
+    private val approvalResumeRequests = CopyOnWriteArrayList<JsonObject>()
+    @Volatile private var approvalResumePage: JsonObject? = null
+    @Volatile private var approvalResumeRequest: JsonObject? = null
+    @Volatile private var holdApprovalContextReply = false
+    private val heldApprovalContextRequests = CopyOnWriteArrayList<JsonObject>()
+    @Volatile private var dropApprovalAfterReceipt = false
     @Volatile private var fixtureServiceTier: String? = null
     @Volatile private var rejectSpeed = false
     @Volatile private var dropSpeedReply = false
@@ -566,9 +572,20 @@ class AppTest {
                                         serverRequestResponses.add(m)
                                         if (m["id"] in setOf(JsonPrimitive(88), JsonPrimitive(89)))
                                             userInputResponses.add(m.map("result"))
+                                        if (dropApprovalAfterReceipt) {
+                                            dropApprovalAfterReceipt = false
+                                            ws.close(1011, "fixture approval acknowledgement lost")
+                                        }
                                         return
                                     }
                                     if (method == "initialized") return
+                                    if (method == "thread/resume") {
+                                        approvalResumeRequests.add(params)
+                                        if (holdApprovalContextReply) {
+                                            heldApprovalContextRequests.add(m)
+                                            return
+                                        }
+                                    }
                                     if (method == "thread/turns/list" && holdHistoryReply) {
                                         heldHistoryRequests.add(m.getValue("id"))
                                         return
@@ -743,6 +760,7 @@ class AppTest {
                                             "thread/resume" -> {
                                                 threadResumes.incrementAndGet()
                                                 obj(
+                                                    "initialTurnsPage" to approvalResumePage,
                                                     "model" to s("gpt-fixture"),
                                                     "reasoningEffort" to s("low"),
                                                     "serviceTier" to (fixtureServiceTier?.let(::s) ?: JsonNull),
@@ -966,6 +984,8 @@ class AppTest {
                                             else obj("id" to m["id"], "result" to result))
                                             .toString()
                                     )
+                                    if (method == "thread/resume" && fixtureError == null)
+                                        approvalResumeRequest?.let { ws.send(it.toString()) }
                                     if (method == "turn/start") {
                                         emit(
                                             ws,
@@ -4084,6 +4104,178 @@ class AppTest {
         compose.onNodeWithText("Your input is needed").assertDoesNotExist()
         assertEquals(3, serverRequestResponses.size)
     }
+
+    @Test
+    fun fileApprovalLiveDetailsOnNewTaskDoNotNeedResume() {
+        compose.runOnUiThread { model.newChat() }
+        compose.waitUntil(5000) { model.state.value.page == "chat" && model.state.value.thread == null && !model.state.value.busy }
+        compose.onNodeWithTag("composer").performTextInput("Apply the fixture change")
+        compose.onNodeWithTag("send").performClick()
+        compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy && sent.get() == 1 }
+        emit(peer!!, "item/started", obj("turnId" to s("approval-turn"), "item" to recordedEdit("patch", "inProgress")))
+        peer!!.send(fileApprovalRequest().toString())
+        compose.waitUntil(5000) { model.state.value.fileApprovalContexts["88"]?.text?.contains("new content") == true }
+        compose.onNodeWithText("Approve once").assertIsEnabled().performScrollTo().performClick()
+        compose.waitUntil(5000) { serverRequestResponses.size == 1 }
+        assertTrue(approvalResumeRequests.isEmpty())
+        assertEquals(obj("decision" to s("accept")), serverRequestResponses.single().map("result"))
+    }
+
+    @Test
+    fun fileApprovalRecoversLiveSnapshotBeforeHistoryFinishes() {
+        historyOverride = obj("data" to JsonArray(emptyList()))
+        holdHistoryReply = true
+        approvalResumePage = fileApprovalPage()
+        approvalResumeRequest = fileApprovalRequest()
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) {
+            heldHistoryRequests.isNotEmpty() && model.state.value.decisions.size == 1 &&
+                model.state.value.fileApprovalContexts["88"]?.text?.contains("new content") == true
+        }
+        assertTrue(model.state.value.entries.isEmpty())
+        assertTrue(serverRequestResponses.isEmpty())
+        compose.onNodeWithText("Approve once").assertIsEnabled().performScrollTo().performClick()
+        compose.waitUntil(5000) { serverRequestResponses.size == 1 }
+        assertEquals(obj("decision" to s("accept")), serverRequestResponses.single().map("result"))
+        assertEquals(1, approvalResumeRequests.size)
+        assertEquals(FileApprovalContexts.resumeParams("task-test"), approvalResumeRequests.single())
+        approvalResumeRequest = null
+        holdHistoryReply = false
+        heldHistoryRequests.forEach { peer!!.send(obj("id" to it, "result" to history()).toString()) }
+        compose.waitUntil(5000) { !model.state.value.busy }
+        assertTrue(model.state.value.decisions.isEmpty())
+        assertEquals(1, serverRequestResponses.size)
+    }
+
+    @Test
+    fun fileApprovalMissingDetailsStaysDisabledAndCanRetry() {
+        historyOverride = obj("data" to JsonArray(emptyList()))
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.thread == "task-test" }
+        peer!!.send(fileApprovalRequest().toString())
+        compose.waitUntil(5000) {
+            approvalResumeRequests.size == 2 && model.state.value.fileApprovalContexts["88"] == FileApprovalContext()
+        }
+        compose.onNodeWithText("Approve once").assertIsNotEnabled()
+        compose.onNodeWithText("Approval details unavailable. Open this task on desktop.").assertExists()
+        val decision = model.state.value.decisions.single()
+        compose.runOnUiThread { model.answer(decision, Decisions.result(decision, true)) }
+        compose.waitForIdle()
+        assertTrue(serverRequestResponses.isEmpty())
+        peer!!.send(obj("method" to s("item/started"), "params" to obj(
+            "threadId" to s("other-task"), "turnId" to s("approval-turn"), "item" to recordedEdit("patch", "inProgress"),
+        )).toString())
+        emit(peer!!, "item/started", obj("turnId" to s("other-turn"), "item" to recordedEdit("patch", "inProgress")))
+        compose.waitUntil(5000) { model.state.value.entries.isNotEmpty() }
+        compose.onNodeWithText("Approve once").assertIsNotEnabled()
+        approvalResumePage = fileApprovalPage()
+        compose.onNodeWithText("Retry details").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.value.fileApprovalContexts["88"]?.text?.contains("new content") == true }
+        compose.onNodeWithText("Approve once").assertIsEnabled()
+        assertEquals(3, approvalResumeRequests.size)
+        emit(peer!!, "item/fileChange/patchUpdated", obj(
+            "turnId" to s("approval-turn"), "itemId" to s("patch"), "changes" to JsonArray(listOf(
+                obj("path" to s("latest.kt"), "diff" to s("-before\n+latest"), "kind" to obj("type" to s("update"))),
+            )),
+        ))
+        compose.waitUntil(5000) { model.state.value.fileApprovalContexts["88"]?.text == "latest.kt\n-before\n+latest" }
+        compose.onNodeWithText("Decline").performScrollTo().performClick()
+        compose.waitUntil(5000) { serverRequestResponses.size == 1 }
+        assertEquals(obj("decision" to s("decline")), serverRequestResponses.single().map("result"))
+    }
+
+    @Test
+    fun fileApprovalReconnectRequiresServerReissueAndNeverReplaysReply() {
+        historyOverride = obj("data" to JsonArray(emptyList()))
+        approvalResumePage = fileApprovalPage()
+        approvalResumeRequest = fileApprovalRequest()
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.decisions.size == 1 }
+        val oldDecision = model.state.value.decisions.single()
+        approvalResumeRequest = null
+        dropApprovalAfterReceipt = true
+        compose.runOnUiThread { model.foreground(false) }
+        compose.onNodeWithText("Approve once").performScrollTo().performClick()
+        compose.waitUntil(5000) { !model.state.value.ready }
+        assertEquals(1, serverRequestResponses.size)
+        compose.runOnUiThread { model.foreground(true) }
+        compose.waitUntil(15000) { model.state.value.ready && !model.state.value.busy && approvalResumeRequests.size == 2 }
+        assertTrue(model.state.value.decisions.isEmpty())
+        compose.runOnUiThread { model.answer(oldDecision, Decisions.result(oldDecision, true)) }
+        compose.waitForIdle()
+        assertEquals(1, serverRequestResponses.size)
+        // Reusing the numeric ID is safe only after a fresh request arrives from stock.
+        peer!!.send(fileApprovalRequest().toString())
+        compose.waitUntil(5000) { model.state.value.decisions.size == 1 }
+        assertNotEquals(oldDecision.epoch, model.state.value.decisions.single().epoch)
+        compose.onNodeWithText("Approve once").assertIsEnabled().performScrollTo().performClick()
+        compose.waitUntil(5000) { serverRequestResponses.size == 2 }
+        assertTrue(model.state.value.decisions.isEmpty())
+        assertEquals(2, approvalResumeRequests.size)
+    }
+
+    @Test
+    fun fileApprovalResolutionDuringRecoveryDiscardsLateSnapshot() {
+        historyOverride = obj("data" to JsonArray(emptyList()))
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.thread == "task-test" }
+        holdApprovalContextReply = true
+        peer!!.send(fileApprovalRequest().toString())
+        compose.waitUntil(5000) {
+            heldApprovalContextRequests.size == 1 && model.state.value.fileApprovalContexts["88"]?.loading == true
+        }
+        val oldDecision = model.state.value.decisions.single()
+        emit(peer!!, "serverRequest/resolved", obj("requestId" to JsonPrimitive(88)))
+        compose.waitUntil(5000) { model.state.value.decisions.isEmpty() }
+        val held = heldApprovalContextRequests.single()
+        peer!!.send(obj("id" to held["id"], "result" to obj(
+            "thread" to obj("id" to s("task-test")), "initialTurnsPage" to fileApprovalPage(),
+        )).toString())
+        compose.runOnUiThread { model.answer(oldDecision, Decisions.result(oldDecision, true)) }
+        holdApprovalContextReply = false
+        peer!!.send(fileApprovalRequest(99).toString())
+        compose.waitUntil(5000) {
+            model.state.value.fileApprovalContexts["99"] == FileApprovalContext() && approvalResumeRequests.size == 3
+        }
+        assertTrue(serverRequestResponses.isEmpty())
+        assertTrue(model.state.value.entries.isEmpty())
+        compose.onNodeWithText("Approve once").assertIsNotEnabled()
+        compose.onNodeWithText("Decline").performScrollTo().performClick()
+        compose.waitUntil(5000) { serverRequestResponses.size == 1 }
+        assertEquals(JsonPrimitive(99), serverRequestResponses.single()["id"])
+    }
+
+    @Test
+    fun unsupportedApprovalSnapshotStillOpensTask() {
+        historyOverride = obj("data" to JsonArray(emptyList()))
+        browserResponse = { method, params ->
+            if (method == "thread/resume" && params.containsKey("initialTurnsPage"))
+                obj("_fixtureError" to obj("code" to JsonPrimitive(-32602), "message" to s("initialTurnsPage is unsupported")))
+            else null
+        }
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.thread == "task-test" }
+        assertNull(model.state.value.error)
+        assertEquals(2, approvalResumeRequests.size)
+        assertFalse(approvalResumeRequests.last().containsKey("initialTurnsPage"))
+        peer!!.send(fileApprovalRequest().toString())
+        compose.waitUntil(5000) {
+            approvalResumeRequests.size == 3 && model.state.value.fileApprovalContexts["88"] == FileApprovalContext()
+        }
+        compose.onNodeWithText("Approve once").assertIsNotEnabled()
+        assertTrue(serverRequestResponses.isEmpty())
+    }
+
+    private fun fileApprovalPage() = obj("data" to JsonArray(listOf(obj(
+        "id" to s("approval-turn"), "status" to s("inProgress"),
+        "items" to JsonArray(listOf(recordedEdit("patch", "inProgress"))),
+    ))), "nextCursor" to JsonNull)
+
+    private fun fileApprovalRequest(id: Int = 88) = obj(
+        "id" to JsonPrimitive(id), "method" to s("item/fileChange/requestApproval"), "params" to obj(
+            "threadId" to s("task-test"), "turnId" to s("approval-turn"), "itemId" to s("patch"),
+        ),
+    )
 
     @Test
     fun approvalStillWaitsForPhoneDecision() {

@@ -3,6 +3,7 @@ package dev.codexops.client
 import android.net.Uri
 import dev.codexops.core.Decision
 import dev.codexops.core.Entry
+import dev.codexops.core.FileApprovalContext
 import dev.codexops.core.MediaRef
 import dev.codexops.core.list
 import dev.codexops.core.obj
@@ -178,6 +179,7 @@ data class ScreenState(
     val queueReady: Boolean = false,
     val queueError: String? = null,
     val decisions: List<Decision> = emptyList(),
+    val fileApprovalContexts: Map<String, FileApprovalContext> = emptyMap(),
     val busy: Boolean = false,
     val error: String? = null,
     val journal: JsonObject? = null,
@@ -308,6 +310,8 @@ interface ConversationActions {
     fun unlockAfterReview()
 
     fun answer(decision: Decision, result: JsonObject)
+
+    fun refreshApprovalContext(decision: Decision) {}
 }
 
 interface ClientActions : AppNavigation, HomeActions, SettingsActions, ConversationActions, TodoActions

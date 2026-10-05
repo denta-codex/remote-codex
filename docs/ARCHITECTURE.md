@@ -218,8 +218,15 @@ bounded interval. The first live turn already has a subscription and is rendered
 from its events, without an immediate resume call.
 
 Approvals are connection-scoped. Resolved requests disappear even if answered by
-another client. A missing file-change body disables approval; the user is directed
-to desktop. Unsupported dynamic/MCP requests remain visible as desktop-required.
+another client. File-change details are retained independently of timeline pages,
+using matching thread, turn, item, and connection generation. Stock 0.159.2 emits
+these details before requesting approval but does not persist unfinished items.
+Resume therefore requests one full recent turn with experimental
+`initialTurnsPage`, while keeping `excludeTurns: true`; stock overlays the live
+turn and then reissues its outstanding requests. A snapshot alone never creates
+an actionable request. An explicit rejection of this field allows metadata-only
+resume; missing details keep approval disabled with Retry details and desktop
+guidance. Recovery never loads the full thread or replays an approval response.
 No auto-approval is performed. Permission grants are limited to the current turn.
 
 The project browser supplies `projectId` plus the chosen absolute

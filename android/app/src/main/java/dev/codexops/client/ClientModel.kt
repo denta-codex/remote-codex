@@ -150,6 +150,9 @@ constructor(
     private var codexHome = expectedHome
     private val buffered = mutableListOf<JsonObject>()
     private val requests = linkedMapOf<String, Decision>()
+    private val fileApprovalContexts = FileApprovalContexts()
+    private var approvalContextJob: Job? = null
+    private val attemptedApprovalContexts = mutableSetOf<String>()
     private val network = app.getSystemService(ConnectivityManager::class.java)
     private val callback =
         object : ConnectivityManager.NetworkCallback() {
@@ -247,6 +250,7 @@ constructor(
                             modelCatalogMessage = null,
                         )
                     }
+                    resetApprovalContexts()
                     requests.clear()
                     while (rpc.events.tryReceive().isSuccess) {}
                     publish()
@@ -294,6 +298,7 @@ constructor(
                         }
                         Log.w("RemoteCodexConnection", reason)
                         rpc.close()
+                        resetApprovalContexts()
                         requests.clear()
                         _state.update {
                             it.copy(
@@ -492,6 +497,7 @@ constructor(
         reports.actions.add("home")
         if (_state.value.busy) return
         selection++
+        resetApprovalContexts()
         showList(false)
     }
 
@@ -714,6 +720,7 @@ constructor(
         viewModelScope.launch {
             try {
                 selection++
+                resetApprovalContexts()
                 timeline.clear()
                 buffered.clear()
                 hydrating = false
@@ -827,6 +834,8 @@ constructor(
 
     private suspend fun loadTask(id: String) {
         val n = ++selection
+        val epoch = rpc.generation
+        resetApprovalContexts(id)
         timeline.clear()
         buffered.clear()
         hydrating = true
@@ -837,6 +846,7 @@ constructor(
                 threadCwd = null,
                 title = "Conversation",
                 entries = emptyList(),
+                fileApprovalContexts = emptyMap(),
                 turnStatuses = emptyMap(),
                 activeTurn = null,
                 queuedMessages = emptyList(),
@@ -876,11 +886,20 @@ constructor(
         if (n != selection) return
         _state.update { it.copy(draft = draft, attachments = attachments, journal = journal) }
         try {
-            val response =
+            val response = try {
                 readEventually(
                     "thread/resume",
-                    obj("threadId" to s(id), "excludeTurns" to JsonPrimitive(true)),
+                    FileApprovalContexts.resumeParams(id),
                 )
+            } catch (e: RpcRejected) {
+                // An explicit rejection of this experimental field permits a metadata-only resume.
+                // Connection loss or other uncertain outcomes must never trigger a second attempt.
+                if (e.code !in setOf(-32600, -32602) || !e.message.orEmpty().contains("initialTurnsPage")) throw e
+                rpc.call("thread/resume", obj("threadId" to s(id), "excludeTurns" to JsonPrimitive(true)))
+            }
+            if (n != selection || epoch != rpc.generation) return
+            fileApprovalContexts.resumed(response, epoch)
+            publish()
             val thread = response.map("thread")
             val history =
                 readEventually(
@@ -892,7 +911,8 @@ constructor(
                         "sortDirection" to s("desc"),
                     ),
                 )
-            if (n != selection) return
+            if (n != selection || epoch != rpc.generation) return
+            fileApprovalContexts.snapshot(id, history.list("data"), epoch)
             timeline.hydrate(
                 history.list("data").reversed(),
                 buffered.filter { it.map("params").str("threadId") == id },
@@ -941,6 +961,8 @@ constructor(
                 buffered.clear()
                 queued.forEach { applyEvent(it) }
                 _state.update { it.copy(busy = false) }
+                // Resume already attempted the live snapshot; missing details require an explicit retry.
+                requests.values.filter { it.thread == id }.forEach { attemptedApprovalContexts.add(it.key) }
                 publish()
             }
         }
@@ -2200,7 +2222,10 @@ constructor(
         viewModelScope.launch {
             guarded {
                 if (requests[decision.key] != decision || !_state.value.ready) return@guarded
+                if (decision.method == "item/fileChange/requestApproval" && result.str("decision") == "accept" &&
+                    fileApprovalContexts.text(decision).isBlank()) return@guarded
                 requests.remove(decision.key)
+                cancelUnusedApprovalContextRecovery()
                 publish()
                 rpc.respond(decision.id, result, decision.epoch)
             }
@@ -2211,6 +2236,7 @@ constructor(
         if (event.str("_epoch").toLongOrNull()?.let { it != rpc.generation } == true) return
         if (event.str("method") == "connection/lost") {
             activityMonitor.disconnected()
+            resetApprovalContexts()
             requests.clear()
             buffered.clear()
             _state.update {
@@ -2222,6 +2248,7 @@ constructor(
                     speedError = if (it.speedSaving) SPEED_OUTCOME_UNKNOWN else it.speedError,
                     speedSaving = false,
                     decisions = emptyList(),
+                    fileApprovalContexts = emptyMap(),
                     modelCatalogStatus = ModelCatalogStatus.Unavailable,
                 )
             }
@@ -2250,12 +2277,15 @@ constructor(
             return
         }
         activityMonitor.event(event)
+        if (_state.value.page == "chat") fileApprovalContexts.ensureSelected(_state.value.thread, rpc.generation)
+        fileApprovalContexts.event(event.str("method"), event.map("params"), rpc.generation)
         if (event.containsKey("id") || event.str("method") == "serverRequest/resolved") {
             applyEvent(event)
             return
         }
         if (hydrating) {
             buffered.add(event)
+            publish()
             return
         }
         applyEvent(event)
@@ -2275,11 +2305,13 @@ constructor(
                     event.str("_epoch").toLongOrNull() ?: rpc.generation,
                 )
             requests.putIfAbsent(d.key, d)
+            if (!hydrating) recoverApprovalContext(d)
             publish()
             return
         }
         if (method == "serverRequest/resolved") {
             requests.remove(p["requestId"].toString())
+            cancelUnusedApprovalContextRecovery()
             publish()
             return
         }
@@ -2328,8 +2360,61 @@ constructor(
                 turnStatuses = timeline.turnStatuses,
                 activeTurn = timeline.activeTurn,
                 decisions = requests.values.filter { it.thread == st.thread },
+                fileApprovalContexts = requests.values.filter {
+                    it.thread == st.thread && it.method == "item/fileChange/requestApproval"
+                }.associate { decision ->
+                    val text = fileApprovalContexts.text(decision)
+                    decision.key to FileApprovalContext(text,
+                        text.isBlank() && st.ready && (hydrating || approvalContextJob?.isActive == true))
+                },
             )
         }
+    }
+
+    private fun resetApprovalContexts(thread: String? = null) {
+        approvalContextJob?.cancel()
+        approvalContextJob = null
+        attemptedApprovalContexts.clear()
+        fileApprovalContexts.select(thread, rpc.generation)
+    }
+
+    private fun cancelUnusedApprovalContextRecovery() {
+        if (requests.values.none { it.thread == _state.value.thread &&
+                it.method == "item/fileChange/requestApproval" && fileApprovalContexts.text(it).isBlank() }) {
+            approvalContextJob?.cancel()
+            approvalContextJob = null
+        }
+    }
+
+    override fun refreshApprovalContext(decision: Decision) = recoverApprovalContext(decision, retry = true)
+
+    private fun recoverApprovalContext(decision: Decision, retry: Boolean = false) {
+        val st = _state.value
+        if (!st.ready || st.page != "chat" || hydrating || decision.thread != st.thread ||
+            decision.epoch != rpc.generation || requests[decision.key] != decision ||
+            decision.method != "item/fileChange/requestApproval" || fileApprovalContexts.text(decision).isNotBlank()) return
+        if (!retry && !attemptedApprovalContexts.add(decision.key)) return
+        if (approvalContextJob?.isActive == true) return
+        val n = selection
+        val epoch = rpc.generation
+        val thread = decision.thread
+        fun current() = selection == n && rpc.generation == epoch && _state.value.thread == thread && _state.value.ready
+        approvalContextJob = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                val response = rpc.call("thread/resume", FileApprovalContexts.resumeParams(thread))
+                if (current()) fileApprovalContexts.resumed(response, epoch)
+            } catch (e: CancellationException) { throw e
+            } catch (_: Exception) {
+                // Failed context recovery never resolves or resends the approval request.
+            } finally {
+                if (current() && approvalContextJob === coroutineContext[Job]) {
+                    approvalContextJob = null
+                    publish()
+                }
+            }
+        }
+        approvalContextJob?.start()
+        publish()
     }
 
     private suspend fun guarded(block: suspend () -> Unit) {

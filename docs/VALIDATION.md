@@ -1,5 +1,25 @@
 # Validation
 
+## 2026-10-05 — Approval context and reconnect recovery
+
+- Version-matched stock 0.159.2 source confirms that file-change items precede
+  approval, unfinished item events are not persisted, and running-thread resume
+  overlays the live turn before reissuing outstanding requests. Android requests
+  one full initial turn, retains matching details independently of timeline
+  pages, and keeps the existing connection-scoped dispatcher and response guard.
+- Four `FileApprovalContextsTest` cases and four `ServerRequestDispatchTest`
+  cases passed. App unit tests and `:app:lintDebug` passed with the existing
+  managed JDK/Android SDK. `git diff --check` passed.
+- Six focused fixture-backed managed-device tests passed: new-chat live details
+  without resume; snapshot recovery before history finishes; missing details,
+  retry, and patch updates; explicit unsupported-field fallback; reconnect with
+  server reissue and no response replay; and resolution during recovery with
+  late-snapshot rejection. The new-chat fixture's initial wait was corrected to
+  await the chat page before typing, then the affected fixture passed on rerun.
+- These are stock-contract fixtures, not a live-account or physical-phone
+  acceptance run. No release, publication, deployment, or phone installation
+  was performed.
+
 ## 2026-10-05 — Android 0.4.3 (35)
 
 - Source revision: `7d5d301598d487c6e1bff5c18d2b812735adcceb`.

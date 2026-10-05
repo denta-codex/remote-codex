@@ -542,11 +542,10 @@ private fun DecisionCard(d: Decision, st: ScreenState, actions: ConversationActi
                     )
             ) {
                 if (p.str("reason").isNotBlank()) Text(p.str("reason"))
-                val file =
-                    st.entries.find { it.id == p.str("itemId") && it.turn == p.str("turnId") }
+                val fileContext = st.fileApprovalContexts[d.key] ?: FileApprovalContext()
                 val context =
                     when (d.method) {
-                        "item/fileChange/requestApproval" -> file?.text.orEmpty()
+                        "item/fileChange/requestApproval" -> fileContext.text
                         "item/permissions/requestApproval" -> p.map("permissions").toString()
                         else ->
                             p.str("command").ifBlank {
@@ -560,11 +559,19 @@ private fun DecisionCard(d: Decision, st: ScreenState, actions: ConversationActi
                 SelectionContainer {
                     Text(
                         context.ifBlank {
-                            "Approval details unavailable. Open this task on desktop."
+                            if (d.method == "item/fileChange/requestApproval" && fileContext.loading)
+                                "Loading file changes…"
+                            else "Approval details unavailable. Open this task on desktop."
                         },
                         fontFamily = FontFamily.Monospace,
                         fontSize = 12.sp,
                     )
+                }
+                if (d.method == "item/fileChange/requestApproval" && context.isBlank()) {
+                    TextButton(
+                        { actions.refreshApprovalContext(d) },
+                        enabled = st.ready && !fileContext.loading,
+                    ) { Text("Retry details") }
                 }
                 val available =
                     (p["availableDecisions"] as? JsonArray)?.map {
