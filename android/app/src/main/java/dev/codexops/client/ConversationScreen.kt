@@ -494,7 +494,9 @@ private fun DecisionCard(d: Decision, st: ScreenState, actions: ConversationActi
                 color = MaterialTheme.colorScheme.onSecondaryContainer,
             )
             val p = d.params
-            if (d.method == "item/tool/requestUserInput") {
+            if (d.method == McpElicitation.METHOD) {
+                McpElicitationInput(d, st.ready) { result -> actions.answer(d, result) }
+            } else if (d.method == "item/tool/requestUserInput") {
                 val answers = remember(d.key) { mutableStateMapOf<String, String>() }
                 val questions = p.list("questions")
                 questions.forEach { q ->

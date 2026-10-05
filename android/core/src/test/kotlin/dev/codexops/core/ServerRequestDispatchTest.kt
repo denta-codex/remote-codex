@@ -12,7 +12,7 @@ import org.junit.Test
 class ServerRequestDispatchTest {
     private val interactive = listOf(
         "item/commandExecution/requestApproval", "item/fileChange/requestApproval",
-        "item/permissions/requestApproval", "item/tool/requestUserInput",
+        "item/permissions/requestApproval", "item/tool/requestUserInput", "mcpServer/elicitation/request",
     )
     private val unsupported = listOf(
         "currentTime/read", "applyPatchApproval", "execCommandApproval",
@@ -28,20 +28,19 @@ class ServerRequestDispatchTest {
             if (message.str("method") == "initialize") {
                 // This ID collides with the outstanding initialize call in the opposite direction.
                 peer.send(request(message.getValue("id"), unsupported.first()).toString())
-                (unsupported.drop(1) + "item/tool/call" + "mcpServer/elicitation/request" + interactive)
+                (unsupported.drop(1) + "item/tool/call" + interactive)
                     .forEach { peer.send(request(s(it), it).toString()) }
                 peer.send(obj("method" to s("future/notification"), "params" to obj()).toString())
             }
         }.use { fixture ->
             fixture.connect()
-            repeat(unsupported.size + 2) {
+            repeat(unsupported.size + 1) {
                 val reply = fixture.reply()
                 when (reply["id"]) {
                     s("item/tool/call") -> {
                         assertEquals("false", reply.map("result").str("success"))
                         assertEquals("inputText", reply.map("result").list("contentItems").single().str("type"))
                     }
-                    s("mcpServer/elicitation/request") -> assertEquals(obj("action" to s("cancel")), reply["result"])
                     else -> {
                         assertEquals(setOf("id", "error"), reply.keys)
                         assertEquals("-32601", reply.map("error").str("code"))
@@ -54,7 +53,7 @@ class ServerRequestDispatchTest {
                 assertEquals(fixture.rpc.generation.toString(), event.str("_epoch"))
             }
             assertEquals("future/notification", withTimeout(5000) { fixture.rpc.events.receive() }.str("method"))
-            assertEquals(unsupported.size + 2, fixture.replyCount())
+            assertEquals(unsupported.size + 1, fixture.replyCount())
         }
     }
 
@@ -65,12 +64,13 @@ class ServerRequestDispatchTest {
             val numeric = JsonPrimitive(7)
             val string = s("7")
             listOf(numeric, string).forEach { id ->
-                val request = request(id, "item/tool/requestUserInput")
+                val request = request(id, if (id == numeric) "item/tool/requestUserInput" else McpElicitation.METHOD)
                 fixture.send(request)
                 fixture.send(request)
                 assertEquals(id, withTimeout(5000) { fixture.rpc.events.receive() }["id"])
                 coroutineScope {
-                    repeat(8) { launch(Dispatchers.Default) { fixture.rpc.respond(id, obj("answers" to obj()), fixture.rpc.generation) } }
+                    val result = if (id == numeric) obj("answers" to obj()) else McpElicitation.response("cancel")
+                    repeat(8) { launch(Dispatchers.Default) { fixture.rpc.respond(id, result, fixture.rpc.generation) } }
                 }
                 assertEquals(id, fixture.reply()["id"])
                 fixture.send(request)
@@ -116,17 +116,17 @@ class ServerRequestDispatchTest {
             fixture.connect()
             val epoch = fixture.rpc.generation
             val id = s("same-id")
-            fixture.send(request(id, "item/tool/requestUserInput"))
+            fixture.send(request(id, McpElicitation.METHOD))
             withTimeout(5000) { fixture.rpc.events.receive() }
-            fixture.rpc.respond(id, obj("answers" to obj()), epoch)
+            fixture.rpc.respond(id, McpElicitation.response("accept", obj()), epoch)
             assertEquals(id, fixture.reply()["id"])
             assertEquals("connection/lost", withTimeout(5000) { fixture.rpc.events.receive() }.str("method"))
             fixture.connect()
             assertThrows(ConnectionLost::class.java) { fixture.rpc.respond(id, obj(), epoch) }
             assertEquals(1, fixture.replyCount())
-            fixture.send(request(id, "item/tool/requestUserInput"))
+            fixture.send(request(id, McpElicitation.METHOD))
             withTimeout(5000) { fixture.rpc.events.receive() }
-            fixture.rpc.respond(id, obj("answers" to obj()), fixture.rpc.generation)
+            fixture.rpc.respond(id, McpElicitation.response("cancel"), fixture.rpc.generation)
             assertEquals(id, fixture.reply()["id"])
             assertEquals(2, fixture.replyCount())
         }

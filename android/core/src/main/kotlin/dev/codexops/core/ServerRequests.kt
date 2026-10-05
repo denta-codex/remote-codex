@@ -25,7 +25,7 @@ object ServerRequests {
                 "text" to s("This client does not support client-executed tools. The tool was not executed."),
             ))),
         )),
-        "mcpServer/elicitation/request" to ServerRequestRoute.Result(obj("action" to s("cancel"))),
+        "mcpServer/elicitation/request" to ServerRequestRoute.Interactive,
         "currentTime/read" to unsupported,
         "applyPatchApproval" to unsupported,
         "execCommandApproval" to unsupported,

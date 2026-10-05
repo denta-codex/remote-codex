@@ -128,6 +128,10 @@ class ChatActivityTest {
             assertEquals(ChatIndicator.Input, result.indicator)
             monitor.event(obj("method" to s("serverRequest/resolved"), "params" to obj("requestId" to JsonPrimitive(7))))
             assertEquals(ChatIndicator.Working, result.indicator)
+            monitor.event(obj("id" to s("mcp"), "method" to s(McpElicitation.METHOD), "params" to obj("threadId" to s("chat"))))
+            assertEquals(ChatIndicator.Input, result.indicator)
+            monitor.event(obj("method" to s("serverRequest/resolved"), "params" to obj("requestId" to s("mcp"))))
+            assertEquals(ChatIndicator.Working, result.indicator)
             monitor.event(obj("id" to JsonPrimitive(8), "method" to s("item/commandExecution/requestApproval"), "params" to obj("threadId" to s("chat"))))
             assertEquals(ChatIndicator.Approval, result.indicator)
             rpc.beforeHistory = {}

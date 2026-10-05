@@ -22,6 +22,7 @@ Record Android version, APK version/code, signer fingerprint, Codex version and 
 - [ ] Confirm identical task and messages on desktop, including projectless identity.
 - [ ] Search, archive-filter, page tasks/history, and continue an existing coding task.
 - [ ] Command/file/permission decisions and question forms work with real requests.
+- [ ] MCP forms submit typed values; URL requests open only after consent and never infer completion from browser return.
 - [ ] Desktop answers first: phone controls disappear.
 - [ ] Late pending file approval is either actionable with context or explicitly unsupported.
 - [ ] Lock/unlock, rotation/folding and process recreation preserve drafts/history.

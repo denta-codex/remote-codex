@@ -4039,6 +4039,131 @@ class AppTest {
     }
 
     @Test
+    fun mcpFormSubmitsTypedContentDuringHistoryLoading() {
+        holdHistoryReply = true
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { heldHistoryRequests.isNotEmpty() }
+        val params = wire.parseToJsonElement("""{
+            "threadId":"task-test","turnId":null,"serverName":"Fixture MCP","mode":"form",
+            "message":"Provide fixture details",
+            "requestedSchema":{"type":"object","required":["name","count","confirmed"],"properties":{
+                "name":{"type":"string","title":"Name","minLength":1},
+                "count":{"type":"integer","minimum":1,"maximum":5,"default":3},
+                "confirmed":{"type":"boolean","default":false},
+                "mode":{"type":"string","oneOf":[{"const":"fast","title":"Fast label"}],"default":"fast"},
+                "tags":{"type":"array","items":{"anyOf":[{"const":"one","title":"One tag"}]},"default":["one"]},
+                "optional":{"type":"boolean"}
+            }}
+        }""").jsonObject
+        val request = obj("id" to s("mcp-form"), "method" to s(McpElicitation.METHOD), "params" to params)
+        peer!!.send(request.toString())
+        peer!!.send(request.toString())
+        compose.waitUntil(5000) { model.state.value.decisions.size == 1 }
+        assertTrue(serverRequestResponses.isEmpty())
+        compose.onNodeWithTag("mcp-submit").performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithTag("mcp-field-name").performScrollTo().performTextInput("Example")
+        compose.onNodeWithTag("mcp-field-count").performScrollTo().performTextReplacement("6")
+        compose.onNodeWithTag("mcp-submit").performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithTag("mcp-field-count").performScrollTo().performTextReplacement("4")
+        compose.onNodeWithTag("mcp-submit").performScrollTo().assertIsEnabled().performClick()
+        compose.waitUntil(5000) { serverRequestResponses.size == 1 && model.state.value.decisions.isEmpty() }
+        assertEquals(obj("id" to s("mcp-form"), "result" to obj("action" to s("accept"), "content" to obj(
+            "name" to s("Example"), "count" to JsonPrimitive(4), "confirmed" to JsonPrimitive(false),
+            "mode" to s("fast"), "tags" to JsonArray(listOf(s("one"))),
+        ))), serverRequestResponses.single())
+        assertTrue(model.state.value.busy)
+        peer!!.send(request.toString())
+        holdHistoryReply = false
+        heldHistoryRequests.forEach { peer!!.send(obj("id" to it, "result" to history()).toString()) }
+        compose.waitUntil(10000) { !model.state.value.busy }
+        assertTrue(model.state.value.decisions.isEmpty())
+        assertEquals(1, serverRequestResponses.size)
+    }
+
+    @Test
+    fun mcpDeclineCancelAndResolutionStayAuthoritative() {
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy }
+        fun request(id: String, mode: String = "form") = obj("id" to s(id), "method" to s(McpElicitation.METHOD), "params" to obj(
+            "threadId" to s("task-test"), "serverName" to s("Fixture MCP"), "mode" to s(mode),
+            "message" to s("Fixture request"), "requestedSchema" to obj("type" to s("object"), "properties" to obj()),
+        ))
+        peer!!.send(request("declined").toString())
+        compose.waitUntil(5000) { model.state.value.decisions.size == 1 }
+        compose.onNodeWithTag("mcp-decline").performScrollTo().performClick()
+        compose.waitUntil(5000) { serverRequestResponses.size == 1 && model.state.value.decisions.isEmpty() }
+        assertEquals(obj("action" to s("decline")), serverRequestResponses.single()["result"])
+
+        peer!!.send(request("unsupported-form", "openai/form").toString())
+        compose.waitUntil(5000) { model.state.value.decisions.size == 1 }
+        compose.onNodeWithTag("mcp-submit").assertDoesNotExist()
+        compose.onNodeWithTag("mcp-cancel").performScrollTo().performClick()
+        compose.waitUntil(5000) { serverRequestResponses.size == 2 && model.state.value.decisions.isEmpty() }
+        assertEquals(obj("action" to s("cancel")), serverRequestResponses.last()["result"])
+
+        val resolved = request("resolved-mcp")
+        peer!!.send(resolved.toString())
+        compose.waitUntil(5000) { model.state.value.decisions.size == 1 }
+        val old = model.state.value.decisions.single()
+        peer!!.send(obj("method" to s("serverRequest/resolved"), "params" to obj("requestId" to old.id)).toString())
+        compose.waitUntil(5000) { model.state.value.decisions.isEmpty() }
+        compose.runOnUiThread { model.answer(old, McpElicitation.response("accept", obj())) }
+        peer!!.send(resolved.toString())
+        // Follow with an independent request as a dispatch barrier; the resolved request stays absent.
+        peer!!.send(request("barrier-mcp").toString())
+        compose.waitUntil(5000) { model.state.value.decisions.size == 1 }
+        assertEquals("barrier-mcp", model.state.value.decisions.single().key.trim('"'))
+        compose.onNodeWithTag("mcp-cancel").performScrollTo().performClick()
+        compose.waitUntil(5000) { serverRequestResponses.size == 3 }
+        assertEquals("barrier-mcp", serverRequestResponses.last().str("id"))
+        assertTrue(serverRequestResponses.none { it.str("id") == "resolved-mcp" })
+    }
+
+    @Test
+    fun mcpUrlConsentHandlesLaunchFailureWithoutClaimingCompletion() {
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy }
+        val url = "https://example.com/authorize?fixture=public"
+        peer!!.send(obj("id" to s("mcp-url"), "method" to s(McpElicitation.METHOD), "params" to obj(
+            "threadId" to s("task-test"), "turnId" to JsonNull, "serverName" to s("Fixture MCP"),
+            "message" to s("Authorize the fixture"), "mode" to s("url"), "url" to s(url), "elicitationId" to s("fixture-auth"),
+        )).toString())
+        compose.waitUntil(5000) { model.state.value.decisions.size == 1 }
+        val decision = model.state.value.decisions.single()
+        val launches = AtomicInteger()
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                RemoteTheme {
+                    CompositionLocalProvider(LocalAppWindowClass provides AppWindowClass(true, true, false)) {
+                        Column(Modifier.size(300.dp, 440.dp)) {
+                            McpElicitationInput(decision, ready = true, openUrl = {
+                                assertEquals(url, it)
+                                launches.incrementAndGet() > 1
+                            }) { model.answer(decision, it) }
+                        }
+                    }
+                }
+            }
+        }
+        compose.onNodeWithTag("mcp-url").assertTextEquals(url)
+        compose.onNodeWithText("Destination: example.com").assertIsDisplayed()
+        assertEquals(0, launches.get())
+        compose.onNodeWithTag("mcp-open").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Could not open the browser. Try again or cancel.").performScrollTo().assertIsDisplayed()
+        assertTrue(serverRequestResponses.isEmpty())
+        compose.onNodeWithTag("mcp-open").assertIsEnabled().performClick()
+        compose.waitUntil(5000) { serverRequestResponses.size == 1 }
+        assertEquals(obj("id" to s("mcp-url"), "result" to obj("action" to s("accept"))), serverRequestResponses.single())
+        assertEquals(2, launches.get())
+        compose.onNodeWithTag("mcp-open").assertIsNotEnabled()
+        compose.onNodeWithText("Operation completed").assertDoesNotExist()
+        compose.runOnUiThread { model.foreground(false); model.foreground(true) }
+        compose.waitForIdle()
+        assertEquals(2, launches.get())
+        assertEquals(1, serverRequestResponses.size)
+    }
+
+    @Test
     fun requestsAndResolutionBypassHistoryLoading() {
         holdHistoryReply = true
         compose.runOnUiThread { model.openTask("task-test") }
@@ -4046,10 +4171,10 @@ class AppTest {
         fun request(id: String, method: String, params: JsonObject = obj()) =
             obj("id" to s(id), "method" to s(method), "params" to params)
         peer!!.send(request("time", "currentTime/read").toString())
-        peer!!.send(request("elicitation", "mcpServer/elicitation/request").toString())
+        peer!!.send(request("attestation", "attestation/generate").toString())
         compose.waitUntil(5000) { serverRequestResponses.size == 2 }
         assertEquals("-32601", serverRequestResponses.first { it.str("id") == "time" }.map("error").str("code"))
-        assertEquals("cancel", serverRequestResponses.first { it.str("id") == "elicitation" }.map("result").str("action"))
+        assertEquals("-32601", serverRequestResponses.first { it.str("id") == "attestation" }.map("error").str("code"))
         assertTrue(model.state.value.decisions.isEmpty())
 
         val question = request("question", "item/tool/requestUserInput", obj(

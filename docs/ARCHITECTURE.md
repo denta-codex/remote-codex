@@ -219,7 +219,14 @@ from its events, without an immediate resume call.
 
 Approvals are connection-scoped. Resolved requests disappear even if answered by
 another client. A missing file-change body disables approval; the user is directed
-to desktop. Unsupported dynamic/MCP requests remain visible as desktop-required.
+to desktop. Unsupported client-executed tools fail explicitly through the shared
+server-request dispatcher. MCP elicitation forms and URL requests use that same
+dispatcher and connection-scoped response guard. Standard flat forms preserve
+JSON value types, defaults, optional omission, and schema constraints; extended
+OpenAI forms and verification modes require desktop. URL requests display the
+destination before an explicit external-browser action. Accepting a URL request
+means consent to proceed, not proof of completion; browser return and request
+resolution never establish completion. Uncertain responses are never replayed.
 No auto-approval is performed. Permission grants are limited to the current turn.
 
 The project browser supplies `projectId` plus the chosen absolute
