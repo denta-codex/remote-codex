@@ -34,6 +34,7 @@ import java.io.File
 internal fun ConversationComposer(state: ScreenState, actions: ConversationActions, onSend: () -> Unit) {
     val keyboard = LocalSoftwareKeyboardController.current
     val focus = LocalFocusManager.current
+    val haptics = LocalAppHaptics.current
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) {
         actions.addAttachments(it)
     }
@@ -56,7 +57,7 @@ internal fun ConversationComposer(state: ScreenState, actions: ConversationActio
             onPhotos = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
             onFiles = { filePicker.launch(arrayOf("*/*")) },
             onCamera = { actions.prepareCamera()?.let(camera::launch) },
-            onSend = { tray = false; onSend(); keyboard?.hide(); actions.send() },
+            onSend = { haptics.tick(); tray = false; onSend(); keyboard?.hide(); actions.send() },
             projectAvailable = projectAvailable, cameraDock = cameraDock)
     }
     Surface(
