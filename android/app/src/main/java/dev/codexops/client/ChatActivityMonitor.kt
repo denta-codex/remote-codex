@@ -117,6 +117,11 @@ internal class ChatActivityMonitor(
         }
         val id = p.str("threadId").ifBlank { p.map("thread").str("id") }
         if (id.isBlank()) return
+        // Nonblocking questions do not replace authoritative runtime status or pending approvals.
+        if (event.containsKey("id") && method == "item/tool/requestUserInput" && p["isBlocking"] == JsonPrimitive(false)) {
+            wake.value++
+            return
+        }
         val value = when {
             event.containsKey("id") && method.endsWith("requestApproval") -> ChatIndicator.Approval
             event.containsKey("id") && method in setOf("item/tool/requestUserInput", "mcpServer/elicitation/request") -> ChatIndicator.Input

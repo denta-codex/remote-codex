@@ -61,7 +61,7 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
     val messages = st.entries.filter { it.kind != "reasoning" }
     val rows = remember(st.entries, st.activeTurn, st.ready, st.turnStatuses, st.decisions, st.attention) {
         conversationRows(st.entries, st.activeTurn, st.ready, st.turnStatuses,
-            st.decisions.isNotEmpty() || st.attention)
+            st.decisions.any { it.blocksUser } || st.attention)
     }
     var changesTurn by rememberSaveable(st.host.endpoint, st.thread) { mutableStateOf<String?>(null) }
     rows.filterIsInstance<ConversationRow.Changes>().firstOrNull { it.turn == changesTurn }?.let {
@@ -509,7 +509,7 @@ private fun DecisionCard(d: Decision, st: ScreenState, actions: ConversationActi
             verticalArrangement = Arrangement.spacedBy(if (cover) 8.dp else 10.dp),
         ) {
             Text(
-                "Your input is needed",
+                if (d.blocksUser) "Your input is needed" else "Question available",
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSecondaryContainer,
             )
@@ -517,20 +517,49 @@ private fun DecisionCard(d: Decision, st: ScreenState, actions: ConversationActi
             if (d.method == McpElicitation.METHOD) {
                 McpElicitationInput(d, st.ready) { result -> actions.answer(d, result) }
             } else if (d.method == "item/tool/requestUserInput") {
-                val answers = remember(d.key) { mutableStateMapOf<String, String>() }
+                val selections = remember(d.key, d.epoch) { mutableStateMapOf<String, String>() }
+                val notes = remember(d.key, d.epoch) { mutableStateMapOf<String, String>() }
+                var confirmUnanswered by remember(d.key, d.epoch) { mutableStateOf(false) }
                 val questions = p.list("questions")
+                val unanswered = questions.any {
+                    selections[it.str("id")] == null && notes[it.str("id")].isNullOrBlank()
+                }
+                if (confirmUnanswered) {
+                    AlertDialog(
+                        onDismissRequest = { confirmUnanswered = false },
+                        title = { Text("Submit with unanswered questions?") },
+                        text = { Text("Unanswered questions will be sent without an answer.") },
+                        confirmButton = {
+                            TextButton(
+                                onClick = {
+                                    confirmUnanswered = false
+                                    actions.answer(d, Decisions.questionAnswers(questions, selections.toMap(), notes.toMap()))
+                                },
+                                enabled = st.ready,
+                                modifier = Modifier.testTag("confirm-unanswered"),
+                            ) { Text("Submit") }
+                        },
+                        dismissButton = {
+                            TextButton({ confirmUnanswered = false }) { Text("Keep answering") }
+                        },
+                    )
+                }
                 questions.forEach { q ->
+                    val id = q.str("id")
+                    val options = q.list("options")
                     Text(q.str("question"))
-                    q.list("options").forEach { option ->
+                    val choices = if (options.isNotEmpty() && q["isOther"] == JsonPrimitive(true))
+                        options + obj("label" to s(Decisions.OTHER_ANSWER)) else options
+                    choices.forEach { option ->
                         Row(
                             Modifier.fillMaxWidth().clickable {
-                                answers[q.str("id")] = option.str("label")
+                                selections[id] = option.str("label")
                             },
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             RadioButton(
-                                answers[q.str("id")] == option.str("label"),
-                                { answers[q.str("id")] = option.str("label") },
+                                selections[id] == option.str("label"),
+                                { selections[id] = option.str("label") },
                             )
                             Column {
                                 Text(option.str("label"))
@@ -540,18 +569,21 @@ private fun DecisionCard(d: Decision, st: ScreenState, actions: ConversationActi
                         }
                     }
                     OutlinedTextField(
-                        answers[q.str("id")] ?: "",
-                        { answers[q.str("id")] = it },
-                        Modifier.fillMaxWidth(),
-                        label = { Text("Your answer") },
+                        notes[id] ?: "",
+                        { notes[id] = it },
+                        Modifier.fillMaxWidth().testTag("question-text-$id"),
+                        label = { Text(if (options.isEmpty()) "Your answer" else "Additional notes (optional)") },
                         visualTransformation =
                             if (q.str("isSecret") == "true") PasswordVisualTransformation()
                             else androidx.compose.ui.text.input.VisualTransformation.None,
                     )
                 }
                 Button(
-                    { actions.answer(d, Decisions.answers(answers.toMap())) },
-                    enabled = st.ready && questions.all { !answers[it.str("id")].isNullOrBlank() },
+                    {
+                        if (unanswered) confirmUnanswered = true
+                        else actions.answer(d, Decisions.questionAnswers(questions, selections.toMap(), notes.toMap()))
+                    },
+                    enabled = st.ready,
                 ) {
                     Text("Submit answers")
                 }
