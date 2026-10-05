@@ -1,9 +1,6 @@
-- Reject unsupported Android client tool calls without blocking tasks
-- Merge branch 'main' into fix/reject-unsupported-client-tools
-- Show recorded file changes after completed turns with fullscreen diffs
-- Merge branch 'main' into fix/completed-turn-file-changes
-- Use available cover-screen height and cutout-safe layouts across Android
-- Merge branch 'main' into fix/cover-screen-window-insets
-- Apply cover-screen inset handling to recorded-change viewer
-- Toggle task read status with the unread swipe gesture
-- Merge branch 'main' into fix/task-unread-toggle
+- Persist new-task model and reasoning defaults through Codex config
+- Add Todo status swipes and persistent phone-local drag ordering
+- Fix Todo refresh icon and create tasks in the selected column
+- Merge branch 'main' into fix/persist-new-task-model
+- Merge Todo refresh icon and selected-column creation fixes
+- Merge branch 'main' into fix/persist-new-task-model
