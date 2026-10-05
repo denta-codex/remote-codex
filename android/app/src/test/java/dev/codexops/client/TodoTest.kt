@@ -38,7 +38,7 @@ class TodoTest {
             gate?.await()
             rejected?.let { throw TodoRejected(it) }
             val before = editor.original
-            val task = TodoItem(before?.id ?: 2, editor.title.trim(), before?.status ?: "To Do",
+            val task = TodoItem(before?.id ?: 2, editor.title.trim(), before?.status ?: editor.creationStatus,
                 (before?.revision ?: 0) + 1, editor.description)
             tasks.removeAll { it.id == task.id }; tasks += task
             check(!loseReply)
@@ -71,6 +71,30 @@ class TodoTest {
         assertEquals(0, f.writes)
         assertEquals("Keep me", f.screen.todo.editor?.title)
         assertNull(f.screen.todo.pending)
+    }
+
+    @Test fun creationCapturesColumnWhenEditorOpens() = Fixture().use { f ->
+        val c = f.controller(); c.refresh(); c.select("In Progress"); c.new()
+        c.select("Done"); c.title("Started"); c.save()
+        assertEquals("In Progress", f.tasks.single { it.title == "Started" }.status)
+        assertEquals("In Progress", f.screen.todo.status)
+    }
+
+    @Test fun transportCreatesThenMovesOnceAndTreatsRejectedMoveAsUncertain() = runBlocking {
+        val rpc = RpcFixture(); val ops = StockTodoOperations(rpc)
+        rpc.responses += result("task", "task", row())
+        rpc.responses += result("task", "task", JsonObject(row(revision = 2) + ("status" to s("In Progress"))))
+        assertEquals("In Progress", ops.save(TodoEditor(title = "Task", creationStatus = "In Progress")).status)
+        assertEquals(listOf("move", "1", "In Progress", "--expect-revision", "1"),
+            rpc.last["command"]!!.jsonArray.drop(4).map { it.jsonPrimitive.content })
+        rpc.responses += result("task", "task", row())
+        rpc.responses += obj("exitCode" to JsonPrimitive(4), "stderr" to s(obj(
+            "schema_version" to JsonPrimitive(1), "ok" to JsonPrimitive(false),
+            "error" to obj("code" to s("revision_conflict"))).toString()))
+        val error = runCatching { ops.save(TodoEditor(title = "Task", creationStatus = "Done")) }.exceptionOrNull()
+        assertNotNull(error)
+        assertFalse(error is TodoRejected)
+        assertTrue(rpc.responses.isEmpty())
     }
 
     @Test fun uncertainCreateSurvivesControllerRecreationAndNeverReplays() = Fixture().use { f ->
@@ -146,8 +170,9 @@ class TodoTest {
         override var generation = 1L
         var response = obj()
         var last = obj()
+        val responses = ArrayDeque<JsonObject>()
         override suspend fun call(method: String, params: JsonObject): JsonObject {
-            assertEquals("command/exec", method); last = params; return response
+            assertEquals("command/exec", method); last = params; return if (responses.isEmpty()) response else responses.removeFirst()
         }
         override suspend fun connect(url: String, token: String) = obj()
         override fun respond(id: JsonElement, result: JsonObject, epoch: Long) {}
