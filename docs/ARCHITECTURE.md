@@ -86,6 +86,23 @@ adapter only resolves `origin/HEAD`, creates the destination directory, adds a
 detached worktree, and reads `git worktree list --porcelain` for reconciliation.
 It never fetches, creates a branch, removes a worktree, or manages general Git state.
 
+Explicit new-chat model and reasoning selections save Codex defaults immediately
+through `config/batchWrite`, then refresh `config/read`. Writes are serialized;
+lost acknowledgements are reported and never replayed. Existing-chat overrides
+remain scoped to that chat. Consuming the new-chat draft clears its local options,
+and subsequent chats resolve the saved server config, including project overrides.
+Automatic (inherit) removes the draft override without clearing server defaults.
+The active profile determines the model and effort key paths.
+
+Reference inspection on October 5, 2026: Android 1.2026.258 (2625815),
+`defpackage/y1f.java` builds model/effort config edits and `o5f.n0` dispatches them
+via `i7f`; the installed Mac ChatGPT `app.asar` bundles
+`app-initial-576fc7ca620e.js` and `app-shared-b72e16382796.js` call
+`setDefaultModelConfig` and `writeModel`, using `upsert` edits for `model` and
+`model_reasoning_effort` with an optional `profiles.<profile>.` prefix and
+`reloadUserConfig: true`. Android's combined settings write also includes speed;
+Remote Codex keeps its separate speed flow.
+
 Each mutating setup/send stage is journaled before dispatch: destination creation,
 worktree addition, task creation, attachment directory/file writes, and input
 submission. Known paths, revisions, uploaded host paths, and

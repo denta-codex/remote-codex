@@ -12,6 +12,8 @@ import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 
 class ClientModel
@@ -60,6 +62,8 @@ constructor(
     }
     private var selection = 0
     private var speedRevision = 0
+    private val modelDefaultsMutex = Mutex()
+    private var uncertainModelDefaultsGeneration: Long? = null
     private var listSelection = 0
     private var listJob: Job? = null
     private val listCursors = mutableMapOf<Boolean, MutableSet<String>>()
@@ -880,6 +884,7 @@ constructor(
     }
 
     override fun updateNewTaskOptions(options: NewTaskOptions) {
+        val before = _state.value
         reports.actions.add("taskOptions", options.projectId, options.executionTarget.name)
         val normalized =
             when {
@@ -917,13 +922,52 @@ constructor(
                 )
             }
         }
-        if (_state.value.thread == null)
+        val after = _state.value
+        if (after.thread == null) {
+            val chosen = after.newTaskOptions
+            val explicitChange = chosen.model != before.newTaskOptions.model ||
+                chosen.reasoningEffort != before.newTaskOptions.reasoningEffort
+            val config = after.inheritedSettings.takeIf { it.cwd == after.settingsCwd() && it.status == ModelCatalogStatus.Ready }
+            val model = chosen.model ?: config?.model
+            // Returning to inherited settings only removes the draft override.
+            if (explicitChange && model != null && (chosen.model != null || chosen.reasoningEffort != null) &&
+                after.ready && after.modelCatalogStatus == ModelCatalogStatus.Ready) {
+                val effort = chosen.reasoningEffort ?: after.models.firstOrNull { it.id == model }?.defaultReasoningEffort
+                val epoch = rpc.generation
+                viewModelScope.launch {
+                    modelDefaultsMutex.withLock {
+                        if (epoch != rpc.generation) return@withLock
+                        if (uncertainModelDefaultsGeneration == epoch) {
+                            _state.update { it.copy(modelCatalogMessage = "Model default save outcome unknown. Reconnect to read server settings; the save will not be retried.") }
+                            return@withLock
+                        }
+                        try {
+                            val target = config ?: parseInheritedSettings(
+                                rpc.call("config/read", obj("includeLayers" to JsonPrimitive(false))), "")
+                            if (epoch != rpc.generation) return@withLock
+                            val result = rpc.call("config/batchWrite", modelDefaultsParams(model, effort, target.profile))
+                            if (epoch != rpc.generation) return@withLock
+                            _state.value.settingsCwd()?.let { readComposerConfig(it) }
+                            if (result.str("status") == "okOverridden") _state.update {
+                                it.copy(modelCatalogMessage = "Default saved, but another config layer overrides it here.")
+                            }
+                        } catch (e: Exception) {
+                            if (e is CancellationException && e !is TimeoutCancellationException) throw e
+                            if (e !is RpcRejected) uncertainModelDefaultsGeneration = epoch
+                            _state.update { it.copy(modelCatalogMessage = if (e is RpcRejected)
+                                "The server could not save the model default. This draft still uses your selection."
+                            else "Model default save outcome unknown. Reconnect to read server settings; the save will not be retried.") }
+                        }
+                    }
+                }
+            }
             viewModelScope.launch {
                 local.put(
                     "options/new",
-                    newTaskOptionsJson(_state.value.newTaskOptions).toString(),
+                    newTaskOptionsJson(chosen).toString(),
                 )
             }
+        }
     }
 
     override fun selectSpeed(fast: Boolean) {

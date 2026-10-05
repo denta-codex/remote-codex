@@ -264,6 +264,10 @@ class AppTest {
     @Volatile private var acceptedInput = JsonArray(emptyList())
     private val remoteFiles = ConcurrentHashMap<String, String>()
     @Volatile private var lastThreadStartParams: JsonObject? = null
+    @Volatile private var savedDefaultModel = "gpt-fixture"
+    @Volatile private var savedDefaultEffort = "high"
+    private val modelDefaultWrites = AtomicInteger()
+    @Volatile private var dropModelDefaultReply = false
     @Volatile private var lastTurnStartParams: JsonObject? = null
     @Volatile private var historyOverride: JsonObject? = null
     @Volatile private var emptyTaskList = false
@@ -406,8 +410,23 @@ class AppTest {
                                     val result = browserResponse?.invoke(method, params) ?: when (method) {
                                             "initialize" -> obj("codexHome" to s("/fixture"))
                                             "configRequirements/read" -> obj("requirements" to JsonNull)
+                                            "config/batchWrite" -> {
+                                                modelDefaultWrites.incrementAndGet()
+                                                params.list("edits").forEach { edit ->
+                                                    when (edit.str("keyPath")) {
+                                                        "model" -> savedDefaultModel = edit.str("value")
+                                                        "model_reasoning_effort" -> savedDefaultEffort = edit.str("value")
+                                                    }
+                                                }
+                                                if (dropModelDefaultReply) {
+                                                    dropModelDefaultReply = false
+                                                    ws.close(1011, "fixture default acknowledgement lost")
+                                                    return
+                                                }
+                                                obj("status" to s("ok"))
+                                            }
                                             "config/read" -> obj(
-                                                "config" to obj("model" to s("gpt-fixture"), "model_reasoning_effort" to s("high")),
+                                                "config" to obj("model" to s(savedDefaultModel), "model_reasoning_effort" to s(savedDefaultEffort)),
                                                 "origins" to obj("model" to obj("name" to obj("type" to s(if (params.str("cwd") == "/fixture/remote-codex") "project" else "user"))),
                                                     "model_reasoning_effort" to obj("name" to obj("type" to s("user")))))
                                             "collaborationMode/list" ->
@@ -1461,9 +1480,9 @@ class AppTest {
         compose.onNodeWithTag("send").assertIsDisplayed()
         openConversationTray()
         compose.onNodeWithTag("model-selector").performScrollTo().performClick()
-        compose.onNodeWithText("Fixture Fast").performClick()
+        compose.onNodeWithTag("model-option-gpt-fixture-fast").performClick()
         compose.onNodeWithTag("reasoning-selector").performScrollTo().performClick()
-        compose.onNodeWithText("Medium").performClick()
+        compose.onNodeWithTag("reasoning-option-medium").performClick()
         closeConversationTray()
         assertEquals("gpt-fixture-fast", model.state.value.newTaskOptions.model)
         assertEquals("medium", model.state.value.newTaskOptions.reasoningEffort)
@@ -1985,7 +2004,7 @@ class AppTest {
         compose.waitUntil(5000) { model.state.value.inheritedSettings.cwd == "/fixture/remote-codex" }
         compose.onNodeWithTag("model-selector").assertTextContains("From project")
         compose.onNodeWithTag("model-selector").performScrollTo().performClick()
-        compose.onNodeWithText("Fixture Fast").performClick()
+        compose.onNodeWithTag("model-option-gpt-fixture-fast").performClick()
         assertEquals("gpt-fixture-fast", model.state.value.newTaskOptions.model)
         compose.onNodeWithTag("model-selector").performScrollTo().performClick()
         compose.onNodeWithTag("model-automatic").performClick()
@@ -2127,17 +2146,20 @@ class AppTest {
         compose.onNodeWithTag("model-selector").performScrollTo().performClick()
         compose.onNodeWithText("Refresh models").assertDoesNotExist()
         demoPause()
-        compose.onNodeWithText("Fixture Fast").performClick()
+        compose.onNodeWithTag("model-option-gpt-fixture-fast").performClick()
         assertEquals("gpt-fixture-fast", model.state.value.newTaskOptions.model)
         demoPause()
 
         compose.onNodeWithTag("reasoning-selector").performScrollTo().performClick()
-        compose.onNodeWithText("Medium").assertExists()
+        compose.onNodeWithTag("reasoning-option-medium").assertExists()
         compose.onNodeWithText("Low").assertDoesNotExist()
         demoPause()
-        compose.onNodeWithText("Medium").performClick()
+        compose.onNodeWithTag("reasoning-option-medium").performClick()
         assertEquals("medium", model.state.value.newTaskOptions.reasoningEffort)
         demoPause()
+
+        compose.waitUntil(5000) { modelDefaultWrites.get() == 2 && model.state.value.inheritedSettings.effort == "medium" }
+        assertEquals("gpt-fixture-fast", savedDefaultModel)
 
         closeConversationTray()
         compose.onNodeWithTag("composer").performTextInput("Use the selected model")
@@ -2149,17 +2171,32 @@ class AppTest {
         assertEquals("medium", lastTurnStartParams!!.str("effort"))
         demoPause(2500)
 
-        // Existing tasks reset per-turn overrides when resumed. Reconcile the
-        // saved new-chat preferences so this checks catalog changes rather than
-        // racing that independent reset during reconnect.
         compose.waitUntil(5000) { !model.state.value.busy }
+        compose.runOnUiThread {
+            model.updateNewTaskOptions(model.state.value.newTaskOptions.copy(model = "gpt-fixture", reasoningEffort = "high"))
+        }
+        assertEquals(2, modelDefaultWrites.get())
+        // Recreate the client after the draft has been consumed. Defaults must
+        // come from server config, not the draft or the previous task.
+        compose.runOnUiThread {
+            store.clear()
+            model = ClientModel(app, "ws://127.0.0.1:${server.port}/rpc", "/fixture", true)
+            store.put("fixture", model)
+            compose.activity.setContent { RemoteTheme { App(model) } }
+            model.foreground(true)
+        }
+        compose.waitUntil(15000) { model.state.value.ready && model.state.value.modelCatalogStatus == ModelCatalogStatus.Ready }
         compose.runOnUiThread { model.newChat() }
         compose.waitUntil(5000) { model.state.value.thread == null && !model.state.value.busy }
+        compose.waitUntil(5000) { model.state.value.inheritedSettings.status == ModelCatalogStatus.Ready }
+        assertNull(model.state.value.newTaskOptions.model)
+        assertEquals("gpt-fixture-fast", model.state.value.composerSettings().modelId)
+        assertEquals("Medium", model.state.value.composerSettings().effort)
         openConversationTray()
         compose.onNodeWithTag("model-selector").performScrollTo().performClick()
-        compose.onNodeWithText("Fixture Fast").performClick()
+        compose.onNodeWithTag("model-option-gpt-fixture-fast").performClick()
         compose.onNodeWithTag("reasoning-selector").performScrollTo().performClick()
-        compose.onNodeWithText("Medium").performClick()
+        compose.onNodeWithTag("reasoning-option-medium").performClick()
         assertEquals("gpt-fixture-fast", model.state.value.newTaskOptions.model)
         assertEquals("medium", model.state.value.newTaskOptions.reasoningEffort)
         val previousLists = modelLists.get()
@@ -2174,6 +2211,23 @@ class AppTest {
         assertNull(model.state.value.newTaskOptions.reasoningEffort)
         compose.onNodeWithText("Unsupported overrides were cleared", substring = true).assertExists()
         demoPause(3000)
+    }
+
+    @Test
+    fun uncertainModelDefaultSaveIsReadOnReconnectWithoutReplay() {
+        compose.runOnUiThread { model.newChat() }
+        compose.waitUntil(5000) { model.state.value.thread == null && model.state.value.inheritedSettings.status == ModelCatalogStatus.Ready }
+        dropModelDefaultReply = true
+        compose.runOnUiThread {
+            // Observe the disconnected outcome before allowing automatic reconnect.
+            model.foreground(false)
+            model.updateNewTaskOptions(model.state.value.newTaskOptions.copy(model = "gpt-fixture-fast"))
+        }
+        compose.waitUntil(10000) { model.state.value.modelCatalogMessage.orEmpty().contains("outcome unknown") }
+        assertEquals(1, modelDefaultWrites.get())
+        compose.runOnUiThread { model.foreground(true) }
+        compose.waitUntil(15000) { model.state.value.ready && model.state.value.inheritedSettings.model == "gpt-fixture-fast" }
+        assertEquals(1, modelDefaultWrites.get())
     }
 
     @Test

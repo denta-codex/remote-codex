@@ -139,6 +139,7 @@ data class InheritedSettings(
     val modelSource: String = "From server",
     val effortSource: String = "From server",
     val serviceTier: String? = null,
+    val profile: String? = null,
 )
 
 internal fun parseInheritedSettings(result: JsonObject, cwd: String): InheritedSettings {
@@ -152,7 +153,16 @@ internal fun parseInheritedSettings(result: JsonObject, cwd: String): InheritedS
         config.str("model_reasoning_effort").takeIf(String::isNotBlank),
         source("model"), source("model_reasoning_effort"),
         config.str("service_tier").takeIf(String::isNotBlank),
+        config.str("profile").takeIf(String::isNotBlank),
     )
+}
+
+internal fun modelDefaultsParams(model: String, effort: String?, profile: String?): JsonObject {
+    val prefix = profile?.let { "profiles.$it." }.orEmpty()
+    return obj("edits" to JsonArray(listOf(
+        obj("keyPath" to s("${prefix}model"), "value" to s(model), "mergeStrategy" to s("upsert")),
+        obj("keyPath" to s("${prefix}model_reasoning_effort"), "value" to (effort?.let(::s) ?: JsonNull), "mergeStrategy" to s("upsert")),
+    )), "reloadUserConfig" to JsonPrimitive(true))
 }
 
 internal fun ScreenState.settingsCwd(): String? = when {

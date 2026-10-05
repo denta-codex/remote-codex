@@ -316,7 +316,7 @@ private fun ModelControls(state: ScreenState, actions: ConversationActions) {
             DropdownMenuItem(text = { Text("Automatic (inherit)") }, modifier = Modifier.testTag("model-automatic"),
                 onClick = { modelMenu = false; actions.updateNewTaskOptions(state.newTaskOptions.copy(model = null, reasoningEffort = null)) })
             state.models.forEach { model ->
-                DropdownMenuItem(text = { Text(model.displayName ?: model.id) }, onClick = {
+                DropdownMenuItem(text = { Text(model.displayName ?: model.id) }, modifier = Modifier.testTag("model-option-${model.id}"), onClick = {
                     modelMenu = false; actions.updateNewTaskOptions(state.newTaskOptions.copy(model = model.id, reasoningEffort = null)) })
             }
         }
@@ -328,7 +328,7 @@ private fun ModelControls(state: ScreenState, actions: ConversationActions) {
             DropdownMenuItem(text = { Text("Automatic (inherit)") }, modifier = Modifier.testTag("reasoning-automatic"),
                 onClick = { effortMenu = false; actions.updateNewTaskOptions(state.newTaskOptions.copy(reasoningEffort = null)) })
             efforts.forEach { effort ->
-                DropdownMenuItem(text = { Text(effort.id.replaceFirstChar { it.uppercase() }) }, onClick = {
+                DropdownMenuItem(text = { Text(effort.id.replaceFirstChar { it.uppercase() }) }, modifier = Modifier.testTag("reasoning-option-${effort.id}"), onClick = {
                     effortMenu = false; actions.updateNewTaskOptions(state.newTaskOptions.copy(reasoningEffort = effort.id)) })
             }
         }

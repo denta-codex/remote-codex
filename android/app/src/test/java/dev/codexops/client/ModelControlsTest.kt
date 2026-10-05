@@ -6,6 +6,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ModelControlsTest {
+    @Test fun defaultsUseStockBatchWriteAndActiveProfile() {
+        val params = modelDefaultsParams("fixture", "high", "personal")
+        assertEquals(listOf("profiles.personal.model", "profiles.personal.model_reasoning_effort"), params.list("edits").map { it.str("keyPath") })
+        assertTrue(params.list("edits").all { it.str("mergeStrategy") == "upsert" })
+        assertEquals("fixture", params.list("edits")[0].str("value"))
+        assertEquals("high", params.list("edits")[1].str("value"))
+        assertEquals(JsonPrimitive(true), params["reloadUserConfig"])
+        assertEquals(JsonNull, modelDefaultsParams("fixture", null, null).list("edits")[1]["value"])
+        assertEquals("personal", parseInheritedSettings(obj("config" to obj("profile" to s("personal"))), "/fixture").profile)
+    }
+
     private val catalogResult =
         obj(
             "data" to
