@@ -44,12 +44,17 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
     val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
     var followLatest by remember { mutableStateOf(true) }
     var initiallyPositioned by remember { mutableStateOf(false) }
+    var openingAnchorKey by remember { mutableStateOf<String?>(null) }
+    var initialRenderedKey by remember { mutableStateOf<String?>(null) }
+    var readerScrolled by remember { mutableStateOf(false) }
     val readingScroll = remember(scroll) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                 // Stop before the next layout/streaming update, even for a short drag.
-                if (source == NestedScrollSource.UserInput && available.y != 0f)
+                if (source == NestedScrollSource.UserInput && available.y != 0f) {
+                    readerScrolled = true
                     followLatest = false
+                }
                 return Offset.Zero
             }
         }
@@ -63,6 +68,7 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
         conversationRows(st.entries, st.activeTurn, st.ready, st.turnStatuses,
             st.decisions.any { it.blocksUser } || st.attention)
     }
+    val openingMessageKey = rows.lastOrNull { it is ConversationRow.Message }?.key
     var changesTurn by rememberSaveable(st.host.endpoint, st.thread) { mutableStateOf<String?>(null) }
     rows.filterIsInstance<ConversationRow.Changes>().firstOrNull { it.turn == changesTurn }?.let {
         TurnChangesViewer(it, onDismiss = { changesTurn = null })
@@ -81,28 +87,60 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
     // anchors its bottom, moving the paragraph being read when that message grows.
     LaunchedEffect(scroll) {
         snapshotFlow {
-                !scroll.isScrollInProgress && !scroll.canScrollForward
+                initiallyPositioned && readerScrolled && !scroll.isScrollInProgress && !scroll.canScrollForward
             }
             .collect { atRestAtEnd ->
                 if (atRestAtEnd) followLatest = true
             }
     }
-    LaunchedEffect(scroll, followLatest, messages.isNotEmpty()) {
-        if (!followLatest || messages.isEmpty()) return@LaunchedEffect
-        if (!initiallyPositioned) withFrameNanos { }
+    LaunchedEffect(scroll, rows, st.busy, st.historyCursor, initialRenderedKey) {
+        if (initiallyPositioned || st.busy) return@LaunchedEffect
+        val latestMessage = rows.indexOfLast { it is ConversationRow.Message }
+        if (latestMessage < 0) return@LaunchedEffect
+        withFrameNanos { }
+        // Open at the beginning of the newest message, including replies taller
+        // than the viewport. Keep it still until the reader reaches the end.
+        followLatest = false
+        scroll.scrollToItem(latestMessage + if (st.historyCursor != null) 1 else 0)
+        val entry = (rows[latestMessage] as ConversationRow.Message).entry
+        // Markdown starts as a small loading box. Re-anchor once its real
+        // height is known so clamping that placeholder cannot hide the start.
+        if (entry.kind in setOf("agentMessage", "plan") && entry.text.isNotBlank() &&
+            initialRenderedKey != entry.key) {
+            snapshotFlow { scroll.layoutInfo }.collect { layout ->
+                // Earlier Markdown can also grow and push the loading reply
+                // off-screen. Keep it composed until its render callback arrives.
+                if (layout.visibleItemsInfo.none { it.key == entry.key })
+                    scroll.scrollToItem(latestMessage + if (st.historyCursor != null) 1 else 0)
+            }
+            return@LaunchedEffect
+        }
+        openingAnchorKey = entry.key
+        initiallyPositioned = true
+    }
+    LaunchedEffect(scroll, initiallyPositioned, readerScrolled, followLatest, rows, st.historyCursor) {
+        if (!initiallyPositioned || readerScrolled || followLatest) return@LaunchedEffect
+        val index = rows.indexOfFirst { it.key == openingAnchorKey }
+        if (index < 0) return@LaunchedEffect
+        val target = index + if (st.historyCursor != null) 1 else 0
+        // Keep the opening anchor while surrounding Markdown finishes measuring.
+        // A user scroll, send, or jump ends this anchoring immediately.
+        snapshotFlow { scroll.layoutInfo }.collect {
+            if (scroll.canScrollForward &&
+                (scroll.firstVisibleItemIndex != target || scroll.firstVisibleItemScrollOffset != 0))
+                scroll.scrollToItem(target)
+        }
+    }
+    LaunchedEffect(scroll, followLatest, initiallyPositioned, messages.isNotEmpty()) {
+        if (!initiallyPositioned || !followLatest || messages.isEmpty()) return@LaunchedEffect
         // Observe measured content, including asynchronous Markdown and composer
         // resizing. Serial collection lets each animation finish while coalescing
         // new layouts; a token must not cancel and restart the animation.
         snapshotFlow { scroll.layoutInfo }.collect { layout ->
             // On a cover display the IME can temporarily consume the entire
             // timeline. There is no visible end to follow until it has height again.
-            if (layout.totalItemsCount > 0 && layout.viewportSize.height > 0) {
-                if (!initiallyPositioned) {
-                    scroll.scrollToItem(layout.totalItemsCount - 1)
-                    initiallyPositioned = true
-                } else if (scroll.canScrollForward) {
-                    scroll.animateScrollToItem(layout.totalItemsCount - 1)
-                }
+            if (layout.totalItemsCount > 0 && layout.viewportSize.height > 0 && scroll.canScrollForward) {
+                scroll.animateScrollToItem(layout.totalItemsCount - 1)
             }
         }
     }
@@ -162,11 +200,12 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
                                 st.queueReady &&
                                 st.journal == null,
                         onImplement = { actions.implementPlan(entry.key) },
-                        onTextRendered = st.liveAssistantText?.takeIf {
-                            it.thread == st.thread && it.key == entry.key &&
-                                it.textLength == entry.text.length && it.textHash == entry.text.hashCode()
-                        }?.let { update ->
-                            {
+                        onTextRendered = {
+                            if (!initiallyPositioned && entry.key == openingMessageKey) initialRenderedKey = entry.key
+                            st.liveAssistantText?.takeIf {
+                                it.thread == st.thread && it.key == entry.key &&
+                                    it.textLength == entry.text.length && it.textHash == entry.text.hashCode()
+                            }?.let { update ->
                                 val layout = scroll.layoutInfo
                                 val item = layout.visibleItemsInfo.firstOrNull { it.key == entry.key }
                                 val visible = followLatest && st.appForeground && st.ready &&
