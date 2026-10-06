@@ -1,5 +1,21 @@
 # Validation
 
+## 2026-10-06 — Todo cutover and Android 0.4.7 publication
+
+- Built Android 0.4.7 (39) from `main` at `a14e6a4`, after fetching and confirming
+  that all current `origin/main` commits were included. Build record: `5eeb4c5`.
+- Live SQLite backup migration verified integrity and logical equality before
+  deploying the repo-owned Todo CLI and forwarder. Stock and Todo authenticated
+  WSS checks and shared CLI database access passed.
+- Published the same signed APK to the private stable channel. Authenticated HTTPS
+  manifest and full APK verification passed. Publication log:
+  `artifacts/releases/run-20261006T193505Z-TR3zDv.log`.
+- Phone installation and Android acceptance remain user initiated. Retain only
+  `/home/agent/.local/share/todo/tasks.sqlite3` and
+  `/home/agent/.local/bin/todo.1202532.2026-10-06@15:34:50~` for cutover recovery;
+  remove both after Android acceptance. Any reverse cutover must transfer the
+  current canonical database, preserving writes accepted since migration.
+
 ## 2026-10-06 — Android 0.4.7 (39)
 
 - Source revision: `a14e6a42f3591510ab25f0432367ccc661c02c89`.
