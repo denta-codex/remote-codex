@@ -1,5 +1,23 @@
 # Validation
 
+## 2026-10-06 — Conversation opening memory and latency
+
+- Report `3386afd3-ab29-4f92-b964-4375eb12d2db` records 9,924 ms from
+  opening the task to clearing busy, a failed 179,509,778-byte allocation,
+  and 6,298 ms blocked on garbage collection.
+- Reuse resume's newest full turn and cursor instead of requesting another
+  20 full turns before rendering. Older history and metadata-only resume
+  recovery request one turn per page. The inbound RPC UTF-8 size check now
+  counts bytes without allocating an encoded copy of the entire message.
+- `RpcSizeTest` passed, including Unicode and malformed-surrogate boundaries.
+- Managed Android 16 tests passed:
+  `AppTest#conversationOpensFromResumePageWithoutWaitingForOlderHistory`
+  and `AppTest#textChatStreamsAndCanReopen`. The regression confirms rendering
+  succeeds while older-history responses are withheld and preserves the cursor.
+- No live-device latency measurement, publication, deployment, or phone
+  installation was performed. A single exceptionally large turn can still
+  require substantial memory; pagination bounds turns rather than bytes.
+
 ## 2026-10-06 — Android 0.4.8 (40)
 
 - Source revision: `bb6e267fcc8aa3387f93b5805a8e170acc910a05`.

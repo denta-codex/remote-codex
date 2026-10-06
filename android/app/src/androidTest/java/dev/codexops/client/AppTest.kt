@@ -2560,6 +2560,25 @@ class AppTest {
     }
 
     @Test
+    fun conversationOpensFromResumePageWithoutWaitingForOlderHistory() {
+        approvalResumePage = obj("data" to JsonArray(listOf(obj(
+            "id" to s("latest-turn"), "status" to s("completed"),
+            "items" to JsonArray(listOf(obj("id" to s("latest-reply"),
+                "type" to s("agentMessage"), "text" to s("Latest reply")))),
+        ))), "nextCursor" to s("older-turns"))
+        holdHistoryReply = true
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(5000) { !model.state.value.busy && model.state.value.entries.any { it.text == "Latest reply" } }
+        assertEquals("older-turns", model.state.value.historyCursor)
+        assertTrue(heldHistoryRequests.isEmpty())
+        compose.onNodeWithText("Latest reply").assertIsDisplayed()
+        compose.runOnUiThread { model.older() }
+        compose.waitUntil(5000) { heldHistoryRequests.isNotEmpty() }
+        holdHistoryReply = false
+        heldHistoryRequests.forEach { peer!!.send(obj("id" to it, "result" to history()).toString()) }
+    }
+
+    @Test
     fun textChatStreamsAndCanReopen() {
         compose.onNodeWithContentDescription("New chat").performClick()
         compose.waitUntil(5000) { model.state.value.page == "chat" }

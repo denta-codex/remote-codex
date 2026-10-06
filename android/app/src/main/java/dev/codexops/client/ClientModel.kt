@@ -1148,12 +1148,15 @@ constructor(
             publish()
             val thread = response.map("thread")
             if (n == selection) chatUsagePath = thread.str("path").takeIf { it.startsWith('/') && !it.contains('\u0000') }
-            val history =
+            // Resume already returns the newest full turn, including live items.
+            // Render that page immediately instead of downloading it again with
+            // potentially enormous older tool outputs.
+            val history = (response["initialTurnsPage"] as? JsonObject) ?:
                 readEventually(
                     "thread/turns/list",
                     obj(
                         "threadId" to s(id),
-                        "limit" to JsonPrimitive(20),
+                        "limit" to JsonPrimitive(1),
                         "itemsView" to s("full"),
                         "sortDirection" to s("desc"),
                     ),
@@ -1465,7 +1468,7 @@ constructor(
                         obj(
                             "threadId" to s(id),
                             "cursor" to s(cursor),
-                            "limit" to JsonPrimitive(20),
+                            "limit" to JsonPrimitive(1),
                             "itemsView" to s("full"),
                             "sortDirection" to s("desc"),
                         ),
