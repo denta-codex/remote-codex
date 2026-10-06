@@ -10,11 +10,13 @@
 - Published the same signed APK to the private stable channel. Authenticated HTTPS
   manifest and full APK verification passed. Publication log:
   `artifacts/releases/run-20261006T193505Z-TR3zDv.log`.
-- Phone installation and Android acceptance remain user initiated. Retain only
-  `/home/agent/.local/share/todo/tasks.sqlite3` and
-  `/home/agent/.local/bin/todo.1202532.2026-10-06@15:34:50~` for cutover recovery;
-  remove both after Android acceptance. Any reverse cutover must transfer the
-  current canonical database, preserving writes accepted since migration.
+- User confirmed Android installation and a successful Todo write. Read-only
+  authenticated stock/Todo WSS checks, default CLI access, SQLite integrity, and
+  foreign-key checks passed after acceptance.
+- Removed the old database, its empty data directory, and the temporary CLI
+  recovery binary. Cutover is complete; the canonical database is authoritative.
+  Any future reverse cutover must transfer that current database, preserving
+  writes accepted since migration.
 
 ## 2026-10-06 — Android 0.4.7 (39)
 
