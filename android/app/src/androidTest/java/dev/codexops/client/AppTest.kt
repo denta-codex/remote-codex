@@ -401,13 +401,11 @@ class AppTest {
 
     @Test
     fun nativeTodoOpensWithoutPreviewAndReturnsToChats() {
-        val todoCommands = CopyOnWriteArrayList<List<String>>()
-        browserResponse = { method, params ->
-            val command = (params["command"] as? JsonArray)?.map { it.jsonPrimitive.content }.orEmpty()
-            if (method == "command/exec" && command.firstOrNull() == StockTodoOperations.PROGRAM) {
-                todoCommands += command
-                obj("exitCode" to JsonPrimitive(0), "stdout" to s(obj("schema_version" to JsonPrimitive(1),
-                    "ok" to JsonPrimitive(true), "kind" to s("task-list"), "tasks" to JsonArray(emptyList())).toString()))
+        val todoRequests = CopyOnWriteArrayList<String>()
+        browserResponse = { method, _ ->
+            if (method == "todo/list") {
+                todoRequests += method
+                obj("tasks" to JsonArray(emptyList()))
             } else null
         }
         compose.runOnUiThread { model.foreground(true) }
@@ -431,8 +429,8 @@ class AppTest {
         compose.onNodeWithTag("composer").assertIsDisplayed()
         compose.onNodeWithContentDescription("Back").performClick()
         compose.onNodeWithContentDescription("New chat").assertIsDisplayed()
-        assertTrue(todoCommands.isNotEmpty())
-        assertTrue(todoCommands.all { it == listOf(StockTodoOperations.PROGRAM, "--db", StockTodoOperations.DATABASE, "--json", "list") })
+        assertTrue(todoRequests.isNotEmpty())
+        assertTrue(todoRequests.all { it == "todo/list" })
     }
 
     @Test
@@ -818,13 +816,22 @@ class AppTest {
                         .withWebSocketUpgrade(
                             object : WebSocketListener() {
                                 override fun onOpen(webSocket: WebSocket, response: Response) {
-                                    peer = webSocket
+                                    if (request.path != "/remote-codex/v1/todo") peer = webSocket
+                                }
+
+                                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                                    webSocket.close(1000, "")
                                 }
 
                                 override fun onMessage(ws: WebSocket, text: String) {
                                     val m = wire.parseToJsonElement(text).jsonObject
                                     val method = m.str("method")
                                     val params = m.map("params")
+                                    if (request.path == "/remote-codex/v1/todo") {
+                                        val result = browserResponse?.invoke(method, params) ?: obj("tasks" to JsonArray(emptyList()))
+                                        ws.send(obj("jsonrpc" to s("2.0"), "id" to m["id"], "result" to result).toString())
+                                        return
+                                    }
                                     val command =
                                         (params["command"] as? JsonArray)
                                             ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }

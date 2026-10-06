@@ -1,0 +1,39 @@
+---
+- name: "Stage: migrate Todo"
+  ansible.builtin.set_fact:
+    release_stage: migrate Todo
+- name: Require stopped local and Android Todo writers
+  ansible.builtin.assert:
+    that:
+      - remote_codex_todo_writers_quiesced | default(false) | bool
+      - not ansible_check_mode
+    fail_msg: Stop local Todo writers and Android Todo use, then explicitly supply remote_codex_todo_writers_quiesced=true. Migration cannot run in check mode.
+- name: Inspect migration artifact
+  ansible.builtin.stat:
+    path: "{{ repo }}/dist/todo"
+  register: todo_artifact
+- name: Require prepared migration tool
+  ansible.builtin.assert:
+    that: todo_artifact.stat.exists and todo_artifact.stat.executable
+    fail_msg: Build the repo-owned Todo CLI before migration.
+- name: Stop forwarder for cutover
+  ansible.builtin.systemd_service:
+    name: remote-codex-forwarder.service
+    scope: user
+    state: stopped
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ user_id.stdout }}"
+- name: Transfer and verify Todo database once
+  ansible.builtin.command:
+    argv:
+      - "{{ repo }}/dist/todo"
+      - migrate
+      - --from
+      - /home/agent/.local/share/todo/tasks.sqlite3
+      - --to
+      - /home/agent/.local/share/remote-codex/todo.sqlite3
+      - --writers-quiesced
+      - --json
+- name: Report retained cutover recovery source
+  ansible.builtin.debug:
+    msg: Source retained at /home/agent/.local/share/todo/tasks.sqlite3. Keep writers stopped until action=deploy installs the new service and CLI. Remove the source only after Android acceptance; see docs/TODO.md for recovery.

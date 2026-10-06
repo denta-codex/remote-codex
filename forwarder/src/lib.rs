@@ -1,3 +1,4 @@
+mod todo;
 use sha2::{Digest, Sha256};
 use std::fs::OpenOptions;
 use std::future::Future;
@@ -33,6 +34,8 @@ pub struct Config {
     expected_authorization: [u8; 32],
     update_root: Option<PathBuf>,
     approval_socket: Option<PathBuf>,
+    todo_database: PathBuf,
+    todo_workers: Arc<Semaphore>,
 }
 
 impl Config {
@@ -49,7 +52,21 @@ impl Config {
             expected_authorization,
             update_root: None,
             approval_socket: None,
+            todo_database: remote_codex_todo::DEFAULT_DATABASE.into(),
+            todo_workers: Arc::new(Semaphore::new(2)),
         })
+    }
+
+    pub fn with_todo_database(mut self, path: impl Into<PathBuf>) -> io::Result<Self> {
+        let path = path.into();
+        if !path.is_absolute() || remote_codex_todo::reject_retired_path(&path).is_err() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Todo requires an absolute, non-retired database path",
+            ));
+        }
+        self.todo_database = path;
+        Ok(self)
     }
 
     pub fn with_update_root(mut self, root: impl Into<PathBuf>) -> io::Result<Self> {
@@ -188,6 +205,7 @@ where
 struct UpgradeRequest {
     websocket_key: String,
     approval: bool,
+    todo: bool,
 }
 
 async fn handle_client(
@@ -226,6 +244,10 @@ async fn handle_client(
         }
         ValidatedRequest::WebSocket(request) => request,
     };
+
+    if request.todo {
+        return todo::serve(client, client_tail, request, &config).await;
+    }
 
     let target = if request.approval {
         match config.approval_socket.as_ref() {
@@ -359,7 +381,7 @@ fn validate_request(head: &[u8], config: &Config) -> Result<ValidatedRequest, Re
     }
     let path = request.path.unwrap_or_default();
     let update = parse_update_path(path);
-    if path != "/codex/rpc" && path != APPROVAL_PATH && update.is_none() {
+    if path != "/codex/rpc" && path != APPROVAL_PATH && path != todo::PATH && update.is_none() {
         return Err(Rejection::new(404, "Not Found", "Not Found"));
     }
     let authorization = unique_header(request.headers, "Authorization")
@@ -402,6 +424,7 @@ fn validate_request(head: &[u8], config: &Config) -> Result<ValidatedRequest, Re
     Ok(ValidatedRequest::WebSocket(UpgradeRequest {
         websocket_key: websocket_key.to_owned(),
         approval: path == APPROVAL_PATH,
+        todo: path == todo::PATH,
     }))
 }
 

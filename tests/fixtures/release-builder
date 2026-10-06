@@ -11,6 +11,7 @@ dir="dist/updates/releases/$code"
 mkdir -p "$dir" dist/updates/stable
 printf 'fixture APK version %s\n' "$code" > "$dir/remote-codex.apk"
 printf 'fixture forwarder\n' > dist/remote-codex-forwarder
+printf 'fixture todo\n' > dist/todo
 sha="$(sha256sum "$dir/remote-codex.apk" | cut -d' ' -f1)"
 size="$(stat --format='%s' "$dir/remote-codex.apk")"
 jq -n --argjson code "$code" --arg version "$version" --arg sha "$sha" --argjson size "$size" \
@@ -19,4 +20,4 @@ jq -n --argjson code "$code" --arg version "$version" --arg sha "$sha" --argjson
       versionCode:$code,versionName:$version,publishedAt:"2026-09-29T00:00:00Z",
       apkUrl:("/remote-codex/v1/updates/releases/"+($code|tostring)+"/remote-codex.apk"),
       apkSize:$size,sha256:$sha,signingCertificateSha256:$cert,releaseNotes:$notes}' > dist/updates/stable/latest.json
-(cd dist && sha256sum "updates/releases/$code/remote-codex.apk" updates/stable/latest.json remote-codex-forwarder > SHA256SUMS)
+(cd dist && sha256sum "updates/releases/$code/remote-codex.apk" updates/stable/latest.json remote-codex-forwarder todo > SHA256SUMS)

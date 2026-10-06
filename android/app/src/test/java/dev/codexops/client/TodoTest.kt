@@ -2,7 +2,6 @@ package dev.codexops.client
 
 import dev.codexops.core.*
 import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.Channel
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
 import org.junit.Test
@@ -22,7 +21,7 @@ class TodoTest {
     private class Fixture : TodoOperations, AutoCloseable {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         val store = MemoryStore()
-        var screen = ScreenState(ready = true, page = "todo")
+        var screen = ScreenState(ready = true, page = "todo", todo = TodoState(ready = true))
         val tasks = mutableListOf(TodoItem(1, "Existing", "To Do", 1, "Original text"))
         var writes = 0
         var loseReply = false
@@ -106,21 +105,19 @@ class TodoTest {
         assertEquals("In Progress", f.screen.todo.status)
     }
 
-    @Test fun transportCreatesThenMovesOnceAndTreatsRejectedMoveAsUncertain() = runBlocking {
-        val rpc = RpcFixture(); val ops = StockTodoOperations(rpc)
-        rpc.responses += result("task", "task", row())
-        rpc.responses += result("task", "task", JsonObject(row(revision = 2) + ("status" to s("In Progress"))))
+    @Test fun transportCreatesInSelectedStatusWithOneWrite() = runBlocking {
+        val rpc = RpcFixture(); val ops = ServiceTodoOperations(rpc)
+        rpc.response = result("task", JsonObject(row() + ("status" to s("In Progress"))))
         assertEquals("In Progress", ops.save(TodoEditor(title = "Task", creationStatus = "In Progress")).status)
-        assertEquals(listOf("move", "1", "In Progress", "--expect-revision", "1"),
-            rpc.last["command"]!!.jsonArray.drop(4).map { it.jsonPrimitive.content })
-        rpc.responses += result("task", "task", row())
-        rpc.responses += obj("exitCode" to JsonPrimitive(4), "stderr" to s(obj(
-            "schema_version" to JsonPrimitive(1), "ok" to JsonPrimitive(false),
-            "error" to obj("code" to s("revision_conflict"))).toString()))
-        val error = runCatching { ops.save(TodoEditor(title = "Task", creationStatus = "Done")) }.exceptionOrNull()
-        assertNotNull(error)
-        assertFalse(error is TodoRejected)
-        assertTrue(rpc.responses.isEmpty())
+        assertEquals("todo/create", rpc.method)
+        assertEquals("In Progress", rpc.last.str("status"))
+        assertEquals(1, rpc.calls)
+    }
+
+    @Test fun todoWorksWithoutStockCodexInitialization() = Fixture().use { f ->
+        f.screen = f.screen.copy(ready = false)
+        val c = f.controller(); c.refresh(); c.new(); c.title("Independent idea"); c.save()
+        assertEquals(1, f.writes)
     }
 
     @Test fun uncertainCreateSurvivesControllerRecreationAndNeverReplays() = Fixture().use { f ->
@@ -130,7 +127,7 @@ class TodoTest {
         assertNotNull(f.screen.todo.pending)
         c.acknowledge() // No successful read since the uncertain write.
         assertFalse(f.store.data.isEmpty())
-        f.screen = ScreenState(ready = true, page = "todo")
+        f.screen = ScreenState(ready = true, page = "todo", todo = TodoState(ready = true))
         c = f.controller(); c.refresh()
         assertEquals(2, f.screen.todo.items.size)
         assertNotNull(f.screen.todo.pending)
@@ -164,7 +161,7 @@ class TodoTest {
         assertTrue(f.screen.todo.items.isEmpty())
         assertFalse(f.screen.todo.loaded)
         assertEquals("Unsaved", f.screen.todo.editor?.description)
-        f.screen = f.screen.copy(ready = true); c.refresh()
+        f.screen = f.screen.copy(ready = true); c.connected(); c.refresh()
         assertEquals("Unsaved", f.screen.todo.editor?.description)
         c.save(); assertEquals(1, f.writes)
     }
@@ -191,54 +188,52 @@ class TodoTest {
         assertEquals(1, f.writes)
     }
 
-    private class RpcFixture : RemoteSession {
-        override val events = Channel<JsonObject>()
-        override var generation = 1L
+    private class RpcFixture : TodoRpc {
         var response = obj()
         var last = obj()
-        val responses = ArrayDeque<JsonObject>()
+        var method = ""
+        var calls = 0
+        var rejection: TodoRpcRejected? = null
         override suspend fun call(method: String, params: JsonObject): JsonObject {
-            assertEquals("command/exec", method); last = params; return if (responses.isEmpty()) response else responses.removeFirst()
+            this.method = method; last = params; calls++
+            rejection?.let { throw it }
+            return response
         }
-        override suspend fun connect(url: String, token: String) = obj()
-        override fun respond(id: JsonElement, result: JsonObject, epoch: Long) {}
-        override fun close() {}
-        override fun dispose() {}
     }
     private fun row(id: Long = 1, title: String = "Task", revision: Long = 1, description: String = "") = obj(
         "id" to JsonPrimitive(id), "title" to s(title), "status" to s("To Do"), "revision" to JsonPrimitive(revision),
         "archived" to JsonPrimitive(false), "description" to s(description), "notes" to JsonArray(emptyList()))
-    private fun result(kind: String, key: String, value: JsonElement) = obj("exitCode" to JsonPrimitive(0), "stdout" to s(
-        obj("schema_version" to JsonPrimitive(1), "ok" to JsonPrimitive(true), "kind" to s(kind), key to value).toString()))
+    private fun result(key: String, value: JsonElement) = obj(key to value)
 
-    @Test fun transportUsesArgvAndRevisionWithoutShellOrPreview() = runBlocking {
-        val rpc = RpcFixture(); val ops = StockTodoOperations(rpc)
-        rpc.response = result("task-list", "tasks", JsonArray(listOf(row())))
+    @Test fun transportUsesStructuredTodoMethodsAndRevisions() = runBlocking {
+        val rpc = RpcFixture(); val ops = ServiceTodoOperations(rpc)
+        rpc.response = result("tasks", JsonArray(listOf(row())))
         assertEquals(1, ops.list().size)
-        assertEquals("readOnly", rpc.last.map("sandboxPolicy").str("type"))
+        assertEquals("todo/list", rpc.method)
         val title = "- literal \$(touch /tmp/not-executed)"
         val description = "- [ ] literal\n'\"; echo unsafe"
-        rpc.response = result("task", "task", row(title = title, description = description))
+        rpc.response = result("task", row(title = title, description = description))
         ops.save(TodoEditor(title = title, description = description))
-        val args = rpc.last["command"]!!.jsonArray.map { it.jsonPrimitive.content }
-        assertEquals(listOf(StockTodoOperations.PROGRAM, "--db", StockTodoOperations.DATABASE, "--json", "add", "--description=$description", "--", title), args)
-        assertEquals("dangerFullAccess", rpc.last.map("sandboxPolicy").str("type"))
-        rpc.response = result("task", "task", row(title = title, revision = 2, description = description))
+        assertEquals("todo/create", rpc.method)
+        assertEquals(title, rpc.last.str("title"))
+        assertEquals(description, rpc.last.str("description"))
+        rpc.response = result("task", row(title = title, revision = 2, description = description))
         ops.save(TodoEditor(TodoItem(1, "Task", "To Do", 1), title, description))
-        assertTrue(rpc.last["command"]!!.jsonArray.map { it.jsonPrimitive.content }.containsAll(listOf("--expect-revision", "1")))
+        assertEquals("todo/edit", rpc.method)
+        assertEquals(JsonPrimitive(1), rpc.last["revision"])
     }
 
-    @Test fun malformedSuccessAndOutputErrorsAreUncertainNotRejected() = runBlocking {
-        val rpc = RpcFixture(); val ops = StockTodoOperations(rpc)
-        rpc.response = result("task", "task", row(id = 9))
+    @Test fun malformedResultsAndUnknownErrorsRemainUncertain() = runBlocking {
+        val rpc = RpcFixture(); val ops = ServiceTodoOperations(rpc)
+        rpc.response = result("task", row(id = 9))
         assertTrue(runCatching { ops.show(1) }.isFailure)
-        rpc.response = obj("exitCode" to JsonPrimitive(6), "stderr" to s("output delivery failed"))
+        rpc.rejection = TodoRpcRejected(-32603, "outcome_unknown")
         val error = runCatching { ops.save(TodoEditor(title = "Task")) }.exceptionOrNull()
         assertNotNull(error); assertFalse(error is TodoRejected)
-        rpc.response = obj("exitCode" to JsonPrimitive(4), "stderr" to s(obj(
-            "schema_version" to JsonPrimitive(1), "ok" to JsonPrimitive(false), "error" to obj("code" to s("revision_conflict"))).toString()))
+        rpc.rejection = TodoRpcRejected(-32001, "revision_conflict")
         assertTrue(runCatching { ops.save(TodoEditor(title = "Task")) }.exceptionOrNull() is TodoRejected)
-        rpc.response = result("task-list", "tasks", JsonArray(listOf(row(), row())))
+        rpc.rejection = null
+        rpc.response = result("tasks", JsonArray(listOf(row(), row())))
         assertTrue(runCatching { ops.list() }.isFailure)
     }
 }

@@ -9,7 +9,7 @@ uv run --no-project tests/connection_check_test.py
 (
     cd forwarder
     mise x rust@1.95.0 -- cargo fmt --all -- --check
-    mise x rust@1.95.0 -- cargo clippy --locked --all-targets -- -D warnings
-    mise x rust@1.95.0 -- cargo test --locked
+    mise x rust@1.95.0 -- cargo clippy --locked --workspace --all-targets -- -D warnings
+    mise x rust@1.95.0 -- cargo test --locked --workspace
 )
 android/gradlew -p android --no-daemon :core:test :app:testDebugUnitTest :app:assembleDebug :app:lintDebug :app:assembleDebugAndroidTest

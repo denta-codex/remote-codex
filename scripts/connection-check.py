@@ -13,7 +13,7 @@ import ssl
 import struct
 import subprocess
 import time
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 LIMIT = 16 * 1024 * 1024
 
@@ -26,6 +26,7 @@ class CheckFailure(Exception):
 
 class WebSocket:
     def __init__(self, url, token, timeout=30):
+        self.path = urlsplit(url).path
         self.stage = 'connect'
         self.stream = None
         self.buffer = bytearray()
@@ -33,7 +34,7 @@ class WebSocket:
         endpoint = urlsplit(url)
         if (endpoint.scheme not in ('ws', 'wss') or not endpoint.hostname
                 or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment
-                or endpoint.path != '/codex/rpc'
+                or endpoint.path not in ('/codex/rpc', '/remote-codex/v1/todo')
                 or endpoint.scheme == 'ws' and endpoint.hostname != '127.0.0.1'):
             raise CheckFailure('endpoint')
         try:
@@ -44,7 +45,7 @@ class WebSocket:
                     self.stream, server_hostname=endpoint.hostname)
             self.stage = 'upgrade'
             key = base64.b64encode(os.urandom(16)).decode()
-            request = (f'GET /codex/rpc HTTP/1.1\r\nHost: {endpoint.netloc}\r\n'
+            request = (f'GET {endpoint.path} HTTP/1.1\r\nHost: {endpoint.netloc}\r\n'
                        f'Authorization: Bearer {token}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
                        f'Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n')
             self.stream.sendall(request.encode())
@@ -135,7 +136,10 @@ class WebSocket:
 
     def call(self, identifier, method, params):
         self.stage = method
-        self.send(json.dumps({'id': identifier, 'method': method, 'params': params}).encode())
+        request = {'id': identifier, 'method': method, 'params': params}
+        if self.path == '/remote-codex/v1/todo':
+            request['jsonrpc'] = '2.0'
+        self.send(json.dumps(request).encode())
         while True:
             response = self.receive()
             if not isinstance(response, dict):
@@ -174,7 +178,21 @@ def check(url, token, expected_home, timeout=30):
         ws.close()
 
 
+def check_todo(url, token, timeout=30):
+    endpoint = urlsplit(url)
+    todo_url = urlunsplit(endpoint._replace(path='/remote-codex/v1/todo'))
+    ws = WebSocket(todo_url, token, timeout)
+    try:
+        result = ws.call('todo-check', 'todo/list', {})
+        if not isinstance(result.get('tasks'), list):
+            raise CheckFailure('todo/list')
+        return {'todo': True}
+    finally:
+        ws.close()
+
+
 def credential(path):
+
     result = subprocess.run(['systemd-creds', 'decrypt', '--user', '--name=connection-token',
                              str(path), '-'], capture_output=True, timeout=10)
     token = result.stdout.decode().strip()
@@ -185,13 +203,17 @@ def credential(path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--todo', action='store_true', help='Also verify the application Todo endpoint')
     parser.add_argument('--url', default='wss://grace.taila198f.ts.net/codex/rpc')
     parser.add_argument('--credential', type=Path,
                         default=Path('/home/agent/.local/share/remote-codex/connection-token.cred'))
     parser.add_argument('--expected-home', type=Path, default=Path('/home/agent/.codex'))
     args = parser.parse_args()
     try:
-        result = check(args.url, credential(args.credential), args.expected_home)
+        token = credential(args.credential)
+        result = check(args.url, token, args.expected_home)
+        if args.todo:
+            result.update(check_todo(args.url, token))
     except CheckFailure as error:
         print(json.dumps({'ok': False, 'stage': error.stage, 'code': error.code}))
         return 1

@@ -6,7 +6,16 @@ rust-version = "1.95"
 license = "Apache-2.0"
 publish = false
 
+[workspace]
+members = ["todo-core", "todo-cli"]
+resolver = "3"
+
 [dependencies]
+remote-codex-todo = { path = "todo-core" }
+serde_json = "1.0.145"
+base64 = "0.22.1"
+futures-util = { version = "0.3", features = ["sink"] }
+tokio-tungstenite = "0.28"
 httparse = "1.10.1"
 libc = "0.2.176"
 sha2 = "0.10.9"

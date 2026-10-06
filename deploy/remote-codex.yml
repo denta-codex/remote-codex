@@ -24,7 +24,7 @@
         - name: Validate selected action
           ansible.builtin.assert:
             that:
-              - remote_codex_action in ['preview', 'build', 'release', 'deploy', 'publish', 'deliver']
+              - remote_codex_action in ['preview', 'build', 'release', 'deploy', 'publish', 'deliver', 'migrate_todo']
               - run_log | length > 0
               - not (ansible_check_mode and remote_codex_action in ['build', 'release'])
             fail_msg: Use scripts/deploy. Build/release cannot run in check mode; preview publication with action=publish --check after building.
@@ -64,6 +64,10 @@
         - name: Validate prepared artifacts
           ansible.builtin.include_tasks: tasks/artifacts.yml
           when: remote_codex_action != 'preview'
+
+        - name: Migrate Todo database explicitly
+          ansible.builtin.include_tasks: tasks/migrate-todo.yml
+          when: remote_codex_action == 'migrate_todo'
 
         - name: Deploy forwarder
           ansible.builtin.include_tasks: tasks/deploy.yml
@@ -125,7 +129,7 @@
               uncommitted_changes: "{{ remaining_changes.stdout }}"
               log: "{{ run_log }}"
               build_log: "{{ run_log }}.build.log"
-              deployment_recovery_files: "{{ [installed_forwarder.backup_file | default(''), installed_service.backup_file | default('')] | reject('equalto', '') | list }}"
+              deployment_recovery_files: "{{ [installed_forwarder.backup_file | default(''), installed_service.backup_file | default(''), installed_todo.backup_file | default('')] | reject('equalto', '') | list }}"
               recovery: Inspect the failed stage and current published state before explicitly resuming. No mutation was retried or rolled back.
 
         - name: Stop after failed workflow

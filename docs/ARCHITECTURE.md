@@ -2,9 +2,11 @@
 
 Android uses Java-WebSocket WSS over the existing Tailscale app. Persistent Tailscale Serve
 (`--bg`) terminates TLS and proxies the root route to 127.0.0.1:8787. The Rust service
-accepts only authenticated `/codex/rpc` upgrades and connects one Unix stream per
+forwards authenticated `/codex/rpc` upgrades and connects one Unix stream per
 client to the existing stock Codex socket. It strips its bearer credential before
-forwarding. There is no RPC rewriting, backend task store, or new Codex process.
+forwarding. The stock connection has no RPC rewriting or new Codex process.
+The same Rust service owns Todo through a separate authenticated WSS route and
+a dedicated SQLite database.
 The forwarder also removes WebSocket extension offers: the stock control socket
 closes handshakes offering `permessage-deflate`. Android does not offer extensions,
 and the forwarder strips them defensively before the stock handshake. After the
@@ -436,35 +438,41 @@ recovery; remove them once recovery and verification are complete.
 ## Native Todo
 
 The Todo destination is a Compose board, independent of Codex chat tasks. It
-invokes the installed `todo` CLI using argv through authenticated stock
-`command/exec`, with explicit database and working-directory paths. Reads use
-the stock read-only sandbox; writes use the existing command transport's
-`dangerFullAccess` sandbox. No shell, HTTP endpoint, preview, or WebView is used.
-The Grace database must already be initialized by CLI installation.
+connects over authenticated WSS to `/remote-codex/v1/todo` on the existing Rust
+service. This route terminates WebSockets and handles application-owned JSON-RPC;
+`/codex/rpc` remains transparent stock forwarding. Todo does not initialize a
+Codex session or execute commands through Codex. Its connection availability is
+independent of the stock connection. There is no temporary board server or preview.
 
-The adapter validates JSON schema 1, result kind, task IDs, revisions, status,
-and mutation results. All edits/moves carry the revision last read. A malformed
-or truncated result, an output-delivery error, a transport failure, or a changed
-connection generation leaves the mutation outcome uncertain. Documented CLI
-validation/not-found/conflict/database errors prove the transaction did not
-commit. The adapter does not log task content or raw errors.
+The service and repo-owned local `todo` CLI share a storage library and
+`/home/agent/.local/share/remote-codex/todo.sqlite3`. Existing data requires an
+explicit cutover; the retired path is rejected by the new CLI. The service uses
+at most two blocking database workers; individual connections process requests
+serially. SQLite transactions and last-read revision checks protect concurrent
+CLI/service changes. Creation sets the selected status in the same transaction.
+Codex's own databases are never opened by the Todo implementation.
+
+The adapter validates task IDs, revisions, status, and mutation results. A malformed
+reply, timeout, delivery failure, or connection-generation change leaves a write
+uncertain. Documented validation/not-found/conflict/database errors and worker
+saturation establish no write was applied. Errors are sanitized and neither side
+logs Todo content or raw RPC messages. Responses and requests are bounded to 1 MiB.
 
 Before sending a write, the controller persists a human-readable pending intent
-in Room, scoped by endpoint and Codex home. It removes the record only after a
-confirmed result or a definitive rejection. An uncertain outcome locks writes
-across restarts. Read-only refresh and task inspection remain available. After a
-successful board refresh, the user can explicitly acknowledge review to unlock;
-this does not infer success or replay the command. Creation cannot be reconciled
-automatically because the CLI has no idempotency keys or mutation receipts.
+in Room, scoped by the existing endpoint and Codex-home key. The keys remain
+unchanged so old pending records still block writes after an app upgrade. It
+removes the record only after a confirmed result or definitive rejection. An
+uncertain outcome locks writes across restarts. Read-only refresh and inspection
+remain available; explicit acknowledgement after a successful refresh unlocks
+writes without replaying the operation. Request IDs correlate responses and are
+not idempotency keys or durable mutation receipts.
 
-Task snapshots and ordinary editor text are memory-only. Disconnecting hides
-the board and disables saves while retaining an open draft in memory. A pending
-intent is a recovery record, not an offline queue. Opening/foregrounding Todo,
-reconnecting while it is visible, pull-to-refresh, and confirmed mutations trigger
-reads; there is no periodic Todo polling. Dirty text requires explicit discard
-before closing, and a revision conflict retains it for comparison. This first
-version provides add/edit/move and read-only work notes; archives and note writes
-remain in the CLI.
+Task snapshots and ordinary editor text remain memory-only. Disconnecting hides
+the board and disables writes while retaining an open draft. Opening/foregrounding
+Todo and manual refresh connect its separate socket when needed. Confirmed writes
+refresh the board; there is no polling or automatic mutation replay. Dirty text
+requires explicit discard before closing. Archives and note writes remain CLI
+operations. Protocol, deployment, data transfer, and recovery are in `docs/TODO.md`.
 
 Todo cards use physical left/right swipes to move one status at a time through
 To Do, In Progress, and Done. Tabs select the visible column; pager swiping is

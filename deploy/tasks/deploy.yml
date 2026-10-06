@@ -44,6 +44,29 @@
   changed_when: false
   no_log: true
   when: not ansible_check_mode
+- name: Inspect Todo cutover paths
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - /home/agent/.local/share/todo/tasks.sqlite3
+    - /home/agent/.local/share/remote-codex/todo.sqlite3
+  register: todo_paths
+- name: Require explicit Todo migration before deployment
+  ansible.builtin.assert:
+    that: not todo_paths.results[0].stat.exists or todo_paths.results[1].stat.exists
+    fail_msg: Stop Todo writers and run action=migrate_todo with remote_codex_todo_writers_quiesced=true before deployment.
+- name: Prepare local CLI directory
+  ansible.builtin.file:
+    path: /home/agent/.local/bin
+    state: directory
+    mode: '0700'
+- name: Install repo-owned Todo CLI
+  ansible.builtin.copy:
+    src: "{{ repo }}/dist/todo"
+    dest: /home/agent/.local/bin/todo
+    mode: '0700'
+    backup: true
+  register: installed_todo
 - name: Install validated forwarder
   ansible.builtin.copy:
     src: "{{ repo }}/dist/remote-codex-forwarder"
@@ -100,9 +123,21 @@
     fail_msg: Enable user lingering for agent before claiming reboot persistence.
 - name: Verify authenticated WSS initialization and project and task listing
   ansible.builtin.command:
-    argv: [uv, run, --no-project, /home/agent/.local/libexec/remote-codex-checks/connection-check.py, --url, "{{ remote_codex_update_url | replace('https://', 'wss://') }}/codex/rpc"]
+    argv: [uv, run, --no-project, /home/agent/.local/libexec/remote-codex-checks/connection-check.py, --todo, --url, "{{ remote_codex_update_url | replace('https://', 'wss://') }}/codex/rpc"]
   changed_when: false
   when: not ansible_check_mode
+- name: Verify shared local Todo CLI access without printing records
+  ansible.builtin.command:
+    argv: [/home/agent/.local/bin/todo, --db, /home/agent/.local/share/remote-codex/todo.sqlite3, list, --json]
+  changed_when: false
+  no_log: true
+  when: not ansible_check_mode
+- name: Report Todo cutover recovery files
+  ansible.builtin.debug:
+    msg:
+      source_database: /home/agent/.local/share/todo/tasks.sqlite3
+      previous_cli: "{{ installed_todo.backup_file | default('none') }}"
+      removal_condition: Remove only after Android and CLI cutover acceptance; see docs/TODO.md.
 - name: Remove narrow deployment recovery copies after successful acceptance
   ansible.builtin.file:
     path: "{{ item }}"

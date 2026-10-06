@@ -18,7 +18,7 @@ import org.junit.Assert.*
 
 class TodoUiTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
-    private val state = mutableStateOf(ScreenState(page = "todo", ready = true))
+    private val state = mutableStateOf(ScreenState(page = "todo", ready = true, todo = TodoState(ready = true)))
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val tasks = mutableListOf(TodoItem(1, "A readable task title that wraps on the cover display", "To Do", 1, "- [ ] First step"))
     private var saves = 0

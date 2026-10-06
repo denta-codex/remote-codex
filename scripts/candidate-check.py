@@ -67,6 +67,8 @@ ExecStart={binary}
 Environment=CODEX_SOCKET={fixture}/codex/app-server-control/app-server-control.sock
 Environment=REMOTE_CODEX_LISTEN=127.0.0.1:{port}
 Environment=REMOTE_CODEX_UPDATE_ROOT={fixture}/updates
+Environment=REMOTE_CODEX_TODO_DB={fixture}/app-data/todo.sqlite3
+ReadWritePaths={fixture}/app-data
 LoadCredentialEncrypted=
 LoadCredential=
 LoadCredential=connection-token:{fixture}/connection-token
@@ -76,10 +78,10 @@ RuntimeMaxSec=120
 '''
     if private_tmp is not None:
         override += f'PrivateTmp={private_tmp}\n'
-    return original + override
+    return original.replace('/home/agent/.local/share/remote-codex', str(fixture / 'app-data')) + override
 
 
-def candidate_check(binary, forwarder, service_unit=None, private_tmp=None):
+def candidate_check(binary, forwarder, service_unit=None, private_tmp=None, todo_cli=None):
     binary, forwarder = binary.resolve(strict=True), forwarder.resolve(strict=True)
     if not os.access(binary, os.X_OK) or not os.access(forwarder, os.X_OK):
         raise CandidateFailure('executables')
@@ -103,6 +105,11 @@ def candidate_check(binary, forwarder, service_unit=None, private_tmp=None):
         home = fixture / 'codex'
         home.mkdir(mode=0o700)
         (fixture / 'updates').mkdir(mode=0o700)
+        (fixture / 'app-data').mkdir(mode=0o700)
+        (fixture / 'app-data/updates').mkdir(mode=0o700)
+        if todo_cli:
+            command([str(todo_cli.resolve(strict=True)), '--db', str(fixture / 'app-data/todo.sqlite3'),
+                     'add', 'Fixture idea', '--json'], environment)
         token = secrets.token_hex(32)
         credential = fixture / 'connection-token'
         credential.write_text(token)
@@ -141,6 +148,21 @@ stream_max_retries = 0
         command(['systemctl', '--user', 'start', units[1]], environment)
         wait_for(lambda: listening(port), 'forwarder_listener')
         connection.check(f'ws://127.0.0.1:{port}/codex/rpc', token, home)
+        if todo_cli:
+            connection.check_todo(f'ws://127.0.0.1:{port}/codex/rpc', token)
+            ws = connection.WebSocket(f'ws://127.0.0.1:{port}/remote-codex/v1/todo', token)
+            try:
+                created = ws.call('create', 'todo/create', {
+                    'title': 'Sandbox fixture', 'description': 'Synthetic notes', 'status': 'Done'})['task']
+                if created['status'] != 'Done' or created['revision'] != 1:
+                    raise CandidateFailure('todo_transaction')
+                command([str(todo_cli.resolve()), '--db', str(fixture / 'app-data/todo.sqlite3'),
+                         'note', str(created['id']), 'CLI fixture note', '--expect-revision', '1', '--json'], environment)
+                shown = ws.call('show', 'todo/show', {'id': created['id']})['task']
+                if shown['revision'] != 2 or shown['notes'][0]['text'] != 'CLI fixture note':
+                    raise CandidateFailure('todo_shared_storage')
+            finally:
+                ws.close()
         before = socket_identity(alias)
         # This is an explicit restart of the disposable candidate, never the live server.
         command(['systemctl', '--user', 'restart', units[0]], environment)
@@ -187,11 +209,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--codex-binary', type=Path, required=True)
     parser.add_argument('--forwarder', type=Path, default=Path('/home/agent/.local/libexec/remote-codex-forwarder'))
+    parser.add_argument('--todo-cli', type=Path, help='Verify Todo using only disposable fixture data')
     parser.add_argument('--service-unit', type=Path)
     parser.add_argument('--private-tmp', choices=['true', 'false'], help='Sandbox regression fixture only')
     args = parser.parse_args()
     try:
-        result = candidate_check(args.codex_binary, args.forwarder, args.service_unit, args.private_tmp)
+        result = candidate_check(args.codex_binary, args.forwarder, args.service_unit, args.private_tmp, args.todo_cli)
     except (CandidateFailure, OSError, ValueError, subprocess.SubprocessError):
         result = {'ok': False, 'stage': 'candidate_setup'}
     print(json.dumps(result))

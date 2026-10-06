@@ -26,7 +26,11 @@ async fn main() -> io::Result<()> {
     let update_root = std::env::var("REMOTE_CODEX_UPDATE_ROOT")
         .unwrap_or_else(|_| "/home/agent/.local/share/remote-codex/updates".to_owned());
     let mut config: Config = load_config_from_credential(socket, Path::new(&credential_directory))?
-        .with_update_root(update_root)?;
+        .with_update_root(update_root)?
+        .with_todo_database(
+            std::env::var("REMOTE_CODEX_TODO_DB")
+                .unwrap_or_else(|_| remote_codex_todo::DEFAULT_DATABASE.into()),
+        )?;
     if let Ok(socket) = std::env::var("REMOTE_CODEX_APPROVAL_SOCKET") {
         config = config.with_approval_socket(socket)?;
     }

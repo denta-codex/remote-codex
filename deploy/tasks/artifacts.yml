@@ -10,11 +10,17 @@
   changed_when: false
   check_mode: false
 
+- name: Require the shared Todo CLI in the verified artifact set
+  ansible.builtin.assert:
+    that:
+      - lookup('ansible.builtin.file', repo + '/dist/SHA256SUMS') is search('(?m)^[a-f0-9]{64}  todo$')
+    fail_msg: Build current artifacts; the Todo CLI must be included in SHA256SUMS.
+
 - name: Read prepared update manifest
   ansible.builtin.include_vars:
     file: "{{ repo }}/dist/updates/stable/latest.json"
     name: release_manifest
-  when: remote_codex_action != 'deploy'
+  when: remote_codex_action not in ['deploy', 'migrate_todo']
 
 - name: Validate prepared update manifest
   ansible.builtin.assert:
@@ -28,4 +34,4 @@
       - release_manifest.apkSize | int > 0
       - release_manifest.sha256 is match('^[0-9a-f]{64}$')
       - release_manifest.signingCertificateSha256 == lookup('ansible.builtin.file', repo + '/docs/signing-certificate.sha256')
-  when: remote_codex_action != 'deploy'
+  when: remote_codex_action not in ['deploy', 'migrate_todo']

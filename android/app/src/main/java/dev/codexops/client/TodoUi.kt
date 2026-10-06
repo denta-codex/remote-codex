@@ -19,14 +19,14 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 @Composable
 internal fun TodoScreen(screen: ScreenState, actions: TodoActions) {
     val state = screen.todo
-    val enabled = screen.ready && state.loaded && !state.busy && state.pending == null
+    val enabled = state.ready && state.loaded && !state.busy && state.pending == null
     val cover = LocalAppWindowClass.current.coverScreen
     Column(Modifier.fillMaxSize().testTag("todo-screen")) {
         Row(Modifier.fillMaxWidth().padding(horizontal = if (cover) 8.dp else 16.dp),
             verticalAlignment = Alignment.CenterVertically) {
             Text(if (state.editor == null) "Your tasks" else if (state.editor.original == null) "New task" else "Edit task",
                 Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-            IconButton(actions::refreshTodo, enabled = screen.ready && !state.busy) {
+            IconButton(actions::refreshTodo, enabled = !state.busy) {
                 Glyph(R.drawable.ic_refresh, "Refresh Todo")
             }
             if (state.editor == null) TextButton(actions::newTodo, enabled = enabled) { Text("Add") }
@@ -35,13 +35,16 @@ internal fun TodoScreen(screen: ScreenState, actions: TodoActions) {
                 modifier = Modifier.testTag("todo-save")) { Text("Save") }
         }
         if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-        if (!screen.ready) Text("Connect to Grace to use Todo.", Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        if (!state.ready) {
+            Text("Connect to Grace to use Todo.", Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+            state.error?.let { Text(it, Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
+        }
         // Put notices in the scrollable content so recovery controls remain reachable on the cover.
         val editor = state.editor
         if (editor != null) {
             LazyColumn(Modifier.fillMaxSize().testTag("todo-editor"), contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                item { TodoNotices(state, screen.ready, actions) }
+                item { TodoNotices(state, state.ready, actions) }
                 item {
                     OutlinedTextField(editor.title, actions::todoTitle, label = { Text("Title") }, singleLine = true,
                         isError = editor.title.any(Char::isISOControl),
@@ -78,7 +81,7 @@ internal fun TodoScreen(screen: ScreenState, actions: TodoActions) {
                 }
                 item { TextButton(actions::closeTodoEditor, enabled = !state.busy) { Text("Close") } }
             }
-        } else if (screen.ready) {
+        } else if (state.ready) {
             val pager = rememberPagerState(initialPage = todoStatuses.indexOf(state.status)) { todoStatuses.size }
             LaunchedEffect(state.status) { pager.animateScrollToPage(todoStatuses.indexOf(state.status)) }
             LaunchedEffect(pager) {
@@ -101,7 +104,7 @@ internal fun TodoScreen(screen: ScreenState, actions: TodoActions) {
                 PullToRefreshBox(isRefreshing = state.busy, onRefresh = actions::refreshTodo, modifier = Modifier.fillMaxSize()) {
                     val tasks = state.items.filter { it.status == todoStatuses[page] }
                     TodoTaskList(tasks, page, enabled, !state.busy && state.loaded, actions, cover,
-                        notices = { TodoNotices(state, screen.ready, actions) },
+                        notices = { TodoNotices(state, state.ready, actions) },
                         empty = {
                             if (state.loaded) Text("No tasks ${when (page) { 0 -> "to do"; 1 -> "in progress"; else -> "done yet" }}.",
                                 Modifier.padding(vertical = 16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)

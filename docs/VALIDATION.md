@@ -1,5 +1,32 @@
 # Validation
 
+## 2026-10-06 — Rust-owned Todo service
+
+- Added the authenticated Todo WSS route, repo-owned shared Rust storage/CLI,
+  independent Android Todo connection, and explicit database cutover tooling.
+- `scripts/check` passed, including the real stock control-socket fragmented
+  20 MiB round trip, Rust format/clippy/tests, Kotlin unit tests, Android debug
+  builds, instrumentation APK compilation, and lint.
+- Storage/CLI fixtures cover concurrency, rollback, revision conflicts, archived
+  records, ordered notes, migration refusal, retained source, and reverse cutover
+  preserving writes made after migration. Transfer uses SQLite backup and verifies
+  schema, integrity, foreign keys, records, and allocation sequences.
+- Focused managed Android 16 tests passed: `AppTest#nativeTodoOpensWithoutPreviewAndReturnsToChats`,
+  `TodoUiTest#addsEditsAndMovesATaskThroughNativeControls`,
+  `TodoUiTest#offlineAndUncertainSaveDoNotOfferSilentRetry`,
+  `TodoUiTest#swipesMoveBothDirectionsAndLongPressReorders`, and
+  `TodoUiTest#coverKeepsTabsEditingAndDiscardReachableWithLargeText`.
+  The first navigation run failed only in fixture shutdown; socket teardown and
+  the mock close handshake were corrected, and that affected test passed on rerun.
+- The isolated `scripts/candidate-check.py --todo-cli` fixture passed using the
+  new systemd sandbox: authenticated stock/Todo connections, selected-status
+  creation, SQLite writes, CLI notes visible through WSS, stock socket replacement,
+  and cleanup. Synthetic credentials and disposable databases only.
+- All 16 release-workflow fixtures passed; updated Ansible syntax and shell
+  syntax checks passed. Todo is included in the verified build artifact set.
+- No live Todo data migration, forwarder deployment, publication, or phone
+  installation was performed. Cutover and recovery are documented in `docs/TODO.md`.
+
 ## 2026-10-05 — Android 0.4.6 (38)
 
 - Source revision: `e495815de604644bbee96a0277e2eafdf8e895c0`.

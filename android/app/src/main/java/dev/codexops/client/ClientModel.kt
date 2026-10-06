@@ -92,14 +92,27 @@ constructor(
         streamingHaptics.cancel()
         _state.update { it.copy(liveAssistantText = null) }
     }
-    private val todoController = TodoController(viewModelScope, local, StockTodoOperations(rpc),
+    private val todoConnection = TodoConnection(allowLoopbackTest)
+    private val todoController = TodoController(viewModelScope, local, ServiceTodoOperations(todoConnection),
         { _state.value }, { todo -> _state.update { it.copy(todo = todo) } })
     override fun openTodo() {
         cancelStreamingHaptics()
         cancelList(); saveList()
         _state.update { it.copy(page = "todo", error = null) }
     }
-    override fun refreshTodo() = todoController.refresh()
+    override fun refreshTodo() { viewModelScope.launch { connectTodo() } }
+    private suspend fun connectTodo() {
+        try {
+            val token = local.token()
+            if (token.isEmpty()) { todoController.unavailable(); return }
+            todoConnection.connect(host.endpoint, token)
+            todoController.connected()
+            todoController.refresh()
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            todoController.unavailable()
+        }
+    }
     override fun selectTodoStatus(status: String) = todoController.select(status)
     override fun newTodo() = todoController.new()
     override fun openTodoTask(id: Long) = todoController.open(id)
@@ -260,11 +273,16 @@ constructor(
             }
         }
         viewModelScope.launch {
-            state.map { Triple(it.page == "todo", it.ready, it.appForeground) }.distinctUntilChanged()
-                .collect { (visible, ready, foreground) ->
-                    if (!ready) todoController.disconnected()
-                    else if (visible && foreground) todoController.refresh()
+            state.map { Triple(it.page == "todo", it.configured, it.appForeground) }.distinctUntilChanged()
+                .collect { (visible, configured, foreground) ->
+                    if (visible && configured && foreground) connectTodo()
                 }
+        }
+        viewModelScope.launch {
+            todoConnection.connected.collect { connected ->
+                if (!connected) todoController.disconnected()
+                else todoController.connected()
+            }
         }
         viewModelScope.launch {
             state.map { Triple(it.ready, it.page, it.thread) }.distinctUntilChanged().collect { (ready, page, thread) ->
@@ -449,6 +467,7 @@ constructor(
         viewModelScope.launch {
             try {
                 require(value.trim().length >= 43)
+                todoConnection.close()
                 local.saveToken(value.trim())
                 connectionJob?.cancel()
                 connectionJob = null
@@ -2718,6 +2737,7 @@ constructor(
     override fun onCleared() {
         taskTools.cancelAll()
         network.unregisterNetworkCallback(callback)
+        todoConnection.close()
         rpc.dispose()
     }
 }

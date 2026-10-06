@@ -18,7 +18,7 @@ data class TodoEditor(val original: TodoItem? = null, val title: String = "", va
 
 data class TodoState(
     val items: List<TodoItem> = emptyList(), val status: String = "To Do",
-    val loaded: Boolean = false, val busy: Boolean = false,
+    val ready: Boolean = false, val loaded: Boolean = false, val busy: Boolean = false,
     val editor: TodoEditor? = null, val confirmDiscard: Boolean = false,
     val error: String? = null, val pending: String? = null, val reviewed: Boolean = false,
 )
@@ -50,12 +50,8 @@ internal interface TodoOperations {
     suspend fun move(task: TodoItem, status: String): TodoItem
 }
 
-internal class StockTodoOperations(private val rpc: RemoteSession) : TodoOperations {
+internal class ServiceTodoOperations(private val rpc: TodoRpc) : TodoOperations {
     companion object {
-        const val PROGRAM = "/home/agent/.local/bin/todo"
-        const val DATABASE = "/home/agent/.local/share/todo/tasks.sqlite3"
-        const val DIRECTORY = "/home/agent/workspaces/todo"
-
         private fun JsonObject.text(key: String): String =
             (get(key) as? JsonPrimitive)?.takeIf { it.isString }?.content ?: error("Invalid Todo text")
         private fun JsonObject.number(key: String): Long =
@@ -72,59 +68,37 @@ internal class StockTodoOperations(private val rpc: RemoteSession) : TodoOperati
         }
     }
 
-    private suspend fun call(args: List<String>, mutating: Boolean, kind: String): JsonObject {
-        val generation = rpc.generation
-        val response = rpc.callWithTimeout("command/exec", obj(
-            "command" to JsonArray((listOf(PROGRAM, "--db", DATABASE, "--json") + args).map(::s)),
-            "cwd" to s(DIRECTORY),
-            "sandboxPolicy" to obj("type" to s(if (mutating) "dangerFullAccess" else "readOnly")),
-            "timeoutMs" to JsonPrimitive(15_000), "outputBytesCap" to JsonPrimitive(1_048_576),
-        ), 20_000)
-        check(rpc.generation == generation)
-        val exit = response.str("exitCode").toIntOrNull() ?: error("Missing command result")
-        if (exit != 0) {
-            // Only the CLI's documented rollback/validation errors establish that no write committed.
-            val codes = mapOf(2 to "invalid_input", 3 to "not_found", 4 to "revision_conflict", 5 to "database_error")
-            val error = runCatching { wire.parseToJsonElement(response.str("stderr")).jsonObject }.getOrNull()
-            if (codes[exit] != null && error?.get("schema_version") == JsonPrimitive(1) &&
-                error["ok"] == JsonPrimitive(false) && error.map("error").str("code") == codes[exit])
-                throw TodoRejected(codes.getValue(exit))
-            error("Todo command outcome unavailable")
-        }
-        return wire.parseToJsonElement(response.str("stdout")).jsonObject.also {
-            require(it["schema_version"] == JsonPrimitive(1) && it["ok"] == JsonPrimitive(true) && it.str("kind") == kind)
-        }
+    private suspend fun call(method: String, params: JsonObject): JsonObject = try {
+        rpc.call(method, params)
+    } catch (error: TodoRpcRejected) {
+        // Only documented errors that prove no transaction was applied unlock writes.
+        if ((error.code == -32602 && error.kind == "invalid_input") ||
+            (error.code == -32001 && error.kind in setOf("invalid_input", "not_found", "revision_conflict", "database_error", "busy")))
+            throw TodoRejected(error.kind)
+        throw error
     }
-
     override suspend fun list(): List<TodoItem> =
-        call(listOf("list"), false, "task-list").getValue("tasks").jsonArray.map { task(it, false) }.also {
+        call("todo/list", obj()).getValue("tasks").jsonArray.map { task(it, false) }.also {
             require(it.map(TodoItem::id).distinct().size == it.size)
         }
-
     override suspend fun show(id: Long): TodoItem =
-        task(call(listOf("show", id.toString()), false, "task").getValue("task"), true).also { require(it.id == id) }
-
+        task(call("todo/show", obj("id" to JsonPrimitive(id))).getValue("task"), true).also { require(it.id == id) }
     override suspend fun save(editor: TodoEditor): TodoItem {
         require(editor.creationStatus in todoStatuses)
         val original = editor.original
-        val args = if (original == null) listOf("add", "--description=${editor.description}", "--", editor.title)
-        else listOf("edit", original.id.toString(), "--expect-revision", original.revision.toString(),
-            "--title=${editor.title}", "--description=${editor.description}")
-        val saved = task(call(args, true, "task").getValue("task"), true).also {
+        val params = obj("title" to s(editor.title), "description" to s(editor.description),
+            "status" to if (original == null) s(editor.creationStatus) else null,
+            "id" to original?.id?.let(::JsonPrimitive), "revision" to original?.revision?.let(::JsonPrimitive))
+        return task(call(if (original == null) "todo/create" else "todo/edit", params).getValue("task"), true).also {
             require(it.title == editor.title.trim() && it.description == editor.description)
-            require(if (original == null) it.revision == 1L && it.status == "To Do"
+            require(if (original == null) it.revision == 1L && it.status == editor.creationStatus
                 else it.id == original.id && it.revision == original.revision + 1 && it.status == original.status)
         }
-        if (original != null || editor.creationStatus == "To Do") return saved
-        // Creation has committed. Even a rejected move must keep the journal locked
-        // for review rather than offer a second create of the same draft.
-        return try { move(saved, editor.creationStatus) }
-        catch (e: TodoRejected) { throw IllegalStateException("Created task; status change rejected", e) }
     }
-
     override suspend fun move(task: TodoItem, status: String): TodoItem {
         require(status in todoStatuses)
-        return task(call(listOf("move", task.id.toString(), status, "--expect-revision", task.revision.toString()), true, "task").getValue("task"), true).also {
+        return task(call("todo/move", obj("id" to JsonPrimitive(task.id), "revision" to JsonPrimitive(task.revision),
+            "status" to s(status))).getValue("task"), true).also {
             require(it.id == task.id && it.status == status && it.revision == task.revision + 1)
         }
     }
@@ -145,21 +119,27 @@ internal class TodoController(
     }
 
     fun disconnected() {
-        update(state.copy(items = emptyList(), loaded = false, reviewed = false))
+        update(state.copy(ready = false, items = emptyList(), loaded = false, reviewed = false))
+    }
+
+    fun connected() { update(state.copy(ready = true)) }
+    fun unavailable() {
+        disconnected()
+        update(state.copy(error = "Todo service unavailable. Check the connection and deploy the Todo-enabled service on Grace, then refresh."))
     }
 
     fun refresh() {
-        if (state.busy || !screen().ready) return
+        if (state.busy || !state.ready) return
         update(state.copy(busy = true, error = null, reviewed = false))
         scope.launch {
             try {
                 loadJournal()
                 order = store.get(orderKey).split(",").mapNotNull(String::toLongOrNull)
                 val items = operations.list()
-                if (screen().ready) update(state.copy(items = ordered(items), loaded = true, reviewed = state.pending != null))
+                if (state.ready) update(state.copy(items = ordered(items), loaded = true, reviewed = state.pending != null))
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                update(state.copy(loaded = false, error = "Could not load Todo. Check the connection and that the todo CLI is installed on Grace, then refresh."))
+                update(state.copy(loaded = false, error = "Could not load Todo. Check the connection and the Todo service on Grace, then refresh."))
             } finally { update(state.copy(busy = false)) }
         }
     }
@@ -179,12 +159,12 @@ internal class TodoController(
     }
 
     fun open(id: Long) {
-        if (state.busy || !screen().ready || state.editor != null) return
+        if (state.busy || !state.ready || state.editor != null) return
         update(state.copy(busy = true, error = null))
         scope.launch {
             try {
                 val task = operations.show(id)
-                if (screen().ready) update(state.copy(editor = TodoEditor(task, task.title, task.description)))
+                if (state.ready) update(state.copy(editor = TodoEditor(task, task.title, task.description)))
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 update(state.copy(error = "Could not open this task. It may have been archived or changed; refresh the board."))
@@ -192,7 +172,7 @@ internal class TodoController(
         }
     }
 
-    private fun canWrite() = screen().ready && journalLoaded && state.loaded && !state.busy && state.pending == null
+    private fun canWrite() = state.ready && journalLoaded && state.loaded && !state.busy && state.pending == null
 
     fun title(value: String) { if (canWrite()) update(state.copy(editor = state.editor?.copy(title = value), error = null)) }
     fun description(value: String) { if (canWrite()) update(state.copy(editor = state.editor?.copy(description = value), error = null)) }
@@ -239,7 +219,7 @@ internal class TodoController(
                 val ids = next.map { it.id }
                 store.put(orderKey, ids.joinToString(","))
                 order = ids
-                if (screen().ready) update(state.copy(items = ordered(state.items)))
+                if (state.ready) update(state.copy(items = ordered(state.items)))
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 update(state.copy(error = "Could not save the priority order on this phone."))
@@ -265,7 +245,7 @@ internal class TodoController(
                 update(state.copy(pending = null))
                 try {
                     val items = operations.list()
-                    if (screen().ready) update(state.copy(items = ordered(items), loaded = true))
+                    if (state.ready) update(state.copy(items = ordered(items), loaded = true))
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
                     update(state.copy(error = "Saved. Could not refresh the board; refresh when connected."))
@@ -278,6 +258,7 @@ internal class TodoController(
                         "revision_conflict" -> "This task changed on Grace. Your edits are still here. Close the editor and reopen the task to compare before saving again."
                         "invalid_input" -> "The change was rejected. Check the title and description."
                         "not_found" -> "This task no longer exists. Close the editor and refresh."
+                        "busy" -> "Todo is busy. No change was applied; refresh before trying again."
                         else -> "The database could not save this change. No change was applied; check Grace before trying again."
                     }))
                 } else update(state.copy(error = when {
@@ -290,7 +271,7 @@ internal class TodoController(
     }
 
     fun acknowledge() {
-        if (!screen().ready || state.busy || state.pending == null || !state.reviewed) return
+        if (!state.ready || state.busy || state.pending == null || !state.reviewed) return
         update(state.copy(busy = true))
         scope.launch {
             try {
