@@ -135,6 +135,7 @@ data class ScreenState(
     val hapticsEnabled: Boolean = true,
     val liveAssistantText: LiveAssistantText? = null,
     val configured: Boolean = false,
+    val weeklyUsage: WeeklyUsageState = WeeklyUsageState(),
     val projects: List<CodexProject> = emptyList(),
     val projectAddition: ProjectAdditionState = ProjectAdditionState(),
     val todo: TodoState = TodoState(),
@@ -149,7 +150,10 @@ data class ScreenState(
     val archived: Boolean = false,
     val pendingTaskActions: Set<String> = emptySet(),
     val uncertainTaskActions: Set<String> = emptySet(),
+    val pendingTaskRenames: Set<String> = emptySet(),
+    val uncertainTaskRenames: Set<String> = emptySet(),
     val taskNotice: TaskNotice? = null,
+    val snooze: SnoozeState = SnoozeState(),
     val chatSort: ChatSort = ChatSort.Recent,
     val listInitialized: Boolean = false,
     val listIndex: Int = 0,
@@ -199,6 +203,7 @@ data class TaskNotice(
     val message: String,
     val threadId: String? = null,
     val undoArchived: Boolean? = null,
+    val changeSnooze: String? = null,
 )
 
 fun ScreenState.collaborationModel(): String? =
@@ -237,12 +242,21 @@ interface HomeActions {
     fun undoTaskAction(noticeId: String)
 
     fun dismissTaskNotice(noticeId: String)
+
+    fun snoozeTask(id: String, until: java.time.Instant? = null) {}
+    fun editSnooze(id: String) {}
+    fun dismissSnoozeEditor() {}
+    fun returnSnoozedTask(id: String) {}
+    fun refreshSnoozes() {}
 }
 
 interface SettingsActions {
+    fun refreshWeeklyUsage() {}
+
     fun hapticFeedback(enabled: Boolean)
 
     fun openArchives()
+    fun openSnoozed() {}
 
     fun saveCredential(value: String)
 

@@ -103,16 +103,6 @@ class BugReportTest {
         assertEquals(1, results.getValue("good").second.artifacts.size)
     }
 
-    @Test fun shakeGateHonorsLifecyclePreferenceOpenReportAndCooldown() {
-        val gate = ReportShakeGate()
-        assertFalse(gate.accept(0, false, true, false))
-        assertFalse(gate.accept(0, true, false, false))
-        assertFalse(gate.accept(0, true, true, true))
-        assertTrue(gate.accept(0, true, true, false))
-        assertFalse(gate.accept(2999, true, true, false))
-        assertTrue(gate.accept(3000, true, true, false))
-    }
-
     @Test fun screenshotPromptRequiresAndroid14VisibilityPreferenceAndNoOpenReport() {
         val ready = BugReportState(loaded = true)
         assertTrue(screenshotPromptAllowed(34, true, ready))
@@ -123,7 +113,6 @@ class BugReportTest {
         assertFalse(screenshotPromptAllowed(34, true, ready.copy(visible = true)))
         assertFalse(screenshotPromptAllowed(34, true, ready.copy(capturing = true)))
         assertFalse(screenshotPromptAllowed(34, true, ready.copy(busy = true)))
-        assertFalse(ready.shakeEnabled)
     }
 
     @Test fun aNativeCollectorThatIgnoresInterruptsCannotBlockTheDeadline() = runBlocking {

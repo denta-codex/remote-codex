@@ -45,6 +45,58 @@ import org.junit.rules.TestName
 import org.junit.Assert.*
 
 class AppTest {
+    private fun weeklyUsageFixture(used: Int = 28): JsonObject = obj("rateLimits" to obj(
+        "primary" to obj("usedPercent" to JsonPrimitive(91), "windowDurationMins" to JsonPrimitive(300)),
+        "secondary" to obj("usedPercent" to JsonPrimitive(used), "windowDurationMins" to JsonPrimitive(10080),
+            "resetsAt" to JsonPrimitive(1893456000L)),
+    ))
+    @Volatile private var weeklyUsageResponse = weeklyUsageFixture()
+    @Volatile private var rejectWeeklyUsage = false
+    private val weeklyUsageReads = AtomicInteger()
+
+    @Test
+    fun settingsShowsWeeklyRemainingRefreshesAndHandlesSparseUpdates() {
+        compose.runOnUiThread { model.settings() }
+        compose.waitUntil(10000) { model.state.value.weeklyUsage.remainingPercent == 72 }
+        compose.onNodeWithTag("weekly-usage-remaining").assertTextEquals("72% remaining")
+        compose.onNodeWithText("Resets", substring = true).assertIsDisplayed()
+        weeklyUsageResponse = weeklyUsageFixture(used = 60)
+        compose.onNodeWithTag("refresh-weekly-usage").performClick()
+        compose.waitUntil(10000) { model.state.value.weeklyUsage.remainingPercent == 40 }
+        compose.onNodeWithTag("weekly-usage-remaining").assertTextEquals("40% remaining")
+        weeklyUsageResponse = weeklyUsageFixture(used = 100)
+        emit(peer!!, "account/rateLimits/updated", obj("rateLimits" to obj("primary" to obj(
+            "usedPercent" to JsonPrimitive(5), "windowDurationMins" to JsonPrimitive(300)))))
+        compose.waitUntil(10000) { model.state.value.weeklyUsage.remainingPercent == 0 }
+        compose.onNodeWithTag("weekly-usage-remaining").assertTextEquals("0% remaining")
+        assertTrue(weeklyUsageReads.get() >= 3)
+    }
+
+    @Test
+    fun weeklyUsageNeverMislabelsShortWindowsAndCanRecoverFromReadFailure() {
+        val shortOnly = obj("rateLimits" to obj("primary" to obj(
+            "usedPercent" to JsonPrimitive(3), "windowDurationMins" to JsonPrimitive(300))))
+        assertNull(parseWeeklyUsage(shortOnly).remainingPercent)
+        val codex = weeklyUsageFixture(110)["rateLimits"]!!
+        assertEquals(0, parseWeeklyUsage(obj("rateLimits" to shortOnly["rateLimits"],
+            "rateLimitsByLimitId" to obj("codex" to codex))).remainingPercent)
+        assertEquals(100, parseWeeklyUsage(weeklyUsageFixture(-10)).remainingPercent)
+        rejectWeeklyUsage = true
+        compose.runOnUiThread { model.settings() }
+        compose.waitUntil(10000) { model.state.value.weeklyUsage.message?.contains("Couldn't load") == true }
+        compose.onNodeWithText("Couldn't load weekly usage. Try refreshing.").assertIsDisplayed()
+        compose.onNodeWithTag("weekly-usage-remaining").assertDoesNotExist()
+        rejectWeeklyUsage = false
+        weeklyUsageResponse = shortOnly
+        compose.onNodeWithTag("refresh-weekly-usage").performClick()
+        compose.waitUntil(10000) { model.state.value.weeklyUsage.message?.contains("unavailable") == true }
+        compose.onNodeWithText("Weekly usage is unavailable for this account.").assertIsDisplayed()
+        weeklyUsageResponse = weeklyUsageFixture()
+        compose.onNodeWithTag("refresh-weekly-usage").performClick()
+        compose.waitUntil(10000) { model.state.value.weeklyUsage.remainingPercent == 72 }
+        compose.onNodeWithTag("weekly-usage-remaining").assertTextEquals("72% remaining")
+    }
+
     private val suggestionMessages = listOf("Show me a layout", "What about speed?", "How will we preserve my draft?")
     private val followUpRequests = CopyOnWriteArrayList<JsonObject>()
     private val heldFollowUpRequests = CopyOnWriteArrayList<JsonObject>()
@@ -270,6 +322,7 @@ class AppTest {
         compose.onNodeWithTag("task-row-task-test").performTouchInput { swipeRight() }
         compose.waitForIdle()
         assertEquals(3, recorder.ticks.get())
+        compose.onNodeWithTag("task-row-task-test").performClick() // Close the revealed tray.
         compose.onNodeWithText("Fixture task").performClick()
         compose.waitUntil(10000) { !model.state.value.busy && model.state.value.queueReady }
         enqueueFixture("A silent queued send")
@@ -460,6 +513,66 @@ class AppTest {
     }
 
     @Test
+    fun conversationMenuRenamesTaskAndUpdatesList() {
+        compose.onNodeWithText("Fixture task").performClick()
+        compose.waitUntil(10000) { model.state.value.page == "chat" && !model.state.value.busy }
+        compose.onNodeWithTag("app-menu").performClick()
+        compose.onNodeWithTag("rename-chat-menu").assertIsEnabled().performClick()
+        compose.onNodeWithTag("rename-task-name").assertTextEquals("Task name", "Fixture task")
+        compose.onNodeWithTag("rename-task-name").performTextClearance()
+        compose.onNodeWithTag("save-task-name").assertIsNotEnabled()
+        compose.onNodeWithTag("rename-task-name").performTextInput("  📡 echo dot manager  ")
+        compose.onNodeWithTag("save-task-name").performClick()
+        compose.waitUntil(5000) { model.state.value.title == "📡 echo dot manager" && model.state.value.pendingTaskRenames.isEmpty() }
+        assertEquals(1, renameMutations.size)
+        assertEquals("task-test", renameMutations.single().str("threadId"))
+        assertEquals("📡 echo dot manager", renameMutations.single().str("name"))
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.waitUntil(5000) { !model.state.value.listLoading }
+        compose.onNodeWithText("📡 echo dot manager").assertIsDisplayed()
+        compose.onNodeWithText("Fixture task").assertDoesNotExist()
+    }
+
+    @Test
+    fun rejectedRenamePreservesTitleAndAllowsCorrection() {
+        compose.onNodeWithText("Fixture task").performClick()
+        compose.waitUntil(10000) { model.state.value.page == "chat" && !model.state.value.busy }
+        rejectRename = true
+        compose.runOnUiThread { model.renameCurrentTask("Rejected name") }
+        compose.waitUntil(5000) { model.state.value.error == "The server rejected the rename." }
+        assertEquals("Fixture task", model.state.value.title)
+        assertTrue(model.state.value.uncertainTaskRenames.isEmpty())
+        rejectRename = false
+        compose.runOnUiThread { model.renameCurrentTask("Corrected name") }
+        compose.waitUntil(5000) { model.state.value.title == "Corrected name" }
+        assertEquals(2, renameMutations.size)
+    }
+
+    @Test
+    fun lostRenameReplyDoesNotAutomaticallyRetry() {
+        compose.onNodeWithText("Fixture task").performClick()
+        compose.waitUntil(10000) { model.state.value.page == "chat" && !model.state.value.busy }
+        dropRenameReply = true
+        compose.runOnUiThread {
+            model.renameCurrentTask("📡 echo dot manager")
+            model.renameCurrentTask("Duplicate rename")
+        }
+        compose.waitUntil(5000) { "task-test" in model.state.value.uncertainTaskRenames }
+        assertEquals("Fixture task", model.state.value.title)
+        compose.onNodeWithTag("app-menu").performClick()
+        compose.onNodeWithTag("rename-chat-menu").assertIsNotEnabled()
+        compose.runOnUiThread { model.renameCurrentTask("Retry rename") }
+        assertEquals(1, renameMutations.size)
+        compose.onNodeWithText("Settings").performClick()
+        compose.runOnUiThread { model.connect() }
+        compose.waitUntil(10000) { model.state.value.ready }
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.title == "📡 echo dot manager" }
+        assertTrue(model.state.value.uncertainTaskRenames.isEmpty())
+        assertEquals(1, renameMutations.size)
+    }
+
+    @Test
     fun conversationMenuUnknownArchiveStaysOpenWithoutRetry() {
         compose.onNodeWithText("Fixture task").performClick()
         compose.waitUntil(10000) { model.state.value.page == "chat" && !model.state.value.busy }
@@ -475,15 +588,70 @@ class AppTest {
     }
 
     @Test
+    fun taskSwipeMenuRevealsWithoutMutatingAndClosesSafely() {
+        val row = compose.onNodeWithTag("task-row-task-test")
+        val action = compose.onNodeWithTag("task-unread-action-task-test")
+        row.performTouchInput {
+            swipe(center, Offset(center.x + width * 0.08f, center.y), 300)
+        }
+        compose.waitForIdle()
+        action.assertDoesNotExist()
+        assertEquals("home", model.state.value.page)
+        row.performTouchInput {
+            down(center)
+            moveTo(Offset(width * 0.95f, center.y), 400)
+            cancel()
+        }
+        compose.waitForIdle()
+        action.assertDoesNotExist()
+        row.performTouchInput { swipeRight() }
+        action.assertIsDisplayed().assertIsEnabled()
+        assertEquals("home", model.state.value.page)
+        assertTrue(model.state.value.chatActivity.values.none { it.unread })
+        assertTrue(archiveMutations.isEmpty())
+        row.performTouchInput {
+            down(center)
+            moveTo(Offset(width * 0.05f, center.y), 400)
+            cancel()
+        }
+        action.assertIsDisplayed()
+        // Pulling an open tray back closes it, even with a full left swipe.
+        row.performTouchInput { swipeLeft() }
+        compose.waitForIdle()
+        action.assertDoesNotExist()
+        assertTrue(archiveMutations.isEmpty())
+        row.performTouchInput { swipeRight() }
+        row.performClick()
+        compose.waitForIdle()
+        action.assertDoesNotExist()
+        assertEquals("home", model.state.value.page)
+        row.performTouchInput { swipeRight() }
+        compose.onNodeWithText("Search chats").performTouchInput { click() }
+        compose.waitForIdle()
+        action.assertDoesNotExist()
+        row.performTouchInput { swipeRight() }
+        action.performTouchInput { click() }
+        compose.waitUntil(5000) { model.state.value.chatActivity["task-test"]?.unread == true }
+        action.assertDoesNotExist()
+        assertEquals("home", model.state.value.page)
+        assertTrue(archiveMutations.isEmpty())
+    }
+
+    @Test
     fun taskSwipeTogglesUnread() {
         compose.onNodeWithText("Fixture task").performTouchInput { swipeRight() }
+        compose.waitForIdle()
+        assertFalse(model.state.value.chatActivity["task-test"]?.unread == true)
+        compose.onNodeWithTag("task-unread-action-task-test").assertIsDisplayed().performClick()
         compose.waitUntil(5000) { model.state.value.chatActivity["task-test"]?.unread == true }
         compose.onNodeWithContentDescription("Unread reply").assertExists()
-        // The same gesture acknowledges an unread task without opening it.
+        // The tray offers the inverse action without opening the task.
         compose.onNodeWithTag("task-row-task-test").performTouchInput { swipeRight() }
+        compose.onNodeWithTag("task-unread-action-task-test").assertIsDisplayed().performClick()
         compose.waitUntil(5000) { model.state.value.taskNotice?.message == "Marked read" }
         compose.onNodeWithContentDescription("Unread reply").assertDoesNotExist()
         compose.onNodeWithTag("task-row-task-test").performTouchInput { swipeRight() }
+        compose.onNodeWithTag("task-unread-action-task-test").assertIsDisplayed().performClick()
         compose.waitUntil(5000) { model.state.value.chatActivity["task-test"]?.unread == true }
         compose.runOnUiThread {
             store.clear()
@@ -501,6 +669,154 @@ class AppTest {
         compose.runOnUiThread { model.home() }
         compose.waitUntil(5000) { model.state.value.page == "home" && !model.state.value.listLoading }
         compose.onNodeWithContentDescription("Unread reply").assertDoesNotExist()
+    }
+
+    @Test
+    fun snoozeTapDefaultsToHourAndChangeTimeCanReturnEarly() {
+        compose.waitUntil(10000) { model.state.value.snooze.available && model.state.value.snooze.loaded && !model.state.value.listLoading }
+        compose.onNodeWithTag("task-row-task-test").performTouchInput { swipeRight() }
+        compose.onNodeWithTag("task-snooze-action-task-test").assertIsEnabled().performTouchInput { click() }
+        compose.waitUntil(10000) { model.state.value.taskNotice?.changeSnooze == "task-test" && !model.state.value.listLoading }
+        assertEquals(listOf("--for", "1h"), snoozeMutations.single().takeLast(2))
+        val remaining = java.time.Duration.between(java.time.Instant.now(), model.state.value.snooze.tasks.getValue("task-test").deadline).seconds
+        assertTrue(remaining in 3500..3600)
+        compose.onNodeWithTag("task-row-task-test").assertDoesNotExist()
+        compose.onNodeWithText("Change time").performClick()
+        compose.onNodeWithTag("snooze-time-sheet").assertIsDisplayed()
+        compose.onNodeWithTag("snooze-return-now").performClick()
+        compose.waitUntil(10000) { model.state.value.snooze.tasks.isEmpty() && !model.state.value.listLoading && model.state.value.tasks.any { it.str("id") == "task-test" } }
+        assertEquals(listOf("snooze", "unsnooze"), snoozeMutations.map { it[1] })
+        assertTrue(archiveMutations.isEmpty())
+        assertEquals(0, sent.get())
+    }
+
+    @Test
+    fun snoozeCustomDatePersistsInSnoozedChatsAndCanReturnNow() {
+        compose.waitUntil(10000) { model.state.value.snooze.available && !model.state.value.listLoading }
+        compose.onNodeWithTag("task-row-task-test").performTouchInput { swipeRight() }
+        compose.onNodeWithTag("task-snooze-action-task-test").performClick()
+        compose.waitUntil(10000) { model.state.value.taskNotice?.changeSnooze == "task-test" && !model.state.value.listLoading }
+        compose.onNodeWithText("Change time").performClick()
+        val next = model.state.value.snooze.tasks.getValue("task-test").deadline!!.atZone(java.time.ZoneId.systemDefault())
+            .plusDays(1).withHour(14).withMinute(15)
+        compose.onNodeWithTag("snooze-date").performClick()
+        androidx.test.espresso.Espresso.onView(androidx.test.espresso.matcher.ViewMatchers.isAssignableFrom(android.widget.DatePicker::class.java))
+            .perform(object : androidx.test.espresso.ViewAction {
+                override fun getConstraints(): org.hamcrest.Matcher<android.view.View> =
+                    androidx.test.espresso.matcher.ViewMatchers.isAssignableFrom(android.widget.DatePicker::class.java)
+                override fun getDescription() = "Choose tomorrow in the snooze date picker"
+                override fun perform(ui: androidx.test.espresso.UiController, view: android.view.View) {
+                    (view as android.widget.DatePicker).updateDate(next.year, next.monthValue - 1, next.dayOfMonth)
+                    ui.loopMainThreadUntilIdle()
+                }
+            })
+        androidx.test.espresso.Espresso.onView(androidx.test.espresso.matcher.ViewMatchers.withText(android.R.string.ok))
+            .perform(androidx.test.espresso.action.ViewActions.click())
+        compose.onNodeWithTag("snooze-time").performClick()
+        androidx.test.espresso.Espresso.onView(androidx.test.espresso.matcher.ViewMatchers.isAssignableFrom(android.widget.TimePicker::class.java))
+            .perform(object : androidx.test.espresso.ViewAction {
+                override fun getConstraints(): org.hamcrest.Matcher<android.view.View> =
+                    androidx.test.espresso.matcher.ViewMatchers.isAssignableFrom(android.widget.TimePicker::class.java)
+                override fun getDescription() = "Choose 2:15 PM in the snooze time picker"
+                override fun perform(ui: androidx.test.espresso.UiController, view: android.view.View) {
+                    (view as android.widget.TimePicker).apply { hour = next.hour; minute = next.minute }
+                    ui.loopMainThreadUntilIdle()
+                }
+            })
+        androidx.test.espresso.Espresso.onView(androidx.test.espresso.matcher.ViewMatchers.withText(android.R.string.ok))
+            .perform(androidx.test.espresso.action.ViewActions.click())
+        compose.onNodeWithTag("save-snooze-time").performClick()
+        compose.waitUntil(10000) { snoozeMutations.size == 2 && model.state.value.snooze.editor == null && model.state.value.snooze.pending.isEmpty() }
+        assertTrue("--until" in snoozeMutations[1])
+        val saved = model.state.value.snooze.tasks.getValue("task-test").deadline!!
+        assertEquals(next.withSecond(0).withNano(0).toInstant(), saved)
+        compose.runOnUiThread { model.settings() }
+        compose.onNodeWithTag("open-snoozed").performClick()
+        compose.onNodeWithTag("snoozed-task-task-test").assertIsDisplayed()
+        compose.onNodeWithText("Returns ${snoozeTime(saved)}").assertIsDisplayed()
+        compose.onNodeWithTag("return-snooze-task-test").performClick()
+        compose.waitUntil(10000) { model.state.value.snooze.tasks.isEmpty() }
+        compose.onNodeWithText("No snoozed chats").assertIsDisplayed()
+        assertEquals(listOf("snooze", "snooze", "unsnooze"), snoozeMutations.map { it[1] })
+        assertEquals(0, sent.get())
+    }
+
+    @Test
+    fun snoozeUnarchiveCancelsTimerInsteadOfLeavingAHiddenSchedule() {
+        compose.waitUntil(10000) { model.state.value.snooze.available && !model.state.value.listLoading }
+        compose.onNodeWithTag("task-row-task-test").performTouchInput { swipeRight() }
+        compose.onNodeWithTag("task-snooze-action-task-test").performClick()
+        compose.waitUntil(10000) { model.state.value.snooze.tasks["task-test"]?.scheduled == true && !model.state.value.listLoading }
+        compose.runOnUiThread { model.openArchives() }
+        compose.waitUntil(10000) { !model.state.value.listLoading && model.state.value.tasks.any { it.str("id") == "task-test" } }
+        compose.onNodeWithTag("task-row-task-test").performTouchInput { swipeLeft() }
+        compose.waitUntil(10000) { model.state.value.snooze.tasks.isEmpty() && !model.state.value.listLoading }
+        assertEquals(listOf("snooze", "unsnooze"), snoozeMutations.map { it[1] })
+        assertTrue(archiveMutations.isEmpty())
+        assertEquals(0, sent.get())
+    }
+
+    @Test
+    fun snoozePendingAndUncertainRequestsAreInspectedWithoutReplay() {
+        snoozeWaitsForIdle = true
+        compose.waitUntil(10000) { model.state.value.snooze.available && !model.state.value.listLoading }
+        compose.onNodeWithTag("task-row-task-test").performTouchInput { swipeRight() }
+        compose.onNodeWithTag("task-snooze-action-task-test").performClick()
+        compose.waitUntil(10000) { model.state.value.snooze.tasks["task-test"]?.waiting == true && !model.state.value.listLoading }
+        compose.onNodeWithTag("task-row-task-test").assertExists()
+        compose.onNodeWithText("Snoozes after it finishes").assertIsDisplayed()
+        compose.onNodeWithTag("task-row-task-test").performTouchInput { swipeLeft() }
+        compose.waitUntil(5000) { model.state.value.error == "Return this chat from Snoozed chats before archiving it." }
+        assertTrue(archiveMutations.isEmpty())
+        assertEquals(1, snoozeMutations.size)
+        compose.runOnUiThread { model.openSnoozed() }
+        compose.onNodeWithTag("return-snooze-task-test").performClick()
+        compose.waitUntil(10000) { model.state.value.snooze.tasks.isEmpty() }
+        snoozeWaitsForIdle = false
+        loseSnoozeReply = true
+        compose.runOnUiThread { model.home() }
+        compose.waitUntil(10000) { !model.state.value.listLoading && model.state.value.tasks.any { it.str("id") == "task-test" } }
+        compose.onNodeWithTag("task-row-task-test").performTouchInput { swipeRight() }
+        compose.onNodeWithTag("task-snooze-action-task-test").performClick()
+        compose.waitUntil(10000) { "task-test" in model.state.value.snooze.uncertain }
+        assertNull(model.state.value.taskNotice?.changeSnooze)
+        compose.runOnUiThread { model.snoozeTask("task-test"); model.connect() }
+        compose.waitUntil(15000) { model.state.value.ready && model.state.value.snooze.available && model.state.value.snooze.uncertain.isEmpty() }
+        assertEquals(listOf("snooze", "unsnooze", "snooze"), snoozeMutations.map { it[1] })
+        compose.runOnUiThread { model.openSnoozed() }
+        compose.onNodeWithTag("snoozed-task-task-test").assertIsDisplayed()
+        assertEquals(0, sent.get())
+    }
+
+    @Test
+    fun snoozeCompactTrayAndEditorRemainReachable() {
+        compose.waitUntil(10000) { model.state.value.snooze.available && !model.state.value.listLoading }
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                RemoteTheme {
+                    val density = androidx.compose.ui.platform.LocalDensity.current
+                    CompositionLocalProvider(
+                        LocalLayoutDirection provides LayoutDirection.Rtl,
+                        androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(density.density, 1.5f),
+                    ) { Box(Modifier.size(360.dp, 440.dp)) { App(model) } }
+                }
+            }
+        }
+        compose.onNodeWithTag("task-row-task-test").performTouchInput { swipeRight() }
+        val unread = compose.onNodeWithTag("task-unread-action-task-test")
+        val snooze = compose.onNodeWithTag("task-snooze-action-task-test")
+        unread.assertIsDisplayed()
+        snooze.assertIsDisplayed().assertIsEnabled()
+        assertTrue(unread.getUnclippedBoundsInRoot().left < snooze.getUnclippedBoundsInRoot().left)
+        snooze.performClick()
+        compose.waitUntil(10000) { model.state.value.taskNotice?.changeSnooze == "task-test" }
+        compose.onNodeWithText("Change time").performClick()
+        compose.onNodeWithTag("snooze-date").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("snooze-time").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("save-snooze-time").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("snooze-return-now").performScrollTo().assertIsDisplayed().performClick()
+        compose.waitUntil(10000) { model.state.value.snooze.tasks.isEmpty() }
+        assertEquals(listOf("snooze", "unsnooze"), snoozeMutations.map { it[1] })
     }
 
     @Test
@@ -542,6 +858,7 @@ class AppTest {
         compose.runOnUiThread { model.settings(); model.openArchives() }
         compose.waitUntil(5000) { model.state.value.tasks.any { it.str("id") == "task-test" } && !model.state.value.listLoading }
         row.performTouchInput { swipeRight() }
+        compose.onNodeWithTag("task-unread-action-task-test").assertIsDisplayed().performClick()
         compose.waitUntil(5000) { model.state.value.chatActivity["task-test"]?.unread == true }
         row.performTouchInput { swipeLeft() }
         compose.waitUntil(5000) { model.state.value.taskNotice?.message == "Task unarchived" && !model.state.value.listLoading }
@@ -632,6 +949,7 @@ class AppTest {
         assertTrue(archiveMutations.isEmpty())
         assertTrue(model.state.value.chatActivity.values.none { it.unread })
         row.performTouchInput { swipeRight() }
+        compose.onNodeWithTag("task-unread-action-task-test").assertIsDisplayed().performClick()
         compose.waitUntil(5000) { model.state.value.chatActivity["task-test"]?.unread == true }
         row.performTouchInput { swipeLeft() }
         compose.waitUntil(5000) { model.state.value.taskNotice?.message == "Task archived" }
@@ -664,6 +982,10 @@ class AppTest {
 
     private val archivedTaskIds = ConcurrentHashMap.newKeySet<String>()
     private val archiveMutations = CopyOnWriteArrayList<JsonObject>()
+    private val snoozeRecords = ConcurrentHashMap<String, JsonObject>()
+    private val snoozeMutations = CopyOnWriteArrayList<List<String>>()
+    @Volatile private var snoozeWaitsForIdle = false
+    @Volatile private var loseSnoozeReply = false
     @Volatile private var dropArchiveReply = false
     @Volatile private var rejectArchive = false
     private val prepared = AtomicInteger()
@@ -691,6 +1013,9 @@ class AppTest {
     @Volatile private var holdTaskList = false
     private val heldTaskLists = CopyOnWriteArrayList<JsonObject>()
     @Volatile private var fixtureTitle = "Fixture task"
+    private val renameMutations = CopyOnWriteArrayList<JsonObject>()
+    @Volatile private var rejectRename = false
+    @Volatile private var dropRenameReply = false
     private val recencyRequests = CopyOnWriteArrayList<JsonObject>()
     @Volatile private var lastThreadStart: JsonObject? = null
     private val worktreeAdds = AtomicInteger()
@@ -836,6 +1161,44 @@ class AppTest {
                                         (params["command"] as? JsonArray)
                                             ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
                                             ?: emptyList()
+                                    if (method == "command/exec" && StockSnoozeOperations.PROBE_NAME in command && testName.methodName.startsWith("snooze")) {
+                                        val result = obj("exitCode" to JsonPrimitive(0),
+                                            "stdout" to s("/home/agent/.local/bin/codex-tasks\ngrace\nagent\n{\"snooze_protocol\":2}\n"))
+                                        ws.send(obj("id" to m["id"], "result" to result).toString())
+                                        return
+                                    }
+                                    if (method == "command/exec" && command.firstOrNull() == "/home/agent/.local/bin/codex-tasks") {
+                                        val action = command[1]
+                                        val id = command.getOrNull(2).orEmpty()
+                                        var row: JsonObject? = null
+                                        if (action == "snooze") {
+                                            snoozeMutations.add(command)
+                                            val deadline = if ("--until" in command) command[command.indexOf("--until") + 1]
+                                                else java.time.Instant.now().plusSeconds(3600).toString()
+                                            row = obj("task_id" to s(id), "host" to s("grace"), "account" to s("agent"),
+                                                "deadline" to s(deadline), "state" to s(if (snoozeWaitsForIdle) "waiting_for_idle" else "scheduled"))
+                                            snoozeRecords[id] = row
+                                            if (!snoozeWaitsForIdle) archivedTaskIds.add(id)
+                                        } else if (action == "unsnooze") {
+                                            snoozeMutations.add(command)
+                                            snoozeRecords.remove(id)
+                                            archivedTaskIds.remove(id)
+                                            row = obj("task_id" to s(id), "host" to s("grace"), "account" to s("agent"), "state" to s("absent"))
+                                        }
+                                        if (loseSnoozeReply && action != "snoozes") {
+                                            loseSnoozeReply = false
+                                            ws.close(1011, "fixture snooze acknowledgement lost")
+                                            return
+                                        }
+                                        val result = obj("snooze_protocol" to JsonPrimitive(2), "host" to s("grace"), "account" to s("agent"),
+                                            "action" to s(action), "outcome" to s(when (action) {
+                                                "snooze" -> if (snoozeWaitsForIdle) "snooze_pending" else "snoozed"
+                                                "unsnooze" -> "unsnoozed"
+                                                else -> "ok"
+                                            }), "snooze" to row, "snoozes" to if (action == "snoozes") JsonArray(snoozeRecords.values.toList()) else null)
+                                        ws.send(obj("id" to m["id"], "result" to obj("exitCode" to JsonPrimitive(0), "stdout" to s(result.toString()))).toString())
+                                        return
+                                    }
                                     if (method.isEmpty()) {
                                         serverRequestResponses.add(m)
                                         if (m["id"] in setOf(JsonPrimitive(88), JsonPrimitive(89)))
@@ -888,6 +1251,19 @@ class AppTest {
                                     if (method == "thread/list" && holdTaskList) {
                                         heldTaskLists.add(m)
                                         return
+                                    }
+                                    if (method == "thread/name/set") {
+                                        renameMutations.add(params)
+                                        if (rejectRename) {
+                                            ws.send(obj("id" to m["id"], "error" to obj("code" to JsonPrimitive(-32000), "message" to s("Rejected rename"))).toString())
+                                            return
+                                        }
+                                        fixtureTitle = params.str("name")
+                                        if (dropRenameReply) {
+                                            dropRenameReply = false
+                                            ws.close(1011, "fixture rename response lost")
+                                            return
+                                        }
                                     }
                                     if (method in setOf("thread/archive", "thread/unarchive")) {
                                         archiveMutations.add(m)
@@ -987,6 +1363,12 @@ class AppTest {
                                                     }
                                                 obj("project" to project(projectId, name, root))
                                             }
+                                            "account/rateLimits/read" -> {
+                                                weeklyUsageReads.incrementAndGet()
+                                                if (rejectWeeklyUsage)
+                                                    obj("_fixtureError" to obj("code" to JsonPrimitive(-32603), "message" to s("Usage unavailable")))
+                                                else weeklyUsageResponse
+                                            }
                                             "model/list" -> {
                                                 modelLists.incrementAndGet()
                                                 if (rejectModelList)
@@ -1030,6 +1412,7 @@ class AppTest {
                                                 )
                                             "thread/read" -> obj("thread" to obj(
                                                 "id" to params["threadId"],
+                                                "name" to s(fixtureTitle),
                                                 "status" to obj("type" to s("idle")),
                                             ))
                                             "thread/resume" -> {
@@ -1411,7 +1794,6 @@ class AppTest {
                     "draft/project-task",
                     "journal/project-task",
                     "attachments/project-task",
-                    "bug-report/shake",
                     "bug-report/screenshot",
                     "bug-report/last-task",
                     "haptics/enabled",
@@ -1423,6 +1805,7 @@ class AppTest {
             store.put("fixture", model)
             compose.activity.setContent { RemoteTheme { App(model) } }
             model.saveCredential("fixture-credential-0000000000000000000000000000000000000")
+            if (testName.methodName.startsWith("snooze")) model.foreground(true)
         }
         compose.waitUntil(15000) {
             model.reports.state.value.loaded && model.state.value.ready &&
@@ -4187,9 +4570,11 @@ class AppTest {
     }
 
     @Test
-    fun bugReportSettingsExcludesScreenshotAndPersistsShakePreference() {
-        assertFalse(model.reports.state.value.shakeEnabled)
-        compose.runOnUiThread { model.settings(); model.reports.shakeEnabled(false) }
+    fun bugReportSettingsExcludesScreenshotAndPersistsScreenshotPreference() {
+        compose.runOnUiThread { model.settings() }
+        compose.onNodeWithTag("screenshot-report-toggle").performScrollTo().assertIsOn().performClick()
+        compose.waitUntil(5000) { runBlocking { LocalStore(app).get("bug-report/screenshot") } == "false" }
+        compose.onNodeWithTag("screenshot-report-toggle").assertIsOff()
         compose.onNodeWithTag("app-menu").performClick()
         compose.onNodeWithTag("report-bug").performClick()
         compose.waitUntil(10000) { model.reports.state.value.visible && !model.reports.state.value.capturing }
@@ -4197,7 +4582,7 @@ class AppTest {
         assertEquals("omitted", report.diagnostics.map("screenshot").str("status"))
         assertTrue(report.attachments.none { it.id == "screenshot.png" })
         assertFalse(report.context.toString().contains("fixture-credential"))
-        assertEquals("false", runBlocking { LocalStore(app).get("bug-report/shake") })
+        assertFalse(model.reports.state.value.screenshotEnabled)
         compose.onNodeWithTag("close-bug-report").performClick()
         assertEquals(report.id, model.reports.state.value.draft!!.id)
     }

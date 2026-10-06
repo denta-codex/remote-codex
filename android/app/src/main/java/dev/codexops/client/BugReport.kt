@@ -58,7 +58,6 @@ data class BugReportDraft(
 
 data class BugReportState(
     val loaded: Boolean = false,
-    val shakeEnabled: Boolean = false,
     val screenshotEnabled: Boolean = true,
     val visible: Boolean = false,
     val capturing: Boolean = false,
