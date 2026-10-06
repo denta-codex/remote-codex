@@ -36,11 +36,16 @@ internal fun HomeScreen(st: ScreenState, actions: HomeActions) {
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(st.taskNotice?.id) {
         val notice = st.taskNotice ?: return@LaunchedEffect
-        val result = snackbar.showSnackbar(notice.message,
-            actionLabel = if (notice.undoArchived != null) "Undo" else null,
-            withDismissAction = true, duration = SnackbarDuration.Long)
-        if (result == SnackbarResult.ActionPerformed) actions.undoTaskAction(notice.id)
-        else actions.dismissTaskNotice(notice.id)
+        try {
+            val result = snackbar.showSnackbar(notice.message,
+                actionLabel = if (notice.undoArchived != null) "Undo" else null,
+                withDismissAction = true, duration = SnackbarDuration.Long)
+            if (result == SnackbarResult.ActionPerformed) actions.undoTaskAction(notice.id)
+        } finally {
+            // Leaving the list cancels showSnackbar. Retire that notice too so
+            // returning from a conversation cannot replay an old archive result.
+            actions.dismissTaskNotice(notice.id)
+        }
     }
     Box(Modifier.fillMaxSize()) {
         key(st.archived) { ChatBrowser(st, actions) }

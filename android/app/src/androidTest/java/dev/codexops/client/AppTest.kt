@@ -506,6 +506,24 @@ class AppTest {
     }
 
     @Test
+    fun archiveNoticeDoesNotReplayAfterReturningFromConversation() {
+        compose.onNodeWithTag("task-row-task-test").performTouchInput { swipeLeft() }
+        compose.waitUntil(5000) { model.state.value.taskNotice?.message == "Task archived" && !model.state.value.listLoading }
+        compose.onNodeWithText("Task archived").assertIsDisplayed()
+        compose.runOnUiThread { model.openArchives() }
+        compose.waitUntil(5000) { !model.state.value.listLoading && model.state.value.tasks.any { it.str("id") == "task-test" } }
+        compose.onNodeWithText("Fixture task").performClick()
+        compose.waitUntil(10000) { model.state.value.page == "chat" && !model.state.value.busy }
+        compose.waitForIdle()
+        assertNull(model.state.value.taskNotice)
+        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        compose.waitUntil(5000) { model.state.value.page == "archives" && !model.state.value.listLoading }
+        compose.onNodeWithText("Task archived").assertDoesNotExist()
+        compose.onNodeWithTag("task-row-task-test").assertExists()
+        assertEquals(listOf("thread/archive"), archiveMutations.map { it.str("method") })
+    }
+
+    @Test
     fun taskSwipesArchiveUndoAndUnarchive() {
         val row = compose.onNodeWithTag("task-row-task-test")
         // An incomplete drag must spring back without sending anything.
