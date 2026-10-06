@@ -3,4 +3,5 @@
  <files-path name="draft-images" path="draft-images/"/>
  <files-path name="bug-reports" path="bug-reports/"/>
  <cache-path name="remote-files" path="remote-files/"/>
+ <cache-path name="preview-images" path="preview-images/"/>
 </paths>

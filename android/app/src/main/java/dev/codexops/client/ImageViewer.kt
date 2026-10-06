@@ -1,6 +1,18 @@
 package dev.codexops.client
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Intent
 import android.graphics.Bitmap
+import android.net.Uri
+import android.widget.Toast
+import androidx.core.content.FileProvider
+import java.io.File
+import java.util.UUID
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -28,6 +40,51 @@ import kotlin.math.roundToInt
 
 @Composable
 internal fun ImageViewer(bitmap: Bitmap, description: String, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var exporting by remember { mutableStateOf(false) }
+    var exportedUri by remember(bitmap) { mutableStateOf<Uri?>(null) }
+
+    fun exportImage(share: Boolean) {
+        if (exporting) return
+        exporting = true
+        scope.launch(Dispatchers.Main.immediate) {
+            try {
+                val uri = exportedUri ?: withContext(Dispatchers.IO) {
+                    val root = File(context.cacheDir, "preview-images").apply { mkdirs() }
+                    // Keep exports available after closing the viewer for clipboard/share consumers.
+                    val cutoff = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
+                    root.listFiles()?.filter { it.lastModified() < cutoff }?.forEach { it.delete() }
+                    val file = File(root, "image-${UUID.randomUUID()}.png")
+                    try {
+                        file.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+                        FileProvider.getUriForFile(context, "${context.packageName}.files", file)
+                    } catch (error: Exception) {
+                        file.delete()
+                        throw error
+                    }
+                }.also { exportedUri = it }
+                val clip = ClipData.newUri(context.contentResolver, "Image", uri)
+                if (share) {
+                    context.startActivity(Intent.createChooser(
+                        Intent(Intent.ACTION_SEND).setType("image/png")
+                            .putExtra(Intent.EXTRA_STREAM, uri)
+                            .apply { clipData = clip }
+                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
+                        "Share image",
+                    ))
+                } else {
+                    context.getSystemService(ClipboardManager::class.java).setPrimaryClip(clip)
+                    Toast.makeText(context, "Image copied", Toast.LENGTH_SHORT).show()
+                }
+            } catch (error: Exception) {
+                Toast.makeText(context, "Could not ${if (share) "share" else "copy"} image.", Toast.LENGTH_SHORT).show()
+            } finally {
+                exporting = false
+            }
+        }
+    }
+
     var zoom by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
     var viewport by remember { mutableStateOf(IntSize.Zero) }
@@ -57,6 +114,13 @@ internal fun ImageViewer(bitmap: Bitmap, description: String, onDismiss: () -> U
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     TextButton(onDismiss, Modifier.testTag("close-image")) { Text("Close") }
+                    TextButton({ exportImage(false) }, enabled = !exporting) { Text("Copy") }
+                    TextButton({ exportImage(true) }, enabled = !exporting) { Text("Share") }
+                }
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     TextButton(
                         { transform(zoom / 1.5f, Offset(viewport.width / 2f, viewport.height / 2f)) },
                         enabled = zoom > 1f,
@@ -79,7 +143,7 @@ internal fun ImageViewer(bitmap: Bitmap, description: String, onDismiss: () -> U
                         .testTag("image-viewport")
                         .semantics { stateDescription = "${(zoom * 100).roundToInt()}%" }
                         .pointerInput(Unit) {
-                            detectTapGestures(onDoubleTap = { focus ->
+                            detectTapGestures(onLongPress = { exportImage(false) }, onDoubleTap = { focus ->
                                 if (zoom > 1f) { zoom = 1f; offset = Offset.Zero }
                                 else transform(3f, focus)
                             })
