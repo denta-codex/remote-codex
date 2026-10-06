@@ -3111,6 +3111,30 @@ class AppTest {
             compose.onAllNodesWithTag("message-image").fetchSemanticsNodes().isNotEmpty()
         }
         compose.onAllNodesWithTag("message-image")[0].performClick()
+        compose.onNodeWithText("Copy").performClick()
+        val clipboard = app.getSystemService(ClipboardManager::class.java)
+        var copiedUri: Uri? = null
+        compose.waitUntil(5000) {
+            compose.runOnUiThread { copiedUri = clipboard.primaryClip?.getItemAt(0)?.uri }
+            copiedUri != null
+        }
+        assertEquals("image/png", app.contentResolver.getType(copiedUri!!))
+        app.contentResolver.openInputStream(copiedUri!!).use {
+            val copied = android.graphics.BitmapFactory.decodeStream(it)
+            assertNotNull(copied)
+            assertEquals(8, copied.width)
+            assertEquals(8, copied.height)
+        }
+        compose.runOnUiThread { clipboard.clearPrimaryClip() }
+        compose.onNodeWithTag("image-viewport").performTouchInput { longClick() }
+        compose.waitUntil(5000) {
+            var hasImage = false
+            compose.runOnUiThread { hasImage = clipboard.primaryClip?.getItemAt(0)?.uri == copiedUri }
+            hasImage
+        }
+        compose.onNodeWithText("Share").assertIsEnabled().performClick()
+        compose.waitForIdle()
+        shell("input keyevent KEYCODE_BACK")
         assertCoverDialogAvoidsCutouts(compose.onNodeWithTag("close-image"))
         compose.onNodeWithContentDescription("Expanded conversation image")
             .performTouchInput { doubleClick() }
