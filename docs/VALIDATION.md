@@ -1,5 +1,14 @@
 # Validation
 
+## 2026-10-06 — Android 0.4.9 (41)
+
+- Source revision: `87c10d4c5aba711abb652ea0fdd54f8d8b852fc6`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `6028bcc3c7dbc961c8845bcb0d869e6086f6f8a42f9b53ae1b0992abe259f25d`.
+- Outcome: Built and signed locally; not published.
+- Build log: `/home/agent/workspaces/remote-codex/artifacts/releases/run-20261006T232928Z-ej3A7B.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
 ## 2026-10-06 — Conversation opening memory and latency
 
 - Report `3386afd3-ab29-4f92-b964-4375eb12d2db` records 9,924 ms from

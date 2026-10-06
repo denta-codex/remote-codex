@@ -1,5 +1,1 @@
-- Record Todo cutover and Android 0.4.7 publication
-- Record Android Todo acceptance and finish cutover cleanup
-- Open tasks at the start of the latest message
-- Merge branch 'fix/open-task-at-message-start'
-- Integrate task controls and weekly usage; remove shake reporting
+- Fix conversation loading memory pressure and duplicate history fetch
