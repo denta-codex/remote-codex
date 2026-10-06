@@ -1,5 +1,14 @@
 # Validation
 
+## 2026-10-06 — Android 0.4.8 (40)
+
+- Source revision: `bb6e267fcc8aa3387f93b5805a8e170acc910a05`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `7962101c4523b282215897cbc32a1bb19ab9742e813f0490d3a26aea628a003b`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/home/agent/workspaces/remote-codex/artifacts/releases/run-20261006T213808Z-thDD97.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
 ## 2026-10-06 — Consolidate shared-checkout Android changes
 
 - Integrated the swipe action tray, one-hour/custom snoozing, conversation
