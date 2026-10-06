@@ -1,5 +1,4 @@
-- Support native read-only task discovery and history tools
-- Add floating worktree and chat spend summary
-- Support grouped credential inject approvals on Android
-- Add contextual follow-up suggestions above the mobile composer
-- Merge Android grouped inject approvals
+- Add copy and share actions to image previews
+- Clear interrupted task notices to prevent archive notification replay
+- Merge branch 'main' into fix/archive-notice-replay
+- Move Todo storage and Android access into the Rust service

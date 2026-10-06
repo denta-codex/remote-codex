@@ -1,5 +1,14 @@
 # Validation
 
+## 2026-10-06 — Android 0.4.7 (39)
+
+- Source revision: `a14e6a42f3591510ab25f0432367ccc661c02c89`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `4bd4d8eef524ab5853e83fdd2b484788491b427f21425d517388c0c2eb8eb6bc`.
+- Outcome: Built and signed locally; not published.
+- Build log: `/home/agent/workspaces/remote-codex/artifacts/releases/run-20261006T192957Z-9auyi1.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
 ## 2026-10-06 — Rust-owned Todo service
 
 - Added the authenticated Todo WSS route, repo-owned shared Rust storage/CLI,
