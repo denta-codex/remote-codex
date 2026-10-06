@@ -1633,7 +1633,10 @@ class AppTest {
         compose.onNodeWithText(fixtureTitle).performClick()
         compose.waitUntil(10000) { !model.state.value.busy && model.state.value.entries.size >= 40 }
         compose.waitForIdle()
-        compose.waitUntil(5000) { latestReply().isDisplayed() }
+        compose.waitUntil(5000) {
+            if (tallLastMessage) compose.onNodeWithText("Review note 1: Keep the layout clear and comfortable to read.").isDisplayed()
+            else latestReply().isDisplayed()
+        }
     }
 
     private fun latestReply() = compose.onNodeWithText("Latest reply — ready for review.", substring = true)
@@ -1755,6 +1758,8 @@ class AppTest {
     @Test
     fun streamingTallReplyKeepsVisibleParagraphStillWhenReading() {
         openLongHistory(tallLastMessage = true)
+        compose.onNodeWithTag("jump-to-latest").performClick()
+        compose.waitUntil(5000) { latestReply().isDisplayed() }
         compose.onNodeWithTag("timeline").performTouchInput {
             swipe(center, center.copy(y = height * .85f), durationMillis = 1200)
         }
@@ -1843,10 +1848,13 @@ class AppTest {
         openLongHistory()
         latestReply().assertIsDisplayed()
         demoPause(3000)
-        compose.onNodeWithText("Command").performClick()
+        compose.onNodeWithTag("timeline").performScrollToNode(hasText("1 command"))
+        compose.onNodeWithText("1 command").performClick()
         compose.onNodeWithText("scripts/check", substring = true).assertIsDisplayed()
         demoPause(2000)
-        compose.onNodeWithText("Command").performClick()
+        compose.onNodeWithText("1 command").performClick()
+        compose.onNodeWithTag("jump-to-latest").performClick()
+        compose.waitUntil(5000) { latestReply().isDisplayed() }
         val latestPosition = compose.onNodeWithTag("timeline").fetchSemanticsNode()
             .config[SemanticsProperties.VerticalScrollAxisRange].value()
         compose.onNodeWithTag("timeline").performTouchInput { swipeDown() }
@@ -1870,6 +1878,7 @@ class AppTest {
         demoPause(1500)
         compose.onNodeWithText(fixtureTitle).performClick()
         compose.waitUntil(10000) { !model.state.value.busy && model.state.value.entries.size >= 40 }
+        compose.waitUntil(5000) { latestReply().isDisplayed() }
         latestReply().assertIsDisplayed()
         demoPause(2500)
         compose.onNodeWithTag("composer").performTextInput("Looks good. Thanks!")
@@ -1910,17 +1919,26 @@ class AppTest {
         demoPause(2000)
         compose.onNodeWithText(fixtureTitle).performClick()
         compose.waitUntil(10000) { !model.state.value.busy && model.state.value.entries.size >= 40 }
+        compose.waitUntil(5000) { latestReply().isDisplayed() }
         latestReply().assertIsDisplayed()
         demoPause(3000)
     }
 
     @Test
-    fun tallLatestMessageOpensAtItsEndAndFollowsGrowth() {
+    fun tallLatestMessageOpensAtItsStartAndFollowsOnlyAfterJump() {
         openLongHistory(tallLastMessage = true)
-        latestReply().assertIsDisplayed()
+        val firstParagraph = compose.onNodeWithText("Review note 1: Keep the layout clear and comfortable to read.")
+        firstParagraph.assertIsDisplayed()
+        latestReply().assertIsNotDisplayed()
+        val before = firstParagraph.fetchSemanticsNode().boundsInRoot.top
         emit(peer!!, "item/agentMessage/delta", obj("turnId" to s("history-20"),
             "itemId" to s("reply-20"), "delta" to s("\n\nStreaming finished here.")))
         compose.waitUntil(5000) { model.state.value.entries.last().text.endsWith("here.") }
+        compose.waitForIdle()
+        firstParagraph.assertIsDisplayed()
+        assertEquals(before, firstParagraph.fetchSemanticsNode().boundsInRoot.top, 1f)
+        compose.onNodeWithText("Streaming finished here.", substring = true).assertIsNotDisplayed()
+        compose.onNodeWithTag("jump-to-latest").performClick()
         compose.waitUntil(5000) {
             compose.onNodeWithText("Streaming finished here.", substring = true).isDisplayed()
         }
