@@ -94,23 +94,69 @@ This does not edit desktop remote-project records, create directories, clone
 repositories, or submit a task.
 
 Task rows use physical left swipe to archive (unarchive in Archived), right swipe
-to mark unread, and long press to copy the existing `codex://threads/<id>` deep
-link. TalkBack custom actions provide the same operations. A deliberate distance
-threshold arms the action; release commits it, while cancellation or a short drag
-returns the row without a mutation. Archive changes use stock `thread/archive`
+to reveal a left-side Read/Unread button, and long press to copy the existing
+`codex://threads/<id>` deep link. TalkBack custom actions provide the same
+operations without gestures. Right swipe only opens the tray; tapping its button
+changes read state. One tray can be open at a time. Swiping it back, tapping the
+shifted row or outside it, scrolling, and list state changes close the tray.
+A deliberate distance threshold arms Archive; release commits it, while
+cancellation or a short drag returns the row without a mutation. Cancelling a
+drag of an already open tray restores it; a reverse swipe closes it without
+archiving. Archive changes use stock `thread/archive`
 and `thread/unarchive`, reserve the task while pending, and offer Undo only after
 acknowledgement. Failed or disconnected requests are never automatically replayed.
 An uncertain row remains blocked until a fresh server list establishes its tab;
 reconnect only reads state. Archive notifications from other clients refresh the
 visible list.
 
+The conversation overflow menu offers Rename through stock `thread/name/set`.
+It trims the entered name, blocks empty names and duplicate submissions, and
+reads `thread/read` after acknowledgement before updating the title and list.
+An uncertain rename is never replayed; reopening the task reconciles the name
+from the server before another rename is allowed.
+
 The pinned stock protocol has no unread-state API. Manual unread reminders extend
 the existing phone-local reply read markers, persisted by host in Room. Opening
 clears the manual reminder after successful hydration; automatic unread replies
-still require viewing their content. Repeated Mark unread gestures are idempotent;
+still require viewing their content. Explicit Mark unread actions are idempotent;
 archive, filtering, reconnect, and app recreation preserve the reminder. Existing
 activity monitoring continues to flag new replies; read state does not synchronize
 with other clients.
+
+The same right-swipe tray also offers Snooze. A tap schedules exactly one hour
+through the installed protocol-2 `codex-tasks` CLI on the verified owning host;
+there is no configurable default. The acknowledged deadline appears in a
+confirmation with Change time. That opens a sheet with native date/time pickers,
+an explicit Save time action, and Return now. Snoozed chats is available from
+Settings and retains those controls after the confirmation disappears. The
+sheet shows the local time zone and offset, rejects past times and daylight-saving
+clock gaps, and uses the earlier offset for ambiguous clock-change times.
+
+Snooze is a narrow stock `command/exec` adapter. A read-only probe checks the
+installed helper, OS hostname/account, and snooze protocol before exposing an
+enabled action. Commands use argv, the verified Codex home, an explicit local
+target, and the existing host/account configuration. The CLI verifies the socket's
+Codex home; Android verifies returned host/account, operation, task ID, deadline,
+and schedule state. Generation-pinned requests prevent reconnect from moving a
+request onto another connection. Helper commands need access to the existing
+systemd user bus, including read-only inventory. No helper deployment, new RPC,
+phone timer, account setup, or additional server is introduced.
+
+The host verifies durable systemd scheduling before archiving. Running chats
+remain visible with Snoozes after it finishes until the helper observes idle;
+returning visibility never starts a model turn. The app reads inventory every
+15 seconds while its task lists are visible and foregrounded, refreshing stock
+list membership when schedules change or disappear. Failed, expired, and
+interrupted schedules remain available for explicit Return now. Archive may
+include descendants; the helper's wake-up restores only the selected task.
+
+Every snooze, time change, and early return reserves the task synchronously and
+persists a host-scoped delivery guard before submission. Unknown results offer
+no success confirmation and block more mutations until authoritative inventory
+is read; reconnect and process recreation never replay requests. Failed retained
+schedules permit explicit restoration rather than rescheduling. Unarchiving a
+managed snooze explicitly returns the chat and cancels its timer. Archiving a
+chat that is waiting to snooze requires returning it from Snoozed chats first.
 
 Worktree orchestration is a narrow client adapter over stock `project/read` and
 `command/exec`; there is no invented worktree RPC and no second project browser.
@@ -316,11 +362,9 @@ ordinary request default.
 ## User-authored reports and requests
 
 Android owns the report UI, collectors, draft persistence, and orchestration; the
-forwarder and stock app-server protocol are unchanged. The menu and a foreground
-Seismic shake detector invoke the same capture flow. The copied Apache-2.0
-detector's license ships in `assets/licenses/seismic.txt`. Registration uses
-`SENSOR_DELAY_GAME`, stops when the activity pauses, and has a three-second
-invocation cooldown.
+forwarder and stock app-server protocol are unchanged. Reports open from the
+overflow menu or the Android 14+ screenshot prompt. The screenshot callback
+follows the activity's visible lifecycle and the saved screenshot preference.
 
 The phone stores one pending report and its artifacts under app-private
 `files/bug-reports/<UUID>`, with an atomically replaced draft index. The frozen

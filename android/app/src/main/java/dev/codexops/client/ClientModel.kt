@@ -30,6 +30,22 @@ constructor(
         GraceHost.copy(endpoint = endpoint, expectedCodexHome = expectedHome, bugReportRepository = bugReportRepository)
     private val local: ClientStore = LocalStore(app)
     private val rpc: RemoteSession = StockRemoteSession(allowLoopbackTest)
+    private val snoozeController by lazy {
+        SnoozeController(viewModelScope, local, StockSnoozeOperations(rpc, host),
+            "snooze/delivery/$endpoint/$expectedHome", { _state.value }, { transform -> _state.update(transform) },
+            {
+                invalidateArchiveSnapshots()
+                if (_state.value.page in setOf("home", "archives")) { cancelList(); launchList() }
+            }, { id, epoch ->
+                rpc.callForGeneration("thread/read", obj("threadId" to s(id), "includeTurns" to JsonPrimitive(false)), epoch)
+                    .map("thread").str("name").ifBlank { "Snoozed chat" }
+            })
+    }
+    override fun snoozeTask(id: String, until: java.time.Instant?) = snoozeController.snooze(id, until)
+    override fun editSnooze(id: String) = snoozeController.edit(id)
+    override fun dismissSnoozeEditor() = snoozeController.dismissEditor()
+    override fun returnSnoozedTask(id: String) = snoozeController.restore(id)
+    override fun refreshSnoozes() = snoozeController.refresh()
     private val modelEnrichment = ModelEnrichmentRepository(rpc, local)
     private var chatCostJob: Job? = null
     private var chatUsage: ChatUsage? = null
@@ -48,6 +64,9 @@ constructor(
     private val remoteFileRepository = RemoteFileRepository(app)
     private val _state = MutableStateFlow(ScreenState(host = host))
     val state = _state.asStateFlow()
+    private val weeklyUsage = WeeklyUsageController(viewModelScope, rpc, { _state.value },
+        { usage -> _state.update { it.copy(weeklyUsage = usage) } })
+    override fun refreshWeeklyUsage() = weeklyUsage.refresh()
     private val followUps = FollowUpController(viewModelScope, StockFollowUpSuggestions(rpc),
         { rpc.generation }, { _state.value }, { value -> _state.update { it.copy(followUps = value) } })
     private val streamingHaptics = StreamingHaptics(SystemClock::uptimeMillis)
@@ -234,6 +253,18 @@ constructor(
 
     init {
         viewModelScope.launch {
+            combine(state.map { it.ready && it.appForeground && it.page in setOf("home", "archives", "snoozed") }
+                .distinctUntilChanged(), snoozeController.refreshRevision) { active, revision -> active to revision }
+                .distinctUntilChanged().collectLatest { (active, _) ->
+                    if (!active) { if (!_state.value.ready) snoozeController.disconnected(); return@collectLatest }
+                    do {
+                        snoozeController.inspect()
+                        if (!_state.value.snooze.available) break
+                        delay(15_000)
+                    } while (true)
+                }
+        }
+        viewModelScope.launch {
             state.collect { followUps.changed() }
         }
         viewModelScope.launch {
@@ -377,6 +408,7 @@ constructor(
                             modelCatalogMessage = null,
                         )
                     }
+                    weeklyUsage.disconnected()
                     resetApprovalContexts()
                     verifiedTaskGeneration = null
                     taskTools.cancelAll()
@@ -619,7 +651,7 @@ constructor(
         if (_state.value.busy) return
         when (_state.value.page) {
             "todo" -> if (_state.value.todo.editor != null) todoController.close() else home()
-            "archives" -> {
+            "archives", "snoozed" -> {
                 cancelList(); saveList()
                 _state.update { it.copy(page = "settings", error = null) }
             }
@@ -639,6 +671,11 @@ constructor(
     }
 
     override fun openArchives() { showList(true) }
+    override fun openSnoozed() {
+        cancelStreamingHaptics(); cancelList(); saveList()
+        _state.update { it.copy(page = "snoozed", error = null) }
+        snoozeController.refresh()
+    }
 
     override fun query(value: String) {
         invalidateList()
@@ -711,6 +748,58 @@ constructor(
         changeTaskArchive(id, archived)
     }
 
+    internal fun renameCurrentTask(name: String) {
+        val before = _state.value
+        val id = before.thread ?: return
+        val title = name.trim()
+        if (before.page != "chat" || !before.ready || before.busy || title.isBlank() ||
+            id in before.pendingTaskRenames || id in before.uncertainTaskRenames ||
+            id in before.pendingTaskActions || id in before.uncertainTaskActions) return
+        val epoch = rpc.generation
+        // Reserve before launching: repeat taps must never send another mutation.
+        _state.update { it.copy(pendingTaskRenames = it.pendingTaskRenames + id, error = null) }
+        viewModelScope.launch {
+            var accepted = false
+            try {
+                rpc.call("thread/name/set", obj("threadId" to s(id), "name" to s(title)))
+                accepted = true
+                val thread = rpc.call("thread/read", obj("threadId" to s(id), "includeTurns" to JsonPrimitive(false))).map("thread")
+                check(thread.str("id") == id && thread.str("name").isNotBlank())
+                cancelList()
+                invalidateArchiveSnapshots()
+                _state.update {
+                    it.copy(
+                        title = if (rpc.generation == epoch && it.thread == id)
+                            thread.str("name") else it.title,
+                        tasks = it.tasks.map { row -> if (row.str("id") == id)
+                            JsonObject(row + ("name" to s(thread.str("name")))) else row },
+                        listInitialized = false,
+                        uncertainTaskRenames = it.uncertainTaskRenames - id,
+                    )
+                }
+                if (_state.value.page in listOf("home", "archives")) launchList()
+            } catch (e: Exception) {
+                val uncertain = accepted || e !is RpcRejected
+                cancelList()
+                invalidateArchiveSnapshots()
+                _state.update {
+                    it.copy(
+                        listInitialized = false,
+                        uncertainTaskRenames = if (uncertain) it.uncertainTaskRenames + id else it.uncertainTaskRenames,
+                        error = if (it.thread != id) it.error else if (accepted)
+                            "Rename accepted, but the name could not be refreshed. Reopen this task to check. No retry was sent."
+                        else if (uncertain)
+                            "Rename outcome unknown. Reopen this task to check its name before trying again. No retry was sent."
+                        else "The server rejected the rename.",
+                    )
+                }
+                if (e is CancellationException && e !is TimeoutCancellationException) throw e
+            } finally {
+                _state.update { it.copy(pendingTaskRenames = it.pendingTaskRenames - id) }
+            }
+        }
+    }
+
     internal fun archiveCurrentTask() {
         val before = _state.value
         val id = before.thread ?: return
@@ -720,7 +809,12 @@ constructor(
 
     private fun changeTaskArchive(id: String, archived: Boolean) {
         val before = _state.value
-        if (id in before.pendingTaskActions || id in before.uncertainTaskActions) return
+        if (id in before.pendingTaskActions || id in before.uncertainTaskActions || id in before.snooze.uncertain) return
+        if (id in before.snooze.tasks) {
+            if (!archived) snoozeController.restore(id)
+            else _state.update { it.copy(error = "Return this chat from Snoozed chats before archiving it.") }
+            return
+        }
         if (!before.ready) {
             _state.update { it.copy(error = "Reconnect before changing archived tasks.") }
             return
@@ -1091,6 +1185,7 @@ constructor(
                             thread.str("preview").take(80).ifBlank { "Conversation" }
                         },
                     historyCursor = history.cursor(),
+                    uncertainTaskRenames = if (id !in it.pendingTaskRenames) it.uncertainTaskRenames - id else it.uncertainTaskRenames,
                     newTaskOptions = options.options,
                     threadModel = threadModel,
                     threadReasoningEffort =
@@ -2414,6 +2509,7 @@ constructor(
     private fun handle(event: JsonObject) {
         if (event.str("_epoch").toLongOrNull()?.let { it != rpc.generation } == true) return
         if (event.str("method") == "connection/lost") {
+            weeklyUsage.disconnected()
             verifiedTaskGeneration = null
             taskTools.cancelAll()
             cancelStreamingHaptics()
@@ -2484,6 +2580,10 @@ constructor(
         if (event.str("_epoch").toLongOrNull()?.let { it != rpc.generation } == true) return
         val method = event.str("method")
         val p = event.map("params")
+        if (method == "account/rateLimits/updated" && !event.containsKey("id")) {
+            if (_state.value.page == "settings") weeklyUsage.refresh()
+            return
+        }
         if (event.containsKey("id")) {
             if (ServerRequests.route(method) != ServerRequestRoute.Interactive) return
             val d =

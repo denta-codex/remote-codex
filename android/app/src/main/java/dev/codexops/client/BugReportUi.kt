@@ -5,9 +5,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import android.graphics.Bitmap
-import android.hardware.SensorManager
 import android.os.Build
-import android.os.SystemClock
 import android.widget.Toast
 import androidx.annotation.RequiresApi
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -42,7 +40,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.squareup.seismic.ShakeDetector
 import dev.codexops.core.*
 import java.io.File
 import kotlinx.coroutines.Dispatchers
@@ -50,15 +47,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-
-internal class ReportShakeGate {
-    private var last: Long? = null
-    fun accept(now: Long, resumed: Boolean, enabled: Boolean, reportOpen: Boolean): Boolean {
-        if (!resumed || !enabled || reportOpen || last?.let { now - it < 3000 } == true) return false
-        last = now
-        return true
-    }
-}
 
 /** Android 14+ reports this app's screenshots without granting access to the saved image. */
 internal fun screenshotPromptAllowed(sdk: Int, started: Boolean, state: BugReportState): Boolean =
@@ -96,6 +84,24 @@ internal fun BugReportMenu(model: ClientModel) {
     val screen by model.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var menu by remember { mutableStateOf(false) }
+    var rename by remember(screen.host.endpoint, screen.thread, screen.page) { mutableStateOf(false) }
+    var name by remember(screen.host.endpoint, screen.thread) { mutableStateOf("") }
+    val canRename = screen.ready && !screen.busy && screen.thread !in screen.pendingTaskRenames &&
+        screen.thread !in screen.uncertainTaskRenames && screen.thread !in screen.pendingTaskActions &&
+        screen.thread !in screen.uncertainTaskActions
+    if (rename) AlertDialog(
+        onDismissRequest = { rename = false },
+        title = { Text("Rename task") },
+        text = {
+            OutlinedTextField(name, { name = it }, label = { Text("Task name") }, singleLine = true,
+                modifier = Modifier.fillMaxWidth().testTag("rename-task-name"))
+        },
+        confirmButton = {
+            TextButton(onClick = { rename = false; model.renameCurrentTask(name) },
+                enabled = canRename && name.isNotBlank(), modifier = Modifier.testTag("save-task-name")) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = { rename = false }) { Text("Cancel") } },
+    )
     Box {
         IconButton(onClick = { menu = true }, modifier = Modifier.testTag("app-menu").semantics { contentDescription = "More options" }) {
             Text("⋮", fontSize = 26.sp)
@@ -105,6 +111,9 @@ internal fun BugReportMenu(model: ClientModel) {
                 DropdownMenuItem(text = { Text("Settings") }, leadingIcon = { Glyph(R.drawable.ic_settings) },
                     onClick = { menu = false; model.settings() })
                 screen.thread?.let { thread ->
+                    DropdownMenuItem(text = { Text("Rename") }, enabled = canRename,
+                        modifier = Modifier.testTag("rename-chat-menu"),
+                        onClick = { menu = false; name = screen.title; rename = true })
                     DropdownMenuItem(text = { Text("Copy deeplink") }, leadingIcon = { Glyph(R.drawable.ic_copy) },
                         onClick = { menu = false; copyThreadDeeplink(context, thread) })
                 }
@@ -141,7 +150,6 @@ internal fun BugReportHost(model: ClientModel, screen: ScreenState, snackbar: Sn
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val current by rememberUpdatedState(report)
-    val gate = remember { ReportShakeGate() }
     val scope = rememberCoroutineScope()
     var prompt by remember { mutableStateOf<Job?>(null) }
     DisposableEffect(owner, report.screenshotEnabled, report.loaded) {
@@ -163,24 +171,6 @@ internal fun BugReportHost(model: ClientModel, screen: ScreenState, snackbar: Sn
             }
         } else null
         onDispose { stop?.invoke(); prompt?.cancel() }
-    }
-    DisposableEffect(owner, report.shakeEnabled, report.loaded) {
-        val sensors = context.getSystemService(SensorManager::class.java)
-        val detector = ShakeDetector {
-            if (gate.accept(SystemClock.elapsedRealtime(), owner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),
-                    current.loaded && current.shakeEnabled, current.visible || current.capturing || current.busy)) {
-                model.reports.open { captureBugReportScreenshot(requireNotNull(context.activity())) }
-            }
-        }
-        fun update() {
-            if (report.loaded && report.shakeEnabled && owner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
-                detector.start(sensors, SensorManager.SENSOR_DELAY_GAME)
-            else detector.stop()
-        }
-        val observer = LifecycleEventObserver { _, _ -> update() }
-        owner.lifecycle.addObserver(observer)
-        update()
-        onDispose { owner.lifecycle.removeObserver(observer); detector.stop() }
     }
     if (report.visible) BugReportDialog(report, screen.ready, model.reports)
 }

@@ -23,8 +23,6 @@ import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 internal fun SettingsScreen(
     st: ScreenState,
     actions: SettingsActions,
-    shakeEnabled: Boolean = false,
-    onShakeChanged: (Boolean) -> Unit = {},
     screenshotEnabled: Boolean = true,
     onScreenshotChanged: (Boolean) -> Unit = {},
 ) {
@@ -37,10 +35,17 @@ internal fun SettingsScreen(
             .padding(if (cover) 12.dp else 24.dp),
         verticalArrangement = Arrangement.spacedBy(if (cover) 12.dp else 18.dp),
     ) {
+        LaunchedEffect(st.ready) { if (st.ready) actions.refreshWeeklyUsage() }
+        WeeklyUsageCard(st.weeklyUsage, st.ready, actions::refreshWeeklyUsage)
         OutlinedButton(onClick = actions::openArchives, modifier = Modifier.fillMaxWidth()) {
             Glyph(R.drawable.ic_archive)
             Spacer(Modifier.width(12.dp))
             Text("Archived chats")
+        }
+        OutlinedButton(onClick = actions::openSnoozed, modifier = Modifier.fillMaxWidth().testTag("open-snoozed")) {
+            Glyph(R.drawable.ic_snooze)
+            Spacer(Modifier.width(12.dp))
+            Text("Snoozed chats")
         }
         Text(
             "Connection",
@@ -132,11 +137,6 @@ internal fun SettingsScreen(
             }
             Text("Take a screenshot while the app is open, then tap Report or request to save it with diagnostics.", fontSize = 13.sp)
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Shake to report or request", Modifier.weight(1f))
-            Switch(checked = shakeEnabled, onCheckedChange = onShakeChanged, modifier = Modifier.testTag("shake-report-toggle"))
-        }
-        Text("Off by default because it can trigger the phone's flashlight gesture. You can always use Report or request in the menu.", fontSize = 13.sp)
         HorizontalDivider()
         Text("Assistant shortcut", fontWeight = FontWeight.SemiBold)
         OutlinedButton(

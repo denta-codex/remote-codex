@@ -68,9 +68,7 @@ the other intents use the server's Plan mode. Missing mode support keeps the dra
 saved instead of falling back to implementation. Submitting creates an isolated
 remote-codex worktree, runs its environment setup, and starts the selected task on
 Grace. **Last report task** opens it. Reports do not publish, deploy, or install updates.
-Settings includes an **Offer a report after screenshots** toggle
-(on by default) and an opt-in **Shake to report or request** toggle, which is off by
-default because shaking can trigger Motorola's flashlight gesture.
+Settings includes an **Offer a report after screenshots** toggle, on by default.
 
 Reports remain on the phone while offline and across restarts. Reopening a saved
 report preserves its intent, text, review, and original evidence; reconnecting never

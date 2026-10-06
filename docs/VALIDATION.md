@@ -1,5 +1,37 @@
 # Validation
 
+## 2026-10-06 — Consolidate shared-checkout Android changes
+
+- Integrated the swipe action tray, one-hour/custom snoozing, conversation
+  renaming, weekly usage remaining, and complete shake-reporting removal on
+  `main`. The duplicate dirty checkout has the same code; the older reporting
+  and visualization scratch work is already incorporated in current history.
+- Validated an isolated copy of the staged source: all 148 app unit tests,
+  Android lint, debug app assembly, and instrumentation APK assembly passed.
+- Five focused managed Android 16 scenarios passed together:
+  `AppTest#settingsShowsWeeklyRemainingRefreshesAndHandlesSparseUpdates`,
+  `AppTest#snoozeTapDefaultsToHourAndChangeTimeCanReturnEarly`,
+  `AppTest#conversationMenuRenamesTaskAndUpdatesList`,
+  `AppTest#taskSwipeMenuRevealsWithoutMutatingAndClosesSafely`, and
+  `AppTest#systemScreenshotOffersReportWithTheCapturedWindow`.
+- XML results are retained under `artifacts/integration-validation/`. The
+  temporary validation checkout was removed after verification. This local
+  integration does not publish a release or install on the phone.
+
+## 2026-10-06 — Remove shake-to-report
+
+- Removed the Settings toggle, report-state field, saved-preference handling,
+  lifecycle sensor registration, invocation gate, vendored Seismic detector,
+  detector tests, and bundled license assets. Screenshot and menu reporting
+  remain available; earlier shake-related entries below describe retired code.
+- All 10 `BugReportTest` unit tests passed, and the Android test APK compiled.
+- Selected managed Android 16 instrumentation passed:
+  `AppTest#bugReportSettingsExcludesScreenshotAndPersistsScreenshotPreference`
+  and `AppTest#systemScreenshotOffersReportWithTheCapturedWindow`.
+- Validation used an isolated source snapshot to avoid concurrent checkout
+  builds. XML results are retained in `artifacts/reporting-validation/`;
+  the temporary source copy was removed after successful verification.
+
 ## 2026-10-06 — Todo cutover and Android 0.4.7 publication
 
 - Built Android 0.4.7 (39) from `main` at `a14e6a4`, after fetching and confirming
@@ -1303,3 +1335,94 @@ gesture are still pending user-authorized live deployment and delivery.
 - Existing tasks retain their existing tool definitions; this change does not
   retrofit registration, add mutation tools, or add a production server. No
   release, deployment, authentication change, or phone installation was performed.
+
+## Task swipe action tray — 2026-10-06
+
+- Right swipe now reveals a persistent left-side Read/Unread button without
+  changing read state. Tapping the button performs the existing phone-local
+  operation and closes the tray. Left swipe retains Archive/Unarchive and Undo;
+  reversing an open tray closes it without archiving. Snooze remains deferred.
+- The list permits one open tray and dismisses it on outside touch, scrolling,
+  and list/connection changes. TalkBack custom actions and long-press deep-link
+  copying remain available. Action cells use an 88dp width and existing row
+  height; physical left/right placement also holds in RTL.
+- Six focused managed Android 16 scenarios passed across two bounded runs:
+  `taskSwipeMenuRevealsWithoutMutatingAndClosesSafely`,
+  `taskSwipeTogglesUnread`, `taskSwipesArchiveUndoAndUnarchive`,
+  `taskLongPressCopiesLinkAndAccessibleActionsWork`,
+  `taskGesturesOnCompactScreenRespectCancellationAndPhysicalDirection`, and
+  `hapticPreferencePersistsAndControlsSendQueueAndSwipeFeedback`.
+  Coverage includes short/cancelled drags, cancelled closure restoring an open
+  tray, reverse swipe, row/outside dismissal, physical action-button tapping,
+  persistence, archive undo, accessibility, compact RTL, and haptic preference.
+- The initial run passed four scenarios. The short-drag test initially moved
+  below touch slop and opened the chat as a tap; the corrected gesture clears
+  touch slop while staying below the reveal threshold. The haptic test was
+  updated to close the tray before opening the chat. Both passed on rerun,
+  along with the affected RTL scenario after fixing Archive hint placement.
+- `:app:lintDebug` and `git diff --check` passed. Lint used the existing managed
+  JDK with a command-local SerialGC setting; no toolchain configuration changed.
+  No release, deployment, snooze mutation, or phone installation was performed.
+
+## Conversation task rename — 2026-10-06
+
+- Added Rename to the conversation overflow menu using stock `thread/name/set`,
+  followed by a metadata-only `thread/read` to display the authoritative name.
+- Fixture-backed emulator validation passed across selected runs:
+  `AppTest#conversationMenuRenamesTaskAndUpdatesList`,
+  `AppTest#rejectedRenamePreservesTitleAndAllowsCorrection`, and
+  `AppTest#lostRenameReplyDoesNotAutomaticallyRetry`.
+  Coverage includes emoji names, whitespace trimming, blank-name validation,
+  list refresh, explicit rejection, duplicate submissions, lost acknowledgement,
+  and read-only reconciliation after reconnect.
+- Initial runs encountered an incremental Kotlin cache failure, an undeclared
+  Espresso dependency in another shared-checkout test, and the three-minute
+  limit during compilation/emulator startup. Declared the already cached
+  Espresso 3.5.0 test dependency and used command-local in-process compilation
+  with incremental compilation disabled. The lost-response case passed before
+  a run timed out; the two remaining cases then passed in a successful run.
+- `git diff --check` passed. The UI change has not been released or installed on
+  the phone.
+
+## One-hour task snooze and custom return time — 2026-10-06
+
+- The right-swipe tray now exposes Read/Unread and Snooze in two 88dp cells.
+  Snooze immediately requests the fixed one-hour duration. Its confirmation
+  offers Change time; native date/time pickers, Save time, and Return now also
+  remain accessible through Settings → Snoozed chats. Running chats wait for
+  idle before hiding; restoring visibility does not start a model turn.
+- The app uses the installed public `codex-tasks` protocol over stock
+  `command/exec`, pins the host/account/Codex home and connection generation,
+  and persists a delivery guard before mutations. Reconnects inspect inventory
+  without replaying uncertain requests. Old inventory responses cannot overwrite
+  newer mutations or clear their delivery guards. Unarchiving a managed snooze
+  cancels its timer; archiving a chat waiting to snooze requires Return now first.
+- The full app unit suite passed (150 tests, including 11 snooze tests), along
+  with `:app:lintDebug`, debug app assembly, and instrumentation APK assembly.
+  Unit coverage includes helper identity/arguments, one-hour/custom deadlines,
+  persistent uncertainty, restart recovery, duplicate-send prevention, retained
+  failed schedules, clock gaps/overlaps, wake-up membership, and stale reads.
+- Five focused managed Android 16 scenarios passed:
+  `snoozeTapDefaultsToHourAndChangeTimeCanReturnEarly`,
+  `snoozeCustomDatePersistsInSnoozedChatsAndCanReturnNow`,
+  `snoozePendingAndUncertainRequestsAreInspectedWithoutReplay`,
+  `snoozeCompactTrayAndEditorRemainReachable`, and
+  `snoozeUnarchiveCancelsTimerInsteadOfLeavingAHiddenSchedule`.
+  These exercise the physical tray buttons, one-hour argv, native date/time
+  selection, retained controls, pending visibility, explicit return, reconnect
+  without replay, compact RTL with enlarged text, and unarchive cancellation.
+- All six swipe regression scenarios passed with the two-action tray:
+  `taskSwipeMenuRevealsWithoutMutatingAndClosesSafely`,
+  `taskSwipeTogglesUnread`, `taskSwipesArchiveUndoAndUnarchive`,
+  `taskLongPressCopiesLinkAndAccessibleActionsWork`,
+  `taskGesturesOnCompactScreenRespectCancellationAndPhysicalDirection`, and
+  `hapticPreferencePersistsAndControlsSendQueueAndSwipeFeedback`.
+- Initial shared-output emulator provisioning failed before tests; validation
+  moved to a disposable isolated checkout. The first isolated UI run exposed
+  that the replacement fixture model was not marked foregrounded. Correcting
+  the fixture enabled its inventory polling, and both affected scenarios passed.
+  Validation used the existing managed toolchain with command-local incremental
+  compilation disabled; no shared toolchain settings changed.
+- These are fixture-based checks. No live snooze was sent, release published,
+  service deployed, or app installed on the user's phone. Small validation
+  reports are retained under ignored `artifacts/snooze-validation/`.

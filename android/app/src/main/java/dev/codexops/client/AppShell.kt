@@ -119,6 +119,7 @@ private fun AppContent(model: ClientModel) {
                                     "chat" -> st.title
                                     "settings" -> "Settings"
                                     "archives" -> "Archived chats"
+                                    "snoozed" -> "Snoozed chats"
                                     "todo" -> "Todo"
                                     else -> "Chats"
                                 },
@@ -186,8 +187,9 @@ private fun AppContent(model: ClientModel) {
                     }
                 when (st.page) {
                     "todo" -> TodoScreen(st, model)
-                    "settings" -> SettingsScreen(st, model, report.shakeEnabled, model.reports::shakeEnabled,
-                        report.screenshotEnabled, model.reports::screenshotEnabled)
+                    "settings" -> SettingsScreen(st, model,
+                        screenshotEnabled = report.screenshotEnabled,
+                        onScreenshotChanged = model.reports::screenshotEnabled)
                     "chat" -> key(st.thread) { ConversationScreen(st, model) }
                     else -> HomeScreen(st, model)
                 }

@@ -17,6 +17,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
@@ -38,9 +41,12 @@ internal fun HomeScreen(st: ScreenState, actions: HomeActions) {
         val notice = st.taskNotice ?: return@LaunchedEffect
         try {
             val result = snackbar.showSnackbar(notice.message,
-                actionLabel = if (notice.undoArchived != null) "Undo" else null,
+                actionLabel = if (notice.changeSnooze != null) "Change time" else if (notice.undoArchived != null) "Undo" else null,
                 withDismissAction = true, duration = SnackbarDuration.Long)
-            if (result == SnackbarResult.ActionPerformed) actions.undoTaskAction(notice.id)
+            if (result == SnackbarResult.ActionPerformed) {
+                if (notice.changeSnooze != null) actions.editSnooze(notice.changeSnooze)
+                else actions.undoTaskAction(notice.id)
+            }
         } finally {
             // Leaving the list cancels showSnackbar. Retire that notice too so
             // returning from a conversation cannot replay an old archive result.
@@ -48,8 +54,13 @@ internal fun HomeScreen(st: ScreenState, actions: HomeActions) {
         }
     }
     Box(Modifier.fillMaxSize()) {
-        key(st.archived) { ChatBrowser(st, actions) }
+        key(st.page, st.archived) {
+            if (st.page == "snoozed") SnoozedChats(st, actions) else ChatBrowser(st, actions)
+        }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(12.dp))
+    }
+    st.snooze.editor?.let { id ->
+        st.snooze.tasks[id]?.let { SnoozeTimeSheet(it, st.snooze, actions) }
     }
 }
 
@@ -60,6 +71,15 @@ private fun ChatBrowser(st: ScreenState, actions: HomeActions) {
     var sheet by remember { mutableStateOf(false) }
     val cover = LocalAppWindowClass.current.coverScreen
     val list = rememberLazyListState(st.listIndex, st.listOffset)
+    var revealedTask by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(st.query, st.projectFilter, st.chatSort, st.ready, st.listLoading, st.pendingTaskActions) {
+        revealedTask = null
+    }
+    LaunchedEffect(list) {
+        snapshotFlow { list.isScrollInProgress }.distinctUntilChanged().collect {
+            if (it) revealedTask = null
+        }
+    }
     val scope = projectLabel(st.projectFilter, st.projects)
     LaunchedEffect(st.query, st.projectFilter, st.chatSort) {
         list.scrollToItem(st.listIndex, st.listOffset)
@@ -90,7 +110,22 @@ private fun ChatBrowser(st: ScreenState, actions: HomeActions) {
     ) {
         LazyColumn(
             state = list,
-            modifier = Modifier.fillMaxSize().testTag("chat-list"),
+            modifier = Modifier.fillMaxSize().testTag("chat-list")
+                .pointerInput(revealedTask) {
+                    val id = revealedTask ?: return@pointerInput
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            if (event.type == PointerEventType.Press) {
+                                val row = list.layoutInfo.visibleItemsInfo.firstOrNull { it.key == "chat:$id" }
+                                val y = event.changes.firstOrNull()?.position?.y
+                                if (row == null || y == null || y < row.offset || y >= row.offset + row.size) {
+                                    revealedTask = null
+                                }
+                            }
+                        }
+                    }
+                },
             contentPadding = PaddingValues(horizontal = if (cover) 12.dp else 20.dp, vertical = 8.dp),
         ) {
             item(key = "search") {
@@ -135,12 +170,18 @@ private fun ChatBrowser(st: ScreenState, actions: HomeActions) {
                 Column(Modifier.fillMaxWidth()) {
                     TaskSwipeRow(
                         id = id, archived = st.archived, unread = activity.unread, pending = pending,
+                        revealed = revealedTask == id,
+                        onReveal = { if (it) revealedTask = id else if (revealedTask == id) revealedTask = null },
                         archiveEnabled = st.ready && !st.listLoading && !pending && id !in st.uncertainTaskActions,
                         unreadEnabled = !st.listLoading && !pending,
+                        snoozeEnabled = st.ready && st.snooze.available && st.snooze.loaded && !pending &&
+                            id !in st.snooze.uncertain && id !in st.uncertainTaskActions &&
+                            (!st.archived || st.snooze.tasks[id]?.scheduled == true),
                         onOpen = { if (!pending && !st.listLoading) actions.openTask(id) },
                         onCopy = { copyThreadDeeplink(context, id) },
                         onArchive = { actions.archiveTask(id, !st.archived) },
                         onToggleUnread = { actions.toggleTaskUnread(id) },
+                        onSnooze = { if (st.archived) actions.editSnooze(id) else actions.snoozeTask(id) },
                     ) {
                     Column(Modifier.fillMaxWidth()
                         .heightIn(min = 64.dp).padding(vertical = 14.dp)) {
@@ -156,6 +197,10 @@ private fun ChatBrowser(st: ScreenState, actions: HomeActions) {
                         Text(listOf(project, date).filter { it.isNotBlank() }.joinToString(" · "),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        st.snooze.tasks[id]?.takeIf { it.waiting }?.let {
+                            Text("Snoozes after it finishes", style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                     }
                     if (id in st.uncertainTaskActions) TextButton(onClick = actions::retryList,
@@ -186,6 +231,11 @@ private fun ChatBrowser(st: ScreenState, actions: HomeActions) {
                             else if (st.query.isNotBlank() || st.projectFilter != TaskProjectFilter.All) "No matching chats"
                             else if (st.archived) "No archived chats" else "Start a new chat to get going.")
                     }
+                }
+                st.snooze.error?.takeIf { st.snooze.loaded || st.snooze.uncertain.isNotEmpty() }?.let { error ->
+                    Text(error, style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    TextButton(onClick = actions::refreshSnoozes, enabled = st.ready) { Text("Check snooze status") }
                 }
             }
         }

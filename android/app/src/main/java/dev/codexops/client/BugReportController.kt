@@ -30,26 +30,16 @@ internal class BugReportController(
     init {
         scope.launch {
             try {
-                // Shake is opt-in: it overlaps Motorola's chop-to-flashlight gesture.
-                val shake = local.get("bug-report/shake") == "true"
                 val screenshot = local.get("bug-report/screenshot") != "false"
                 val last = local.get("bug-report/last-task").ifBlank { null }
                 val draft = withContext(Dispatchers.IO) { store.load() }
-                _state.value = BugReportState(loaded = true, shakeEnabled = shake, screenshotEnabled = screenshot, draft = draft, lastTask = last)
+                _state.value = BugReportState(loaded = true, screenshotEnabled = screenshot, draft = draft, lastTask = last)
                 if (draft?.journal?.str("stage") == "accepted") finish(draft)
             } catch (_: Exception) {
                 storageBlocked = true
                 _state.update { it.copy(loaded = true, error = "The saved report could not be loaded. Its files have been retained.") }
             }
         }
-    }
-
-    fun shakeEnabled(value: Boolean) {
-        _state.update { it.copy(shakeEnabled = value) }
-        scope.launch { lock.withLock {
-            try { local.put("bug-report/shake", value.toString()) }
-            catch (_: Exception) { _state.update { it.copy(error = "The shake preference could not be saved.") } }
-        } }
     }
 
     fun screenshotEnabled(value: Boolean) {

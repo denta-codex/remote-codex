@@ -42,10 +42,6 @@ Record Android version, APK version/code, signer fingerprint, Codex version and 
       Report or request" snackbar appears and does not hide the system preview's
       actions. Tapping it attaches the app window as it was when the screenshot
       was taken. Ignoring it opens nothing. Confirm the Settings toggle persists.
-- [ ] With the bug-report build installed, deliberately shake on both Razr displays:
-      one report opens, the screenshot precedes the sheet, and repeated shakes
-      respect the cooldown. Ordinary handling and the phone's other gestures do
-      not open unwanted reports. Confirm disabling the Settings toggle persists.
 - [ ] Save a report offline, reopen after a process restart, and verify the
       intent, original screenshot, human description, and diagnostic timestamps remain.
 - [ ] On both displays, choose Research, review its title/message/evidence, edit
