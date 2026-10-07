@@ -1479,3 +1479,19 @@ gesture are still pending user-authorized live deployment and delivery.
   targeted checks passed across these runs.
 - Added the stock 0.154.0 facet inventory in `SEARCH-CAPABILITIES.md`, including
   unavailable aggregation/count fields and the cost of client-side scope scans.
+
+### Foreground credential request alerts — 2026-10-07
+
+- Local metadata publication, permission/path rejection, stale socket recovery,
+  fanout to two chat clients, and unchanged fragmented stock payloads pass.
+- The official build caught oversized upstream frames after message reassembly.
+  Regenerating 256 KiB fragments fixed it; all 18 forwarder tests, including the
+  isolated stock Codex 20 MiB attachment round trip, pass.
+- Alert controller fixtures cover coalescing, lifetime deduplication, grouped
+  expiration, cancelled/obsolete reads, connection changes, and discovery errors.
+- Focused managed-emulator validation passed Review navigation, visible Dismiss,
+  chat streaming/reopen, protected picker handoff/recreation, and credential
+  release without replay. Initial alert fixtures needed explicit foreground
+  activation and their test-specific chat route; corrected and rerun successfully.
+- Op-bridge change `1b20930` passed Go tests, race tests, vet, package checks and
+  a Darwin cross-build. All secret interactions used disposable fixtures.
