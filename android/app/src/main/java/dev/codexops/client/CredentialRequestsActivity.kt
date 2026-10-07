@@ -9,8 +9,6 @@ import android.view.WindowManager
 import android.view.autofill.AutofillManager
 import android.widget.*
 import androidx.activity.ComponentActivity
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
 import dev.codexops.core.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
@@ -37,6 +35,8 @@ class CredentialRequestsActivity : ComponentActivity() {
     private lateinit var release: Button
     private lateinit var deny: Button
     private lateinit var refreshButton: Button
+    private lateinit var ui: CredentialRequestLayout
+    private var pendingCount = 0
     private var selected: JsonObject? = null
     private var submitted = false
     private var busy = false
@@ -53,43 +53,22 @@ class CredentialRequestsActivity : ComponentActivity() {
         lockedRequestId = savedInstanceState?.getString("submitted_request")
         initialRequestId = if (savedInstanceState == null) intent.getStringExtra("request_id") else null
         blockedIds.addAll(savedInstanceState?.getStringArrayList("submitted_requests").orEmpty())
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
-            isSaveEnabled = false
-        }
-        val padding = (16 * resources.displayMetrics.density).toInt()
-        ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime() or WindowInsetsCompat.Type.displayCutout())
-            v.setPadding(padding + bars.left, padding + bars.top, padding + bars.right, padding + bars.bottom)
-            insets
-        }
-        fun label(text: String) = TextView(this).apply { this.text = text; root.addView(this) }
-        fun button(text: String, action: () -> Unit) = addButton(root, text, action)
-        label("Credential requests").textSize = 24f
-        label("Select the requested values in 1Password, then release once. Autofill cannot verify the selected account, item, or field. Values go only to the waiting caller.")
-        status = label("Open this screen when an op-bridge caller is waiting.")
-        refreshButton = button("Refresh") { refresh() }
-        requests = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; root.addView(this) }
-        details = label("Select a pending request.")
-        progress = label("")
-        singlePanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; isSaveEnabled = false; root.addView(this) }
+        ui = CredentialRequestLayout(this,
+            close = { finish() }, refresh = { refresh() },
+            back = { clearSelection(); refresh() }, choose = { choose(secret) },
+            release = { submit("release") }, deny = { submit("deny") })
+        status = ui.status; details = ui.details; progress = ui.progress
+        requests = ui.requests; singlePanel = ui.singlePanel; batchPanel = ui.batchPanel
+        release = ui.releaseButton; deny = ui.denyButton; refreshButton = ui.refreshButton
         secret = secretField("Requested secret", singleLine = true)
-        singlePanel.addView(secret)
-        addButton(singlePanel, "Choose in 1Password") { choose(secret) }
-        batchPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; isSaveEnabled = false; root.addView(this) }
-        release = button("Release once") { submit("release") }
-        deny = button("Deny") { submit("deny") }
+        ui.addSingleField(secret)
         watch(secret) { buttons() }
-        button("Back to requests") { clearSelection(); refresh() }
-        button("Close") { finish() }
-        setContentView(ScrollView(this).apply { isSaveEnabled = false; addView(root) })
+        setContentView(ui.scroll)
         buttons()
     }
 
-    private fun addButton(parent: LinearLayout, text: String, action: () -> Unit) = Button(this).apply {
-        this.text = text; setOnClickListener { action() }; parent.addView(this)
-    }
+    private fun addButton(parent: LinearLayout, text: String, action: () -> Unit) =
+        ui.button(text, action = action).also { ui.addControl(parent, it) }
     private fun secretField(hint: String, singleLine: Boolean) = EditText(this).apply {
         id = View.generateViewId()
         this.hint = hint
@@ -151,8 +130,21 @@ class CredentialRequestsActivity : ComponentActivity() {
             values = if (batch != null) releaseValues() else null)
         deny.isEnabled = selected?.let(::live) == true && !submitted && !busy && connection.connected
         refreshButton.isEnabled = !busy
+        ui.chooseButton.isEnabled = editable
+        ui.connection.text = if (connection.connected) "Connected to Grace" else "Not connected"
+        ui.heading.text = if (selected != null || submitted) "Credential request" else "Credential requests"
+        ui.card.visibility = if (selected != null || submitted) View.VISIBLE else View.GONE
+        requests.visibility = if (selected == null && !submitted) View.VISIBLE else View.GONE
+        release.visibility = if (selected != null || submitted) View.VISIBLE else View.GONE
+        deny.visibility = release.visibility
+        ui.backButton.visibility = if (pendingCount > 1 || submitted) View.VISIBLE else View.GONE
+        if (submitted || selected?.let(::live) != true) ui.expires.text = "—"
+        details.visibility = if (details.text.isEmpty()) View.GONE else View.VISIBLE
+        status.visibility = if (status.text.isEmpty()) View.GONE else View.VISIBLE
+        progress.visibility = if (batch == null) View.GONE else View.VISIBLE
         progress.text = batch?.let { "${it.fields.count { field -> selectedField(field.id) }} of ${it.fields.size} selected" } ?: ""
         singlePanel.visibility = if (selected?.str("kind") == "inject") View.GONE else View.VISIBLE
+        batchPanel.visibility = if (selected?.str("kind") == "inject") View.VISIBLE else View.GONE
     }
     private fun clearSecret() {
         autofill?.cancel()
@@ -166,7 +158,7 @@ class CredentialRequestsActivity : ComponentActivity() {
         clearSecret(); selected = null; batch = null; validSelection = false
         batchPanel.removeAllViews(); batchInputs.clear()
         submitted = false; lockedRequestId = null
-        details.text = "Select a pending request."; buttons()
+        details.text = ""; ui.title.text = ""; ui.subtitle.text = ""; buttons()
     }
     internal fun selectRequest(request: JsonObject) {
         if (busy) return
@@ -179,6 +171,7 @@ class CredentialRequestsActivity : ComponentActivity() {
     }
     private fun applyMetadata(request: JsonObject) {
         validSelection = false
+        showDetails(request)
         val kind = request.str("kind")
         if (kind == "inject") {
             if (request["fields"] == null) { details.text = "Loading credential group…"; return }
@@ -190,18 +183,19 @@ class CredentialRequestsActivity : ComponentActivity() {
             if (batch != parsed) {
                 clearSecret(); batchPanel.removeAllViews(); batchInputs.clear(); batch = parsed
                 parsed.fields.groupBy { it.vault to it.item }.forEach { (group, fields) ->
-                    batchPanel.addView(TextView(this).apply { text = "Vault: ${group.first}\nItem: ${group.second}" })
+                    val groupPanel = ui.group(group.first, group.second)
                     fields.forEach { field ->
-                        batchPanel.addView(TextView(this).apply { text = "Field: ${field.field} · ${field.occurrences} occurrence(s)" })
+                        ui.fieldLabel(groupPanel, field.field, field.occurrences)
                         val input = secretField(field.field, singleLine = false)
                         batchInputs[field.id] = input
-                        batchPanel.addView(input)
+                        ui.styleSecret(input)
+                        ui.addControl(groupPanel, input)
                         watch(input) {
                             if (!input.text.isNullOrEmpty()) explicitEmpty.remove(field.id)
                             buttons()
                         }
-                        addButton(batchPanel, "Choose in 1Password") { choose(input) }
-                        addButton(batchPanel, "Use empty value") {
+                        addButton(groupPanel, "Choose in 1Password") { choose(input) }
+                        addButton(groupPanel, "Use empty value") {
                             if (canEdit()) { input.text?.clear(); explicitEmpty.add(field.id); buttons() }
                         }
                     }
@@ -212,14 +206,18 @@ class CredentialRequestsActivity : ComponentActivity() {
         }
         validSelection = request.str("id").isNotEmpty() && request.str("account").isNotEmpty() &&
             (kind == "inject" || request.str("item").isNotEmpty() && request.str("field").isNotEmpty())
-        showDetails(request)
     }
     private fun showDetails(request: JsonObject) {
         val seconds = (((request.str("deadline").toLongOrNull() ?: 0) - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
-        val selection = if (request.str("kind") == "inject")
-            "${request.str("unique_count")} unique field(s) · ${request.str("occurrence_count")} occurrence(s)"
-        else "Vault: ${request.str("vault").ifEmpty { "Not specified" }}\nItem: ${request.str("item")}\nField: ${request.str("field")}"
-        details.text = "Host: ${request.str("host")} · Caller: ${request.str("caller")}\nAccount: ${request.str("account")}\n$selection\nTime remaining: ${seconds}s"
+        val grouped = request.str("kind") == "inject"
+        ui.title.text = if (grouped) "Credential group" else request.str("item")
+        ui.subtitle.text = if (grouped) "${request.str("unique_count")} fields · ${request.str("occurrence_count")} uses"
+            else request.str("vault").ifEmpty { "Vault not specified" }
+        ui.field.text = if (grouped) "${request.str("unique_count")} requested fields" else request.str("field")
+        ui.requester.text = "${request.str("caller")} on ${request.str("host") }"
+        ui.account.text = request.str("account")
+        ui.expires.text = "%d:%02d".format(seconds / 60, seconds % 60)
+        details.text = ""
     }
     private fun metadata(request: JsonObject) = JsonObject(request.filterKeys { it in setOf("id", "host", "caller", "account", "vault", "item", "field", "kind", "deadline", "fields", "unique_count", "occurrence_count") })
 
@@ -254,14 +252,28 @@ class CredentialRequestsActivity : ComponentActivity() {
                     }
                 }
                 val pending = connection.call("list").list("requests")
+                pendingCount = pending.size
+                if (selected == null && !submitted && pending.size == 1) {
+                    val only = pending.single()
+                    val full = connection.call("get", only.str("id")).list("requests").singleOrNull()
+                    if (full != null && full.str("id") != only.str("id")) throw ApprovalFailure("invalid_response")
+                    if (full != null && full.str("id") == only.str("id") && live(full)) {
+                        selected = full
+                        submitted = full.str("id") in blockedIds
+                        if (submitted) {
+                            validSelection = false
+                            details.text = "Submission was interrupted. Its values will not be resent."
+                        } else applyMetadata(full)
+                    }
+                }
                 requests.removeAllViews()
                 pending.forEach { request ->
-                    requests.addView(Button(this@CredentialRequestsActivity).apply {
-                        text = if (request.str("kind") == "inject") "Inject · ${request.str("unique_count")} field(s)" else "${request.str("item")} / ${request.str("field")}"
-                        setOnClickListener { selectRequest(request) }
-                    })
+                    val title = if (request.str("kind") == "inject") "Credential group · ${request.str("unique_count")} fields"
+                        else "${request.str("item")} / ${request.str("field") }"
+                    addButton(requests, title) { selectRequest(request) }
                 }
-                status.text = if (pending.isEmpty()) "No pending credential requests." else "${pending.size} pending request(s)."
+                status.text = if (selected != null && !submitted && validSelection) ""
+                    else if (pending.isEmpty()) "No pending credential requests." else "${pending.size} requests waiting for approval."
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 clearSecret(); connection.close()

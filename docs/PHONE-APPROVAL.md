@@ -69,3 +69,13 @@ shell lacked user-bus environment variables. It made no installation changes;
 explicit bus addressing was added, revalidated, and the corrected deployment
 succeeded. Its staging and recovery data were cleaned by the deployment workflow.
 Actual 1Password selection and approval on the phone remains a manual user test.
+
+The approval page uses a focused request card with the requested item/field,
+caller, account and remaining time above the 1Password selection. Selected values
+stay masked. Release and Deny remain explicit separate actions; choosing a value
+never approves it. One live request opens directly after a read-only status
+check. Multiple requests retain a selection list, and Back to requests clears
+all selected values. Batch fields remain grouped by vault/item within the card.
+The page supports system light/dark appearance and scrolls for smaller screens
+and enlarged text. The protected native Autofill fields and submission state
+machine are unchanged.

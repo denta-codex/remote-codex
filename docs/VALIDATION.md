@@ -1530,3 +1530,17 @@ gesture are still pending user-authorized live deployment and delivery.
 - Build: `artifacts/releases/run-20261007T145847Z-DIEIkh.log`.
   Forwarder: `artifacts/releases/run-20261007T150344Z-Zq7C4A.log`.
   Publication: `artifacts/releases/run-20261007T150549Z-o70jWR.log`.
+
+### Focused credential request cards — 2026-10-07
+
+- Implemented the selected focused-card design with item/field, requester,
+  account, countdown, masked native Autofill selection and explicit Release/Deny.
+  Single pending requests open after a read-only get; multiple requests retain
+  a picker. Returning to the picker clears transient values.
+- Eight targeted managed-emulator cases passed across the implementation runs:
+  single-card opening, multi-request navigation, single release without replay,
+  protected picker/recreation, complete batch release, disconnect/expiry clearing,
+  malformed/oversized batch protection, and snackbar Review navigation.
+- Native password fields retain FLAG_SECURE and disabled state saving. The bridge
+  protocols, one-time submission guards, caller receipts and secret route remain
+  unchanged. No live credential request or phone installation was performed.
