@@ -73,6 +73,7 @@ dependencies {
     implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.37.0")
     implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
     androidTestImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     androidTestImplementation("com.squareup.okhttp3:okhttp:4.12.0")
     androidTestImplementation(platform("androidx.compose:compose-bom:2025.08.01"))

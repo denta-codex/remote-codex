@@ -10,8 +10,10 @@ a dedicated SQLite database.
 The forwarder also removes WebSocket extension offers: the stock control socket
 closes handshakes offering `permessage-deflate`. Android does not offer extensions,
 and the forwarder strips them defensively before the stock handshake. After the
-upgrade, Rust copies bytes without decoding WebSocket messages, preserving client
-fragment boundaries and backpressure.
+upgrade, Rust relays complete WebSocket messages with unchanged stock payloads
+and bounded writes. It also inserts metadata-only credential invalidations on
+this connection; stock Codex remains unchanged. See
+`protocol/credential-approvals.md` for the local event socket and alert contract.
 
 Android owns presentation, encrypted connection credentials, drafts, and submission
 records. Stock Codex owns execution, configuration, task IDs and durable history.
@@ -492,7 +494,7 @@ recovery; remove them once recovery and verification are complete.
 The Todo destination is a Compose board, independent of Codex chat tasks. It
 connects over authenticated WSS to `/remote-codex/v1/todo` on the existing Rust
 service. This route terminates WebSockets and handles application-owned JSON-RPC;
-`/codex/rpc` remains transparent stock forwarding. Todo does not initialize a
+`/codex/rpc` preserves stock payloads and also carries server-generated credential hints. Todo does not initialize a
 Codex session or execute commands through Codex. Its connection availability is
 independent of the stock connection. There is no temporary board server or preview.
 

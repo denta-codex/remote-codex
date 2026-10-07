@@ -160,6 +160,7 @@ data class ScreenState(
     val connection: String = "Offline",
     val ready: Boolean = false,
     val appForeground: Boolean = false,
+    val credentialNotice: CredentialNotice? = null,
     val hapticsLoaded: Boolean = false,
     val hapticsEnabled: Boolean = true,
     val liveAssistantText: LiveAssistantText? = null,

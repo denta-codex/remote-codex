@@ -9,6 +9,11 @@ Environment=REMOTE_CODEX_LISTEN=127.0.0.1:8787
 Environment=REMOTE_CODEX_TODO_DB=/home/agent/.local/share/remote-codex/todo.sqlite3
 Environment=REMOTE_CODEX_UPDATE_ROOT=/home/agent/.local/share/remote-codex/updates
 Environment=REMOTE_CODEX_APPROVAL_SOCKET=/run/user/{{ user_id.stdout }}/op-bridge-phone/approval.sock
+Environment=REMOTE_CODEX_EVENT_SOCKET=/run/user/{{ user_id.stdout }}/remote-codex/events.sock
+RuntimeDirectory=remote-codex
+RuntimeDirectoryMode=0700
+# scripts/deploy holds its lock here; service restarts must preserve that inode.
+RuntimeDirectoryPreserve=yes
 LoadCredentialEncrypted=connection-token:/home/agent/.local/share/remote-codex/connection-token.cred
 Restart=on-failure
 RestartSec=3
@@ -18,6 +23,7 @@ ProtectSystem=strict
 ProtectHome=read-only
 # SQLite must create/remove journals beside its database. Protect sibling assets.
 ReadWritePaths=/home/agent/.local/share/remote-codex
+ReadWritePaths=/run/user/{{ user_id.stdout }}/remote-codex
 ReadOnlyPaths=/home/agent/.local/share/remote-codex/updates
 ReadOnlyPaths=-/home/agent/.local/share/remote-codex/signing -/home/agent/.local/share/remote-codex/builds
 ReadOnlyPaths=-/home/agent/.local/share/remote-codex/connection-token.cred

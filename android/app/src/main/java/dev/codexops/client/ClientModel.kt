@@ -64,6 +64,19 @@ constructor(
     private val remoteFileRepository = RemoteFileRepository(app)
     private val _state = MutableStateFlow(ScreenState(host = host))
     val state = _state.asStateFlow()
+    private val credentialAlerts = CredentialAlertController(viewModelScope,
+        { rpc.generation }, { foreground && _state.value.ready },
+        {
+            val connection = ApprovalConnection(allowLoopbackTest)
+            try {
+                connection.connect(host.endpoint, local.token())
+                connection.call("list")
+            } catch (error: ApprovalFailure) {
+                if (error.kind == "no_session") obj("requests" to JsonArray(emptyList())) else throw error
+            } finally { connection.close() }
+        }, { notice -> _state.update { it.copy(credentialNotice = notice) } })
+    internal fun dismissCredentialNotice(id: Long) = credentialAlerts.dismiss(id)
+    internal fun refreshCredentialRequests() = credentialAlerts.refresh()
     private val weeklyUsage = WeeklyUsageController(viewModelScope, rpc, { _state.value },
         { usage -> _state.update { it.copy(weeklyUsage = usage) } })
     override fun refreshWeeklyUsage() = weeklyUsage.refresh()
@@ -367,10 +380,12 @@ constructor(
         val reopening = value && !foreground
         if (!value) cancelStreamingHaptics()
         foreground = value
+        if (!value) credentialAlerts.stopped()
         _state.update { it.copy(appForeground = value) }
         if (value) UpdateInstallResults.consume(getApplication())?.let(::applyInstallResult)
         if (value && !_state.value.ready) connect()
         if (reopening && _state.value.ready && !_state.value.busy) followUps.opened()
+        if (reopening && _state.value.ready) credentialAlerts.refresh()
     }
 
     override fun connect() {
@@ -442,6 +457,7 @@ constructor(
                             )
                         }
                         refreshProjects()
+                        credentialAlerts.refresh()
                         viewModelScope.launch { refreshModelCatalog() }
                         cancelList()
                         launchList()
@@ -2511,6 +2527,7 @@ constructor(
     private fun handle(event: JsonObject) {
         if (event.str("_epoch").toLongOrNull()?.let { it != rpc.generation } == true) return
         if (event.str("method") == "connection/lost") {
+            credentialAlerts.stopped()
             weeklyUsage.disconnected()
             verifiedTaskGeneration = null
             taskTools.cancelAll()
@@ -2535,6 +2552,10 @@ constructor(
             if (foreground && connectionJob?.isActive != true) {
                 connect()
             }
+            return
+        }
+        if (event.str("method") == CREDENTIAL_REQUESTS_CHANGED) {
+            credentialAlerts.refresh()
             return
         }
         if (event.str("method") == "project/changed") {

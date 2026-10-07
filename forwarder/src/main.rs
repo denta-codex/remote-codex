@@ -34,6 +34,9 @@ async fn main() -> io::Result<()> {
     if let Ok(socket) = std::env::var("REMOTE_CODEX_APPROVAL_SOCKET") {
         config = config.with_approval_socket(socket)?;
     }
+    if let Ok(socket) = std::env::var("REMOTE_CODEX_EVENT_SOCKET") {
+        config = config.with_event_socket(socket)?;
+    }
     let listener = TcpListener::bind(address).await?;
     eprintln!("Remote Codex forwarder listening on loopback");
     serve(listener, config, shutdown_signal()).await

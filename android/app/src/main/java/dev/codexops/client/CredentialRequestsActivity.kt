@@ -44,12 +44,14 @@ class CredentialRequestsActivity : ComponentActivity() {
     private var updateJob: Job? = null
     private var visible = false
     private var lockedRequestId: String? = null
+    private var initialRequestId: String? = null
     private val autofill get() = getSystemService(AutofillManager::class.java)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         lockedRequestId = savedInstanceState?.getString("submitted_request")
+        initialRequestId = if (savedInstanceState == null) intent.getStringExtra("request_id") else null
         blockedIds.addAll(savedInstanceState?.getStringArrayList("submitted_requests").orEmpty())
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -232,7 +234,8 @@ class CredentialRequestsActivity : ComponentActivity() {
                     if (token.isEmpty()) { status.text = "Set your connection credential in Settings first."; return@launch }
                     connection.connect(fixture ?: GraceHost.endpoint, token)
                 }
-                val id = selected?.str("id") ?: lockedRequestId
+                val id = selected?.str("id") ?: lockedRequestId ?: initialRequestId
+                initialRequestId = null
                 if (id != null) {
                     val response = connection.call("get", id)
                     val current = response.list("requests").firstOrNull()

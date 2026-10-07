@@ -31,6 +31,7 @@ cp "$apk" "$release_dir/remote-codex.apk"
 (cd forwarder && mise x rust@1.95.0 -- cargo build --locked --workspace --release)
 cp forwarder/target/release/remote-codex-forwarder dist/remote-codex-forwarder
 cp forwarder/target/release/todo dist/todo
+cp forwarder/target/release/remote-codex dist/remote-codex
 apk_sha256="$(sha256sum "$release_dir/remote-codex.apk" | cut -d' ' -f1)"
 apk_size="$(stat --format='%s' "$release_dir/remote-codex.apk")"
 jq -n \
@@ -50,5 +51,5 @@ jq -n \
 (cd dist && sha256sum \
   "updates/releases/$version_code/remote-codex.apk" \
   updates/stable/latest.json \
-  remote-codex-forwarder todo > SHA256SUMS)
+  remote-codex-forwarder remote-codex todo > SHA256SUMS)
 echo "Signed Remote Codex $version_name ($version_code), update manifest, and forwarder ready in dist/. Nothing deployed or published."
