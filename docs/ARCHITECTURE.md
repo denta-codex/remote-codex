@@ -67,7 +67,15 @@ acknowledgement, replay, or custom chunk envelope between Android and the host.
 
 The client pages the stock `project/list` catalog and keeps project identity and
 thread assignment server-owned. The task browser can show all tasks, projectless
-Chats, or one existing project. List and search pages request descending
+Chats, or any selected subset of existing projects, optionally including projectless
+chats. Project checkboxes combine with OR; the project scope combines with the
+text query and archive view with AND. Clearing the last checkbox returns to all
+projects. Apply commits the selection and sort together; dismiss discards edits.
+Single-project browsing uses the server filter. Multiple-project browsing and
+project-scoped full-text search filter server pages by exact project assignment,
+continuing until 30 matches or exhaustion, preserving server order and cursors.
+This can require many server reads for sparse scopes.
+List and search pages request descending
 `recency_at` ordering from stock Codex; `updated_at` can advance for metadata
 changes to otherwise inactive chats. Pagination preserves the server's order.
 New tasks default to projectless execution: their

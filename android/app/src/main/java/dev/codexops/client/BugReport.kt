@@ -101,7 +101,10 @@ internal fun bugReportContext(st: ScreenState, device: JsonObject, actions: Json
         TaskProjectFilter.All -> "all"
         TaskProjectFilter.Projectless -> "projectless"
         is TaskProjectFilter.Project -> filter.id
+        is TaskProjectFilter.Selected -> "selected"
     }),
+    "selectedProjectIds" to (st.projectFilter as? TaskProjectFilter.Selected)?.let { JsonArray(it.ids.sorted().map(::s)) },
+    "includeProjectless" to (st.projectFilter as? TaskProjectFilter.Selected)?.let { JsonPrimitive(it.includeProjectless) },
     "model" to (st.newTaskOptions.model ?: st.threadModel)?.let(::s),
     "reasoningEffort" to (st.newTaskOptions.reasoningEffort ?: st.threadReasoningEffort)?.let(::s),
     "collaborationMode" to st.newTaskOptions.collaborationMode?.let(::s),

@@ -113,6 +113,24 @@ class HomeScreenTest {
         compose.onNodeWithText("Archived").assertDoesNotExist()
     }
 
+    @Test fun multipleProjectsAndProjectlessApplyTogether() {
+        show(fixture().copy(projects = listOf(
+            CodexProject("printing", "3d_printing", emptyList()),
+            CodexProject("notes", "Notes", emptyList()))))
+        compose.onNodeWithText("All projects").performClick()
+        compose.onNode(hasText("3d_printing") and isSelectable()).performClick()
+        compose.onNode(hasText("Notes") and isSelectable()).performClick()
+        compose.onNode(hasText("No project") and isSelectable()).performClick()
+        assertEquals(TaskProjectFilter.All, state.value.projectFilter)
+        compose.onNodeWithText("Apply").performClick()
+        assertEquals(TaskProjectFilter.Selected(setOf("printing", "notes"), true), state.value.projectFilter)
+        compose.onNodeWithText("3 projects").performClick()
+        compose.onNode(hasText("Notes") and isSelectable()).performClick()
+        compose.onNode(hasText("No project") and isSelectable()).performClick()
+        compose.onNodeWithText("Apply").performClick()
+        assertEquals(TaskProjectFilter.Project("printing"), state.value.projectFilter)
+    }
+
     @Test fun coverScreenLargeTextKeepsSheetReachable() {
         fun shell(command: String) {
             android.os.ParcelFileDescriptor.AutoCloseInputStream(

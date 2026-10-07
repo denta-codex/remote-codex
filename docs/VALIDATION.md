@@ -1462,3 +1462,20 @@ gesture are still pending user-authorized live deployment and delivery.
 - These are fixture-based checks. No live snooze was sent, release published,
   service deployed, or app installed on the user's phone. Small validation
   reports are retained under ignored `artifacts/snooze-validation/`.
+
+### Multi-project chat scopes
+
+- Added project checkboxes that select any subset of projects and optionally
+  projectless chats. Apply retains atomic project/sort changes; Reset selects all.
+- Multi-project browsing filters stock pages, continuing past excluded results;
+  full-text search uses the same scope without sending unsupported project fields.
+- `scripts/emulator-test --tests
+  HomeScreenTest#multipleProjectsAndProjectlessApplyTogether
+  HomeScreenTest#sheetAppliesAtomicallyAndDismissesWithoutChanges
+  AppTest#multipleProjectsPageBeforeAndDuringSearch
+  AppTest#compactBrowserQueriesAndPagination`: the three existing/model checks
+  passed. The new UI test initially had an ambiguous project-name selector;
+  constrained it to selectable rows and reran that test successfully. All four
+  targeted checks passed across these runs.
+- Added the stock 0.154.0 facet inventory in `SEARCH-CAPABILITIES.md`, including
+  unavailable aggregation/count fields and the cost of client-side scope scans.
