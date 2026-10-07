@@ -1,1 +1,8 @@
-- Fix conversation loading memory pressure and duplicate history fetch
+- Codex worktree snapshot: archive-cleanup
+- Support multiple project scopes in chat search
+- Merge multi-project chat search
+- Render Markdown documents in file previews
+- Merge Markdown file preview rendering
+- Merge main into credential alert worktree
+- Notify foreground Android of credential requests over the existing WebSocket
+- Preserve stock frame limits while relaying large messages
