@@ -1,1 +1,2 @@
-- Record credential alert deployment and verified Android publication
+- Use focused cards for credential approvals
+- Improve socket probe diagnostics and stress recovery validation
