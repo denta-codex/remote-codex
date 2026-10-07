@@ -3648,6 +3648,43 @@ class AppTest {
     }
 
     @Test
+    fun remoteMarkdownFileRendersHeadingsAndTableCells() {
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) {
+            model.state.value.thread == "task-test" && !model.state.value.busy
+        }
+        val markdown = """
+            # Search capabilities
+
+            | Component | Support |
+            | --- | --- |
+            | **Text query** | Uses `thread/search` |
+        """.trimIndent()
+        remoteFiles["/fixture/remote-codex/SEARCH-CAPABILITIES.MD"] =
+            Base64.getEncoder().encodeToString(markdown.toByteArray())
+        compose.runOnUiThread {
+            model.inspectFile(FileRef("markdown", "SEARCH-CAPABILITIES.MD", "SEARCH-CAPABILITIES.MD"))
+        }
+        compose.waitUntil(10000) {
+            model.state.value.filePreview?.let { !it.loading } == true
+        }
+        assertEquals(markdown, model.state.value.filePreview?.text)
+        assertTrue(model.state.value.filePreview!!.isMarkdown)
+        compose.waitUntil(10000) {
+            compose.onAllNodesWithText("Search capabilities", substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText("Search capabilities").assertIsDisplayed()
+        compose.onNodeWithText("Component", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("Text query", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("thread/search", substring = true).assertExists()
+        compose.onNodeWithText("**Text query**", substring = true).assertDoesNotExist()
+        compose.onNodeWithText("`thread/search`", substring = true).assertDoesNotExist()
+        compose.onNodeWithText(markdown).assertDoesNotExist()
+        compose.onNodeWithText("Close").performClick()
+        compose.onNodeWithTag("file-preview").assertDoesNotExist()
+    }
+
+    @Test
     fun remoteTextFileUsesMetadataAndOpensAReadablePreview() {
         compose.runOnUiThread { model.openTask("task-test") }
         compose.waitUntil(10000) {
