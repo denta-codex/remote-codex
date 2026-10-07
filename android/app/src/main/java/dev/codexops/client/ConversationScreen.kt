@@ -375,6 +375,7 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
     st.filePreview?.let { preview ->
         FilePreviewDialog(
             preview = preview,
+            actions = actions,
             onDismiss = actions::dismissFile,
             onSave = { saveDocument.launch(preview.reference.displayName) },
         )

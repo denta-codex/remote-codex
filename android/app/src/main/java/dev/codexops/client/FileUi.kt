@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
@@ -156,6 +157,7 @@ internal fun FileReferenceList(files: List<FileRef>, actions: ConversationAction
 @Composable
 internal fun FilePreviewDialog(
     preview: FilePreviewState,
+    actions: ConversationActions,
     onDismiss: () -> Unit,
     onSave: () -> Unit,
 ) {
@@ -210,11 +212,15 @@ internal fun FilePreviewDialog(
                     }
                     preview.kind == FilePreviewKind.TEXT ->
                         Column(Modifier.weight(1f, false).verticalScroll(rememberScrollState())) {
-                            Text(
-                                preview.text.orEmpty(),
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 12.sp,
-                            )
+                            SelectionContainer {
+                                if (preview.isMarkdown)
+                                    FileAwareMarkdown(preview.text.orEmpty(), actions)
+                                else Text(
+                                    preview.text.orEmpty(),
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 12.sp,
+                                )
+                            }
                             if (preview.truncated)
                                 Text(
                                     "Preview truncated after 65,536 characters.",
