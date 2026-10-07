@@ -1,5 +1,73 @@
 # Validation
 
+## 2026-10-06 — Android 0.4.9 (41)
+
+- Source revision: `87c10d4c5aba711abb652ea0fdd54f8d8b852fc6`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `6028bcc3c7dbc961c8845bcb0d869e6086f6f8a42f9b53ae1b0992abe259f25d`.
+- Outcome: Built and signed locally; not published.
+- Build log: `/home/agent/workspaces/remote-codex/artifacts/releases/run-20261006T232928Z-ej3A7B.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
+## 2026-10-06 — Conversation opening memory and latency
+
+- Report `3386afd3-ab29-4f92-b964-4375eb12d2db` records 9,924 ms from
+  opening the task to clearing busy, a failed 179,509,778-byte allocation,
+  and 6,298 ms blocked on garbage collection.
+- Reuse resume's newest full turn and cursor instead of requesting another
+  20 full turns before rendering. Older history and metadata-only resume
+  recovery request one turn per page. The inbound RPC UTF-8 size check now
+  counts bytes without allocating an encoded copy of the entire message.
+- `RpcSizeTest` passed, including Unicode and malformed-surrogate boundaries.
+- Managed Android 16 tests passed:
+  `AppTest#conversationOpensFromResumePageWithoutWaitingForOlderHistory`
+  and `AppTest#textChatStreamsAndCanReopen`. The regression confirms rendering
+  succeeds while older-history responses are withheld and preserves the cursor.
+- No live-device latency measurement, publication, deployment, or phone
+  installation was performed. A single exceptionally large turn can still
+  require substantial memory; pagination bounds turns rather than bytes.
+
+## 2026-10-06 — Android 0.4.8 (40)
+
+- Source revision: `bb6e267fcc8aa3387f93b5805a8e170acc910a05`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `7962101c4523b282215897cbc32a1bb19ab9742e813f0490d3a26aea628a003b`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/home/agent/workspaces/remote-codex/artifacts/releases/run-20261006T213808Z-thDD97.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
+## 2026-10-06 — Consolidate shared-checkout Android changes
+
+- Integrated the swipe action tray, one-hour/custom snoozing, conversation
+  renaming, weekly usage remaining, and complete shake-reporting removal on
+  `main`. The duplicate dirty checkout has the same code; the older reporting
+  and visualization scratch work is already incorporated in current history.
+- Validated an isolated copy of the staged source: all 148 app unit tests,
+  Android lint, debug app assembly, and instrumentation APK assembly passed.
+- Five focused managed Android 16 scenarios passed together:
+  `AppTest#settingsShowsWeeklyRemainingRefreshesAndHandlesSparseUpdates`,
+  `AppTest#snoozeTapDefaultsToHourAndChangeTimeCanReturnEarly`,
+  `AppTest#conversationMenuRenamesTaskAndUpdatesList`,
+  `AppTest#taskSwipeMenuRevealsWithoutMutatingAndClosesSafely`, and
+  `AppTest#systemScreenshotOffersReportWithTheCapturedWindow`.
+- XML results are retained under `artifacts/integration-validation/`. The
+  temporary validation checkout was removed after verification. This local
+  integration does not publish a release or install on the phone.
+
+## 2026-10-06 — Remove shake-to-report
+
+- Removed the Settings toggle, report-state field, saved-preference handling,
+  lifecycle sensor registration, invocation gate, vendored Seismic detector,
+  detector tests, and bundled license assets. Screenshot and menu reporting
+  remain available; earlier shake-related entries below describe retired code.
+- All 10 `BugReportTest` unit tests passed, and the Android test APK compiled.
+- Selected managed Android 16 instrumentation passed:
+  `AppTest#bugReportSettingsExcludesScreenshotAndPersistsScreenshotPreference`
+  and `AppTest#systemScreenshotOffersReportWithTheCapturedWindow`.
+- Validation used an isolated source snapshot to avoid concurrent checkout
+  builds. XML results are retained in `artifacts/reporting-validation/`;
+  the temporary source copy was removed after successful verification.
+
 ## 2026-10-06 — Todo cutover and Android 0.4.7 publication
 
 - Built Android 0.4.7 (39) from `main` at `a14e6a4`, after fetching and confirming
@@ -1394,3 +1462,20 @@ gesture are still pending user-authorized live deployment and delivery.
 - These are fixture-based checks. No live snooze was sent, release published,
   service deployed, or app installed on the user's phone. Small validation
   reports are retained under ignored `artifacts/snooze-validation/`.
+
+### Multi-project chat scopes
+
+- Added project checkboxes that select any subset of projects and optionally
+  projectless chats. Apply retains atomic project/sort changes; Reset selects all.
+- Multi-project browsing filters stock pages, continuing past excluded results;
+  full-text search uses the same scope without sending unsupported project fields.
+- `scripts/emulator-test --tests
+  HomeScreenTest#multipleProjectsAndProjectlessApplyTogether
+  HomeScreenTest#sheetAppliesAtomicallyAndDismissesWithoutChanges
+  AppTest#multipleProjectsPageBeforeAndDuringSearch
+  AppTest#compactBrowserQueriesAndPagination`: the three existing/model checks
+  passed. The new UI test initially had an ambiguous project-name selector;
+  constrained it to selectable rows and reran that test successfully. All four
+  targeted checks passed across these runs.
+- Added the stock 0.154.0 facet inventory in `SEARCH-CAPABILITIES.md`, including
+  unavailable aggregation/count fields and the cost of client-side scope scans.

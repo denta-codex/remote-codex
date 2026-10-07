@@ -865,6 +865,8 @@ constructor(
             val availableFilter =
                 if (filter is TaskProjectFilter.Project && values.none { it.id == filter.id })
                     TaskProjectFilter.All
+                else if (filter is TaskProjectFilter.Selected)
+                    TaskProjectFilter.selection(filter.ids.intersect(values.map { it.id }.toSet()), filter.includeProjectless)
                 else filter
             val selected = before.newTaskOptions.projectId?.let { id -> values.find { it.id == id } }
             val options =
@@ -885,7 +887,7 @@ constructor(
         if (!_state.value.ready) { _state.update { it.copy(listLoading = false, refreshingTasks = false) }; return }
         val before = _state.value
         val n = ++listSelection
-        val scopedSearch = before.query.isNotBlank() && before.projectFilter != TaskProjectFilter.All
+        val scopedSearch = (before.query.isNotBlank() && before.projectFilter != TaskProjectFilter.All) || before.projectFilter is TaskProjectFilter.Selected
         var cursor = if (more) before.listCursor else null
         val seen = if (more) listCursors.getOrPut(before.archived) { mutableSetOf() }
             else mutableSetOf<String>().also { listCursors[before.archived] = it }
@@ -906,6 +908,7 @@ constructor(
                         TaskProjectFilter.All -> null
                         TaskProjectFilter.Projectless -> JsonNull
                         is TaskProjectFilter.Project -> s(filter.id)
+                        is TaskProjectFilter.Selected -> null
                     },
                 )
                 val response = rpc.call(if (before.query.isBlank()) "thread/list" else "thread/search", params)
@@ -913,11 +916,7 @@ constructor(
                 val next = response.cursor()
                 check(next == null || seen.add(next)) { "The server repeated a page. Retry to continue." }
                 response.list("data").map { if (before.query.isBlank()) it else it.map("thread") }
-                    .filter { row -> when (val filter = before.projectFilter) {
-                        TaskProjectFilter.All -> true
-                        TaskProjectFilter.Projectless -> row["projectId"] == null || row["projectId"] is JsonNull
-                        is TaskProjectFilter.Project -> row.str("projectId") == filter.id
-                    } }.forEach { row -> if (row.str("id").isNotBlank()) rows[row.str("id")] = row }
+                    .filter { row -> before.projectFilter.contains(row.str("projectId")) }.forEach { row -> if (row.str("id").isNotBlank()) rows[row.str("id")] = row }
                 cursor = next
                 val confirmedIds = response.list("data").map {
                     (if (before.query.isBlank()) it else it.map("thread")).str("id")
@@ -1148,12 +1147,15 @@ constructor(
             publish()
             val thread = response.map("thread")
             if (n == selection) chatUsagePath = thread.str("path").takeIf { it.startsWith('/') && !it.contains('\u0000') }
-            val history =
+            // Resume already returns the newest full turn, including live items.
+            // Render that page immediately instead of downloading it again with
+            // potentially enormous older tool outputs.
+            val history = (response["initialTurnsPage"] as? JsonObject) ?:
                 readEventually(
                     "thread/turns/list",
                     obj(
                         "threadId" to s(id),
-                        "limit" to JsonPrimitive(20),
+                        "limit" to JsonPrimitive(1),
                         "itemsView" to s("full"),
                         "sortDirection" to s("desc"),
                     ),
@@ -1465,7 +1467,7 @@ constructor(
                         obj(
                             "threadId" to s(id),
                             "cursor" to s(cursor),
-                            "limit" to JsonPrimitive(20),
+                            "limit" to JsonPrimitive(1),
                             "itemsView" to s("full"),
                             "sortDirection" to s("desc"),
                         ),

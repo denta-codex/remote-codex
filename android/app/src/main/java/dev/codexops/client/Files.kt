@@ -39,6 +39,10 @@ data class FilePreviewState(
     val truncated: Boolean = false,
 )
 
+internal val FilePreviewState.isMarkdown: Boolean
+    get() = reference.path.substringAfterLast('.').lowercase() in setOf("md", "markdown", "mdown", "mkd") ||
+        mimeType.substringBefore(';').trim().lowercase() in setOf("text/markdown", "text/x-markdown")
+
 class RemoteFileRepository(private val context: Context) {
     private val root = File(context.cacheDir, "remote-files").apply { mkdirs() }
     private val maxCacheBytes = 64L * 1024 * 1024

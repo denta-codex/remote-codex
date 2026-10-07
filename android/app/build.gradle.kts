@@ -10,8 +10,8 @@ android {
         applicationId = "dev.codexops.client"
         minSdk = 29
         targetSdk = 36
-        versionCode = 39
-        versionName = "0.4.7"
+        versionCode = 41
+        versionName = "0.4.9"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {

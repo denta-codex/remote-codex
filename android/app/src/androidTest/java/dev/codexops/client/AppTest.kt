@@ -2560,6 +2560,25 @@ class AppTest {
     }
 
     @Test
+    fun conversationOpensFromResumePageWithoutWaitingForOlderHistory() {
+        approvalResumePage = obj("data" to JsonArray(listOf(obj(
+            "id" to s("latest-turn"), "status" to s("completed"),
+            "items" to JsonArray(listOf(obj("id" to s("latest-reply"),
+                "type" to s("agentMessage"), "text" to s("Latest reply")))),
+        ))), "nextCursor" to s("older-turns"))
+        holdHistoryReply = true
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(5000) { !model.state.value.busy && model.state.value.entries.any { it.text == "Latest reply" } }
+        assertEquals("older-turns", model.state.value.historyCursor)
+        assertTrue(heldHistoryRequests.isEmpty())
+        compose.onNodeWithText("Latest reply").assertIsDisplayed()
+        compose.runOnUiThread { model.older() }
+        compose.waitUntil(5000) { heldHistoryRequests.isNotEmpty() }
+        holdHistoryReply = false
+        heldHistoryRequests.forEach { peer!!.send(obj("id" to it, "result" to history()).toString()) }
+    }
+
+    @Test
     fun textChatStreamsAndCanReopen() {
         compose.onNodeWithContentDescription("New chat").performClick()
         compose.waitUntil(5000) { model.state.value.page == "chat" }
@@ -3648,6 +3667,43 @@ class AppTest {
     }
 
     @Test
+    fun remoteMarkdownFileRendersHeadingsAndTableCells() {
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) {
+            model.state.value.thread == "task-test" && !model.state.value.busy
+        }
+        val markdown = """
+            # Search capabilities
+
+            | Component | Support |
+            | --- | --- |
+            | **Text query** | Uses `thread/search` |
+        """.trimIndent()
+        remoteFiles["/fixture/remote-codex/SEARCH-CAPABILITIES.MD"] =
+            Base64.getEncoder().encodeToString(markdown.toByteArray())
+        compose.runOnUiThread {
+            model.inspectFile(FileRef("markdown", "SEARCH-CAPABILITIES.MD", "SEARCH-CAPABILITIES.MD"))
+        }
+        compose.waitUntil(10000) {
+            model.state.value.filePreview?.let { !it.loading } == true
+        }
+        assertEquals(markdown, model.state.value.filePreview?.text)
+        assertTrue(model.state.value.filePreview!!.isMarkdown)
+        compose.waitUntil(10000) {
+            compose.onAllNodesWithText("Search capabilities", substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText("Search capabilities").assertIsDisplayed()
+        compose.onNodeWithText("Component", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("Text query", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("thread/search", substring = true).assertExists()
+        compose.onNodeWithText("**Text query**", substring = true).assertDoesNotExist()
+        compose.onNodeWithText("`thread/search`", substring = true).assertDoesNotExist()
+        compose.onNodeWithText(markdown).assertDoesNotExist()
+        compose.onNodeWithText("Close").performClick()
+        compose.onNodeWithTag("file-preview").assertDoesNotExist()
+    }
+
+    @Test
     fun remoteTextFileUsesMetadataAndOpensAReadablePreview() {
         compose.runOnUiThread { model.openTask("task-test") }
         compose.waitUntil(10000) {
@@ -3899,6 +3955,39 @@ class AppTest {
     }
 
     @Test
+    fun multipleProjectsPageBeforeAndDuringSearch() {
+        compose.activity.setContent { androidx.compose.material3.Text("Model fixture") }
+        browserCalls.clear()
+        browserResponse = { method, params ->
+            if (method !in listOf("thread/list", "thread/search")) null else {
+                val last = params.str("cursor") == "selected-page"
+                val rows = if (last) listOf(
+                    obj("id" to s("remote"), "projectId" to s("project-remote")),
+                    obj("id" to s("notes"), "projectId" to s("project-notes")),
+                    obj("id" to s("unassigned")))
+                else listOf(obj("id" to s("excluded"), "projectId" to s("other")))
+                obj("data" to JsonArray(rows.map { if (method == "thread/search") obj("thread" to it) else it }),
+                    "nextCursor" to if (last) null else s("selected-page"))
+            }
+        }
+        compose.runOnUiThread {
+            model.applyListOptions(TaskProjectFilter.Selected(setOf("project-remote", "project-notes")), ChatSort.Recent)
+        }
+        compose.waitUntil(5000) { !model.state.value.listLoading }
+        assertEquals(listOf("remote", "notes"), model.state.value.tasks.map { it.str("id") })
+        assertNull(model.state.value.listCursor)
+        assertFalse(browserCalls.last().second.containsKey("projectId"))
+        compose.runOnUiThread {
+            model.applyListOptions(TaskProjectFilter.Selected(setOf("project-remote", "project-notes"), true), ChatSort.Recent)
+            model.query("body needle")
+        }
+        compose.waitUntil(5000) { !model.state.value.listLoading && browserCalls.last().first == "thread/search" }
+        assertEquals(listOf("remote", "notes", "unassigned"), model.state.value.tasks.map { it.str("id") })
+        assertNull(model.state.value.listCursor)
+        assertFalse(browserCalls.last().second.containsKey("projectId"))
+    }
+
+    @Test
     fun compactBrowserRepeatedCursorAndStaleSearch() {
         compose.activity.setContent { androidx.compose.material3.Text("Model fixture") }
         browserResponse = { method, params -> if (method != "thread/search") null else {
@@ -4070,6 +4159,7 @@ class AppTest {
         demoPause(2000)
 
         compose.onNodeWithTag("project-control").performClick()
+        compose.onNodeWithText("All projects").performClick()
         compose.onNodeWithText("No project").performClick()
         compose.onNodeWithText("Apply").performClick()
         compose.waitUntil(5000) {

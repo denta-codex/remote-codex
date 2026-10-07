@@ -45,6 +45,27 @@ class ConnectionFailure(val httpStatus: Int?, val transport: String) :
 
 private const val CONNECT_TIMEOUT_MS = 10_000
 const val RPC_MESSAGE_MAX_BYTES = 100 * 1024 * 1024
+
+/** Count UTF-8 bytes without allocating a second copy of a large RPC frame. */
+internal fun exceedsUtf8Limit(text: String, limit: Int): Boolean {
+    var bytes = 0L
+    var index = 0
+    while (index < text.length) {
+        val ch = text[index++]
+        bytes += when {
+            ch.code < 0x80 -> 1
+            ch.code < 0x800 -> 2
+            ch.isHighSurrogate() && index < text.length && text[index].isLowSurrogate() -> {
+                index++
+                4
+            }
+            ch.isSurrogate() -> 1 // JVM UTF-8 encoder replacement for malformed input.
+            else -> 3
+        }
+        if (bytes > limit) return true
+    }
+    return false
+}
 private const val OUTBOUND_FRAGMENT_BYTES = 256 * 1024
 private val rejectedStatus =
     Regex("^Invalid status code received: ([0-9]{3}) Status line: HTTP/1\\.[01] ([0-9]{3})(?: .*)?$")
@@ -120,7 +141,7 @@ class Rpc(
                 }
 
                 override fun onMessage(text: String) {
-                    if (generation != epoch || text.toByteArray(Charsets.UTF_8).size > RPC_MESSAGE_MAX_BYTES)
+                    if (generation != epoch || exceedsUtf8Limit(text, RPC_MESSAGE_MAX_BYTES))
                         return failed(epoch)
                     try {
                         val message = wire.parseToJsonElement(text).jsonObject

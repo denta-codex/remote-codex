@@ -1,4 +1,1 @@
-- Add copy and share actions to image previews
-- Clear interrupted task notices to prevent archive notification replay
-- Merge branch 'main' into fix/archive-notice-replay
-- Move Todo storage and Android access into the Rust service
+- Fix conversation loading memory pressure and duplicate history fetch
