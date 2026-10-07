@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
+import android.text.method.PasswordTransformationMethod
 import android.view.View
 import android.view.WindowManager
 import android.view.autofill.AutofillManager
@@ -55,7 +56,7 @@ class CredentialRequestsActivity : ComponentActivity() {
         blockedIds.addAll(savedInstanceState?.getStringArrayList("submitted_requests").orEmpty())
         ui = CredentialRequestLayout(this,
             close = { finish() }, refresh = { refresh() },
-            back = { clearSelection(); refresh() }, choose = { choose(secret) },
+            back = { clearSelection(); refresh() },
             release = { submit("release") }, deny = { submit("deny") })
         status = ui.status; details = ui.details; progress = ui.progress
         requests = ui.requests; singlePanel = ui.singlePanel; batchPanel = ui.batchPanel
@@ -75,6 +76,8 @@ class CredentialRequestsActivity : ComponentActivity() {
         inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD or
             if (singleLine) 0 else InputType.TYPE_TEXT_FLAG_MULTI_LINE
         isSingleLine = singleLine
+        // setSingleLine can replace the transformation; mask after configuring it.
+        transformationMethod = PasswordTransformationMethod.getInstance()
         // Keep focus available to Autofill without opening the typing keyboard.
         showSoftInputOnFocus = false
         setAutofillHints(View.AUTOFILL_HINT_PASSWORD)
@@ -89,10 +92,6 @@ class CredentialRequestsActivity : ComponentActivity() {
             override fun afterTextChanged(s: Editable?) = changed()
         })
     }
-    private fun choose(input: EditText) {
-        if (canEdit()) { input.requestFocus(); autofill?.requestAutofill(input) }
-    }
-
     override fun onStart() {
         super.onStart()
         visible = true
@@ -130,7 +129,6 @@ class CredentialRequestsActivity : ComponentActivity() {
             values = if (batch != null) releaseValues() else null)
         deny.isEnabled = selected?.let(::live) == true && !submitted && !busy && connection.connected
         refreshButton.isEnabled = !busy
-        ui.chooseButton.isEnabled = editable
         ui.connection.text = if (connection.connected) "Connected to Grace" else "Not connected"
         ui.heading.text = if (selected != null || submitted) "Credential request" else "Credential requests"
         ui.card.visibility = if (selected != null || submitted) View.VISIBLE else View.GONE
@@ -188,13 +186,11 @@ class CredentialRequestsActivity : ComponentActivity() {
                         ui.fieldLabel(groupPanel, field.field, field.occurrences)
                         val input = secretField(field.field, singleLine = false)
                         batchInputs[field.id] = input
-                        ui.styleSecret(input)
-                        ui.addControl(groupPanel, input)
+                        ui.addSecretField(groupPanel, input)
                         watch(input) {
                             if (!input.text.isNullOrEmpty()) explicitEmpty.remove(field.id)
                             buttons()
                         }
-                        addButton(groupPanel, "Choose in 1Password") { choose(input) }
                         addButton(groupPanel, "Use empty value") {
                             if (canEdit()) { input.text?.clear(); explicitEmpty.add(field.id); buttons() }
                         }
@@ -326,6 +322,8 @@ class CredentialRequestsActivity : ComponentActivity() {
         super.onSaveInstanceState(outState)
     }
     override fun onStop() {
+        ui.maskSecret(secret)
+        batchInputs.values.forEach { ui.maskSecret(it) }
         visible = false; updateJob?.cancel(); refreshJob?.cancel(); connection.close()
         // A password-manager picker may temporarily cover us: keep only live fields.
         super.onStop()

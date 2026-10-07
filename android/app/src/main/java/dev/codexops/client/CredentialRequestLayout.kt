@@ -5,6 +5,9 @@ import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.text.Editable
+import android.text.TextWatcher
+import android.text.method.PasswordTransformationMethod
 import android.view.Gravity
 import android.view.View
 import android.widget.*
@@ -18,7 +21,6 @@ internal class CredentialRequestLayout(
     close: () -> Unit,
     refresh: () -> Unit,
     back: () -> Unit,
-    choose: () -> Unit,
     release: () -> Unit,
     deny: () -> Unit,
 ) {
@@ -56,7 +58,6 @@ internal class CredentialRequestLayout(
     val denyButton = button("Deny", action = deny)
     val refreshButton = button("Refresh", action = refresh)
     val backButton = button("Back to requests", action = back)
-    val chooseButton = button("Choose in 1Password", primary = true, choose)
     val scroll = ScrollView(activity).apply { isSaveEnabled = false; isFillViewport = true; addView(page) }
 
     init {
@@ -86,9 +87,8 @@ internal class CredentialRequestLayout(
         identity.addView(column().apply { addView(title); add(this, subtitle, 4) },
             LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(14) })
         card.addView(identity)
-        // Metadata rows follow the identity, then the selection control and masked value.
+        // Metadata rows follow the identity, then the masked value.
         for (row in metadataRows) add(card, row, 16)
-        add(singlePanel, chooseButton, 20)
         add(card, singlePanel, 0)
         add(card, batchPanel, 20)
         add(card, progress, 12)
@@ -148,14 +148,54 @@ internal class CredentialRequestLayout(
     }
     fun addSingleField(input: EditText) {
         add(singlePanel, text("Selected value", 13, secondary), 12)
-        styleSecret(input)
-        add(singlePanel, input, 6)
+        addSecretField(singlePanel, input)
     }
-    fun styleSecret(input: EditText) {
+    fun addSecretField(parent: LinearLayout, input: EditText) {
         input.setTextColor(foregroundColor); input.setHintTextColor(secondary)
-        input.background = rounded(inputSurface)
+        input.background = null
         input.setPadding(dp(14), dp(12), dp(14), dp(12))
         input.minHeight = dp(52)
+        val row = LinearLayout(activity).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            background = rounded(inputSurface)
+            isSaveEnabled = false
+            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+        }
+        val peek = ImageButton(activity).apply {
+            setImageResource(R.drawable.ic_visibility)
+            imageTintList = ColorStateList.valueOf(secondary)
+            background = rounded(inputSurface)
+            contentDescription = "Show password"
+            isSaveEnabled = false
+            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+            setOnClickListener {
+                if (input.isEnabled && !input.text.isNullOrEmpty()) {
+                    val start = input.selectionStart
+                    val end = input.selectionEnd
+                    val masked = input.transformationMethod is PasswordTransformationMethod
+                    input.transformationMethod = if (masked) null else PasswordTransformationMethod.getInstance()
+                    if (start >= 0 && end >= 0) input.setSelection(start, end)
+                    contentDescription = if (masked) "Hide password" else "Show password"
+                }
+            }
+        }
+        input.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: Editable?) {
+                if (s.isNullOrEmpty()) {
+                    input.transformationMethod = PasswordTransformationMethod.getInstance()
+                    peek.contentDescription = "Show password"
+                }
+            }
+        })
+        row.addView(input, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(peek, LinearLayout.LayoutParams(dp(48), dp(48)))
+        add(parent, row, 8)
+    }
+    fun maskSecret(input: EditText) {
+        input.transformationMethod = PasswordTransformationMethod.getInstance()
+        (input.parent as? LinearLayout)?.getChildAt(1)?.contentDescription = "Show password"
     }
     fun group(vault: String, item: String): LinearLayout = column().apply {
         background = rounded(inputSurface); setPadding(dp(12), dp(12), dp(12), dp(12))

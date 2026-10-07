@@ -1,6 +1,7 @@
 package dev.codexops.client
 
 import android.content.Intent
+import android.text.method.PasswordTransformationMethod
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -78,8 +79,22 @@ class CredentialRequestsTest {
                     assertNotNull(text(root, "Expires in"))
                     assertTrue(root.findViewWithTag<View>("credential-request-card").isShown)
                     assertFalse(button(root, "Release once")!!.isEnabled)
-                    button(root, "Choose in 1Password")!!.performClick()
+                    assertNull(button(root, "Choose in 1Password"))
+                    activity.secret.requestFocus()
                     assertTrue(activity.secret.hasFocus())
+                    activity.secret.autofill(android.view.autofill.AutofillValue.forText("HARMLESS_CARD_VALUE"))
+                    assertTrue(activity.secret.transformationMethod is PasswordTransformationMethod)
+                    val peek = (activity.secret.parent as ViewGroup).getChildAt(1)
+                    assertEquals("Show password", peek.contentDescription)
+                    peek.performClick()
+                    assertNull(activity.secret.transformationMethod)
+                    assertEquals("Hide password", peek.contentDescription)
+                    peek.performClick()
+                    assertTrue(activity.secret.transformationMethod is PasswordTransformationMethod)
+                    peek.performClick()
+                    activity.secret.text.clear()
+                    assertTrue(activity.secret.transformationMethod is PasswordTransformationMethod)
+                    assertEquals("Show password", peek.contentDescription)
                     activity.secret.setText("HARMLESS_CARD_VALUE")
                     assertTrue(button(root, "Release once")!!.isEnabled)
                     assertEquals(0, writes.get()) // Selecting a value is never approval.
@@ -196,7 +211,11 @@ class CredentialRequestsTest {
                     buttons(it.window.decorView, "Use empty value").last().performClick()
                     assertTrue(submit.isEnabled)
                     assertTrue(it.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
-                    it.batchSecrets.values.forEach { input -> assertFalse(input.isSaveEnabled); assertFalse(input.isSaveFromParentEnabled) }
+                    assertTrue(buttons(it.window.decorView, "Choose in 1Password").isEmpty())
+                    it.batchSecrets.values.forEach { input ->
+                        assertFalse(input.isSaveEnabled); assertFalse(input.isSaveFromParentEnabled)
+                        assertTrue(input.transformationMethod is PasswordTransformationMethod)
+                    }
                     submit.performClick(); submit.performClick()
                     assertTrue(it.batchSecrets.values.all { input -> input.text.isNullOrEmpty() })
                     assertFalse(submit.isEnabled)
@@ -218,10 +237,12 @@ class CredentialRequestsTest {
                 assertTrue(backend.connected.await(10, TimeUnit.SECONDS))
                 scenario.onActivity {
                     it.selectRequest(backend.request())
-                    buttons(it.window.decorView, "Choose in 1Password").last().performClick()
+                    it.batchSecrets.getValue("f2").requestFocus()
                     assertTrue(it.batchSecrets.getValue("f2").hasFocus())
                     assertFalse(it.batchSecrets.getValue("f2").showSoftInputOnFocus)
                     it.batchSecrets.getValue("f2").setText("PICKER_FIXTURE")
+                    (it.batchSecrets.getValue("f2").parent as ViewGroup).getChildAt(1).performClick()
+                    assertNull(it.batchSecrets.getValue("f2").transformationMethod)
                     buttons(it.window.decorView, "Use empty value").first().performClick()
                     assertTrue(button(it.window.decorView, "Release all once")!!.isEnabled)
                     runBlocking {
@@ -231,7 +252,11 @@ class CredentialRequestsTest {
                 scenario.moveToState(Lifecycle.State.CREATED)
                 scenario.moveToState(Lifecycle.State.RESUMED)
                 awaitUi(scenario) { button(it.window.decorView, "Release all once")?.isEnabled == true }
-                scenario.onActivity { assertEquals("PICKER_FIXTURE", it.batchSecrets.getValue("f2").text.toString()) }
+                scenario.onActivity {
+                    assertEquals("PICKER_FIXTURE", it.batchSecrets.getValue("f2").text.toString())
+                    assertTrue(it.batchSecrets.getValue("f2").transformationMethod is PasswordTransformationMethod)
+                    assertEquals("Show password", (it.batchSecrets.getValue("f2").parent as ViewGroup).getChildAt(1).contentDescription)
+                }
                 scenario.recreate()
                 scenario.onActivity {
                     it.selectRequest(backend.request())
