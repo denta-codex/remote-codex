@@ -1504,3 +1504,20 @@ gesture are still pending user-authorized live deployment and delivery.
   activation and their test-specific chat route; corrected and rerun successfully.
 - Op-bridge change `1b20930` passed Go tests, race tests, vet, package checks and
   a Darwin cross-build. All secret interactions used disposable fixtures.
+
+### Credential alert deployment — Android 0.4.11 (43), 2026-10-07
+
+- Signed build completed with all required Rust, Kotlin, Android unit, compile,
+  lint, signing and artifact checks through the repository workflow.
+- Rust forwarder and `remote-codex notify credential-requests-changed` deployed
+  successfully on Grace. Authenticated WSS initialization/listing, shared Todo
+  access, and local metadata publication passed the deployment acceptance checks.
+- Grace op-bridge `dev-20261007-1b20930` deployed with the phone event socket at
+  `/run/user/1001/remote-codex/events.sock`. Existing default route remains `mac`.
+  Installed version/route verified; staging and recovery files removed. No other
+  op-bridge host was deployed.
+- Android 0.4.11 (43) published to the private stable channel. Authenticated HTTPS
+  manifest and full APK verification passed. Installation remains user initiated.
+- Build: `artifacts/releases/run-20261007T145847Z-DIEIkh.log`.
+  Forwarder: `artifacts/releases/run-20261007T150344Z-Zq7C4A.log`.
+  Publication: `artifacts/releases/run-20261007T150549Z-o70jWR.log`.
