@@ -90,6 +90,35 @@ sealed interface TaskProjectFilter {
     data object Projectless : TaskProjectFilter
 
     data class Project(val id: String) : TaskProjectFilter
+
+    data class Selected(val ids: Set<String>, val includeProjectless: Boolean = false) : TaskProjectFilter
+
+    fun contains(id: String?): Boolean = when (this) {
+        All -> true
+        Projectless -> id.isNullOrBlank()
+        is Project -> id == this.id
+        is Selected -> id in ids || (includeProjectless && id.isNullOrBlank())
+    }
+
+    fun toggle(id: String?): TaskProjectFilter {
+        val ids = when (this) {
+            is Project -> setOf(this.id)
+            is Selected -> this.ids
+            else -> emptySet()
+        }.toMutableSet()
+        var projectless = this == Projectless || (this is Selected && includeProjectless)
+        if (id == null) projectless = !projectless
+        else if (!ids.remove(id)) ids.add(id)
+        return selection(ids, projectless)
+    }
+
+    companion object {
+        fun selection(ids: Set<String>, projectless: Boolean): TaskProjectFilter = when {
+            ids.isEmpty() -> if (projectless) Projectless else All
+            ids.size == 1 && !projectless -> Project(ids.single())
+            else -> Selected(ids.toSet(), projectless)
+        }
+    }
 }
 
 /** Shared new-task choices. Null values deliberately retain the server default. */

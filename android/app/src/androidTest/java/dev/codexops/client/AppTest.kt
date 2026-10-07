@@ -3899,6 +3899,39 @@ class AppTest {
     }
 
     @Test
+    fun multipleProjectsPageBeforeAndDuringSearch() {
+        compose.activity.setContent { androidx.compose.material3.Text("Model fixture") }
+        browserCalls.clear()
+        browserResponse = { method, params ->
+            if (method !in listOf("thread/list", "thread/search")) null else {
+                val last = params.str("cursor") == "selected-page"
+                val rows = if (last) listOf(
+                    obj("id" to s("remote"), "projectId" to s("project-remote")),
+                    obj("id" to s("notes"), "projectId" to s("project-notes")),
+                    obj("id" to s("unassigned")))
+                else listOf(obj("id" to s("excluded"), "projectId" to s("other")))
+                obj("data" to JsonArray(rows.map { if (method == "thread/search") obj("thread" to it) else it }),
+                    "nextCursor" to if (last) null else s("selected-page"))
+            }
+        }
+        compose.runOnUiThread {
+            model.applyListOptions(TaskProjectFilter.Selected(setOf("project-remote", "project-notes")), ChatSort.Recent)
+        }
+        compose.waitUntil(5000) { !model.state.value.listLoading }
+        assertEquals(listOf("remote", "notes"), model.state.value.tasks.map { it.str("id") })
+        assertNull(model.state.value.listCursor)
+        assertFalse(browserCalls.last().second.containsKey("projectId"))
+        compose.runOnUiThread {
+            model.applyListOptions(TaskProjectFilter.Selected(setOf("project-remote", "project-notes"), true), ChatSort.Recent)
+            model.query("body needle")
+        }
+        compose.waitUntil(5000) { !model.state.value.listLoading && browserCalls.last().first == "thread/search" }
+        assertEquals(listOf("remote", "notes", "unassigned"), model.state.value.tasks.map { it.str("id") })
+        assertNull(model.state.value.listCursor)
+        assertFalse(browserCalls.last().second.containsKey("projectId"))
+    }
+
+    @Test
     fun compactBrowserRepeatedCursorAndStaleSearch() {
         compose.activity.setContent { androidx.compose.material3.Text("Model fixture") }
         browserResponse = { method, params -> if (method != "thread/search") null else {
@@ -4070,6 +4103,7 @@ class AppTest {
         demoPause(2000)
 
         compose.onNodeWithTag("project-control").performClick()
+        compose.onNodeWithText("All projects").performClick()
         compose.onNodeWithText("No project").performClick()
         compose.onNodeWithText("Apply").performClick()
         compose.waitUntil(5000) {

@@ -253,11 +253,11 @@ private fun ChatBrowser(st: ScreenState, actions: HomeActions) {
                     TextButton(onClick = { project = TaskProjectFilter.All; sort = ChatSort.Recent }) { Text("Reset") }
                 }
                 Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).testTag("project-sort-options")) {
-                    Text("Project", style = MaterialTheme.typography.labelLarge)
+                    Text("Projects · select one or more", style = MaterialTheme.typography.labelLarge)
                     OptionRow("All projects", project == TaskProjectFilter.All) { project = TaskProjectFilter.All }
-                    OptionRow("No project", project == TaskProjectFilter.Projectless) { project = TaskProjectFilter.Projectless }
+                    ProjectOptionRow("No project", project != TaskProjectFilter.All && project.contains(null)) { project = project.toggle(null) }
                     st.projects.forEach { item ->
-                        OptionRow(item.name, project == TaskProjectFilter.Project(item.id)) { project = TaskProjectFilter.Project(item.id) }
+                        ProjectOptionRow(item.name, project != TaskProjectFilter.All && project.contains(item.id)) { project = project.toggle(item.id) }
                     }
                     HorizontalDivider(Modifier.padding(vertical = 12.dp))
                     Text("Sort by", style = MaterialTheme.typography.labelLarge)
@@ -270,6 +270,17 @@ private fun ChatBrowser(st: ScreenState, actions: HomeActions) {
                     modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp).heightIn(min = 48.dp)) { Text("Apply") }
             }
         }
+    }
+}
+
+@Composable
+private fun ProjectOptionRow(label: String, selected: Boolean, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
+        .selectable(selected, role = Role.Checkbox, onClick = onClick).padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Checkbox(selected, onCheckedChange = null)
+        Spacer(Modifier.width(12.dp))
+        Text(label, Modifier.weight(1f))
     }
 }
 
@@ -288,6 +299,7 @@ private fun OptionRow(label: String, selected: Boolean, onClick: () -> Unit) {
 private fun projectLabel(filter: TaskProjectFilter, projects: List<CodexProject>) = when (filter) {
     TaskProjectFilter.All -> "All projects"
     TaskProjectFilter.Projectless -> "No project"
+    is TaskProjectFilter.Selected -> "${filter.ids.size + if (filter.includeProjectless) 1 else 0} projects"
     is TaskProjectFilter.Project -> projects.firstOrNull { it.id == filter.id }?.name ?: "Project"
 }
 
