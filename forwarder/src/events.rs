@@ -60,9 +60,14 @@ impl Listener {
                             e.kind(),
                             io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
                         ) => {}
-                    _ => {
-                        return Err(io::Error::other(
-                            "event listener already active or unavailable",
+                    Ok(Ok(_)) => return Err(io::Error::other("event listener already active")),
+                    Ok(Err(error)) => {
+                        return Err(io::Error::new(error.kind(), "event listener unavailable"));
+                    }
+                    Err(_) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "event listener probe timed out",
                         ));
                     }
                 }
@@ -193,11 +198,13 @@ mod tests {
         assert_eq!(*changes.borrow(), 1);
         server.await.unwrap();
         assert!(!path.exists());
-        let stale = UnixListener::bind(&path).unwrap();
-        drop(stale);
-        let listener = Listener::bind(&path).await.unwrap();
-        assert_eq!(std::fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
-        drop(listener);
+        for _ in 0..256 {
+            let stale = UnixListener::bind(&path).unwrap();
+            drop(stale);
+            let listener = Listener::bind(&path).await.unwrap();
+            assert_eq!(std::fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
+            drop(listener);
+        }
     }
     #[tokio::test]
     async fn rejects_symlinks_public_directories_and_unexpected_payloads() {

@@ -1544,3 +1544,11 @@ gesture are still pending user-authorized live deployment and delivery.
 - Native password fields retain FLAG_SECURE and disabled state saving. The bridge
   protocols, one-time submission guards, caller receipts and secret route remain
   unchanged. No live credential request or phone installation was performed.
+
+- Initial 0.4.13 release preparation stopped on a single stale event-socket probe
+  failure before building or publishing artifacts. The failure did not reproduce
+  in isolation or the concurrent transport suite. Added fixed error categories
+  and 256 recovery cycles to the fixture; all 18 transport checks passed. No
+  endpoint protection or timeout was relaxed. Recovered only that unused version
+  reservation after confirming the private stable channel remained 0.4.12 (44)
+  and no candidate build-45 artifact existed.
