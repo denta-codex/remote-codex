@@ -35,6 +35,12 @@ Record Android version, APK version/code, signer fingerprint, Codex version and 
 - [ ] Lock/unlock, rotation/folding and process recreation preserve drafts/history.
 - [ ] Disconnect around send acknowledgement; no automatic duplicate submission.
 - [ ] Disconnect during an attachment write; confirm no file write or turn is replayed.
+- [ ] With Wi-Fi/mobile data available and Tailscale disconnected, confirm the
+      connection banner reports no active VPN and tells you to open Tailscale.
+      With all networks off, confirm it asks for Wi-Fi or mobile data first.
+- [ ] With a VPN active but Grace unreachable, confirm the banner does not claim
+      Tailscale is connected; DNS failures mention Tailscale DNS. Android's VPN
+      capability identifies a VPN available to this app, not its provider or health.
 - [ ] Restore Tailscale; reconnect and inspect uncertain operation before unlocking composer.
 - [ ] Higher-version same-signer APK preserves credential/drafts/assistant selection.
 - [ ] Scheduled host restart: user service and persistent Serve route return.

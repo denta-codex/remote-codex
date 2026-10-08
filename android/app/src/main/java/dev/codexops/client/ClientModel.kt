@@ -464,6 +464,9 @@ constructor(
                         rpc.close()
                         resetApprovalContexts()
                         requests.clear()
+                        val connectionError = connectionFailureMessage(host, e,
+                            if (e is ConnectionFailure && e.httpStatus == null) connectionNetwork(network)
+                            else ConnectionNetwork.Unknown)
                         _state.update {
                             it.copy(
                                 ready = false,
@@ -473,18 +476,7 @@ constructor(
                                 speedError = if (it.speedSaving) SPEED_OUTCOME_UNKNOWN else it.speedError,
                                 speedSaving = false,
                                 modelCatalogStatus = ModelCatalogStatus.Unavailable,
-                                error = when {
-                                    e is ConnectionFailure && e.httpStatus == 401 ->
-                                        "${host.displayName} rejected the connection credential. Scan the setup QR again in Settings."
-                                    e is ConnectionFailure && e.httpStatus != null ->
-                                        "${host.displayName} rejected the WebSocket connection (HTTP ${e.httpStatus})."
-                                    e is ConnectionFailure ->
-                                        "Cannot reach ${host.displayName} (${e.transport}). Check Tailscale and reconnect."
-                                    e is RpcRejected ->
-                                        "${host.displayName} rejected connection setup (RPC ${e.code})."
-                                    else ->
-                                        "Cannot connect to ${host.displayName} (${e.javaClass.simpleName})."
-                                },
+                                error = connectionError,
                             )
                         }
                         publish()
