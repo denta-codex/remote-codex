@@ -1,5 +1,14 @@
 # Validation
 
+## 2026-10-09 — Android 0.4.14 (46)
+
+- Source revision: `e136b56ba227fe3e37a05c41bb54927e5a07851d`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `a60dc641d2b23cde7b48cc362d8cc1887fdcc763a0d2780ff6f9ecfd0ac9032a`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/home/agent/workspaces/remote-codex/artifacts/releases/run-20261009T152848Z-zVgVBh.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
 ## 2026-10-09 — Combined activity, scrollback, and bounded history integration
 
 - Integrated activity visibility (`cc459c8`), automatic scrollback (`7358ccf`),
