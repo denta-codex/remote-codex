@@ -57,10 +57,16 @@ release build. Taildrop remains available for bootstrap and recovery.
 
 The protocol module separates responses, notifications, and server requests even
 when IDs overlap. Events carry a local connection generation; old-generation
-requests cannot be answered. History uses 20-turn pages. Bounded read retries
+requests cannot be answered. Conversation history resumes with one summary turn,
+then reads `thread/items/list` in descending one-item requests, rendering each item
+and stopping after 20 items per user-visible page. Local opaque continuations wrap
+the unchanged stock turn and item cursors, so a large turn can span many pages.
+Bounded read retries
 cover the observed initial persistence delay; mutations are never replayed.
 Android serializes each stock JSON-RPC message once and emits 256 KiB RFC 6455
-continuation frames, with a 100 MiB message ceiling. This removes OkHttp's 16 MiB
+continuation frames, with a 100 MiB outbound message ceiling. Incoming frames and
+cumulative continuation payloads are limited to 32 MiB before assembly and UTF-8
+decoding, including messages without a final frame. This removes OkHttp's 16 MiB
 outgoing queue limit while leaving the stock RPC document unchanged. Reconnect
 creates a new stock session and reloads server-owned state; there is no sequence,
 acknowledgement, replay, or custom chunk envelope between Android and the host.
@@ -292,10 +298,11 @@ found` just after creation. This is retried only on history/resume reads, for a
 bounded interval. The first live turn already has a subscription and is rendered
 from its events, without an immediate resume call.
 
-Conversation opening renders resume's newest full turn immediately. Older history
-loads only after upward reader input, when the beginning is within roughly one
-viewport. The client uses measured row heights and estimates uncomposed rows,
-fetches one full turn at a time, and retains loaded history while the chat is open.
+Conversation opening reads resume's newest summary turn, then renders its items
+incrementally through bounded item pages. Older history loads after upward reader
+input, when the beginning is within roughly one viewport. The client uses measured
+row heights and estimates uncomposed rows, reads at most 20 items per page, and
+retains loaded history while the chat is open. Large turns span multiple pages.
 A separate loading indicator and explicit Retry keep history errors out of the
 composer's busy/error state. Failed pages pause automatic loading. Cursor cycles
 stop pagination; selection and connection-generation guards reject stale pages.
@@ -318,9 +325,16 @@ Selected `codex_app` calls received through `item/tool/call` execute read-only t
 tools on the verified active WSS account. `list_threads` returns a bounded recent
 snapshot of active user tasks (default 10, maximum 50); query-based finding,
 archives, and exhaustive inventory stay with agent-side `codex-tasks`.
-`read_thread` uses metadata-only `thread/read` and descending `thread/turns/list`
-with `itemsView: full`, preserving server status, timestamps, and opaque history
-cursors. It never resumes or opens the inspected task. Its coordinator JSON shape
+`read_thread` uses metadata-only `thread/read`, summary `thread/turns/list`, and
+descending one-item `thread/items/list` requests, preserving server status,
+timestamps, and opaque history cursors. A page contains at most 20 items and reports
+`page.partial` when it ends within the requested turns. Follow `page.nextCursor`
+until exhausted; a completed turn does not imply its entire history was returned.
+The projected page also has a two-million-character retention budget. It stops
+before consuming the next item when that budget would be exceeded; a single
+larger item fails explicitly. Inline image bytes are omitted with an explicit
+reason instead of being copied into the tool response.
+It never resumes or opens the inspected task. Its coordinator JSON shape
 and item projection follow the saved ChatGPT Android 1.2026.258 reference and
 installed Codex desktop 26.901.51231; pagination completeness was checked against
 the installed stock 0.159.2 schema.
@@ -333,6 +347,24 @@ and function outputs remain omitted. Oversized responses fail explicitly rather
 than silently truncating messages or history. Each operation has a 30-second
 deadline; stock rejection, invalid arguments, or unavailable history return a
 failed tool result without exposing raw server errors in logs.
+
+The conversation releases inline base64 images after writing the existing 64 MiB
+app-private image cache. Evicted images show an unavailable state and can be
+reloaded by reopening the conversation. Retained tool previews share a 65,536
+character budget per item; status and identity are preserved. Truncated previews
+are marked explicitly and offer complete details on demand. Those details are
+refetched from the exact item continuation (or a bounded item scan for live
+items), written to a separate 64 MiB private cache, and displayed in 65,536-character
+pages. Opening complete details refreshes that server snapshot. No cache content
+is operational logging, and original history remains server-owned.
+
+An inbound size rejection fails all pending calls with `RpcMessageTooLarge`,
+retains loaded conversation content, drafts and operation journals, and blocks
+automatic reconnects (including foreground and network callbacks) until an
+explicit reconnect. The displayed error states that submitted mutations may
+have reached the host and were not replayed. Background activity checks use turn
+summaries; report submission verification inspects individual items rather than
+full turns. Missing or truncated file-change context cannot grant an approval.
 
 Returned task summaries include the active `HostIdentity.id`. Omitted `hostId`
 selects that connection; explicit IDs must match it, and desktop `local` is not

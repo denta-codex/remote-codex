@@ -37,14 +37,17 @@ fun JsonObject.cursor(): String? = str("nextCursor").ifEmpty { null }
 
 class RpcRejected(val code: Int, message: String) : Exception(message)
 
-class ConnectionLost : Exception("Connection lost; a submitted operation may have been accepted")
+open class ConnectionLost(message: String = "Connection lost; a submitted operation may have been accepted") : Exception(message)
+
+class RpcMessageTooLarge : ConnectionLost("The incoming message exceeded the 32 MiB limit. Loaded content and drafts are retained. A submitted operation may have been accepted; it was not replayed.")
 
 /** Only transport metadata; never include headers, response bodies, or exception messages. */
 class ConnectionFailure(val httpStatus: Int?, val transport: String) :
     Exception("Connection failed: ${httpStatus ?: transport}")
 
 private const val CONNECT_TIMEOUT_MS = 10_000
-const val RPC_MESSAGE_MAX_BYTES = 100 * 1024 * 1024
+const val RPC_INBOUND_MAX_BYTES = 32 * 1024 * 1024
+const val RPC_OUTBOUND_MAX_BYTES = 100 * 1024 * 1024
 
 /** Count UTF-8 bytes without allocating a second copy of a large RPC frame. */
 internal fun exceedsUtf8Limit(text: String, limit: Int): Boolean {
@@ -77,8 +80,24 @@ private fun rejectedHttpStatus(message: String?): Int? {
     return reported.takeIf { it == statusLine && it in 100..599 }
 }
 
-private class StatusDraft(private val status: (Int) -> Unit) :
-    Draft_6455(emptyList<IExtension>(), RPC_MESSAGE_MAX_BYTES) {
+internal class StatusDraft(private val status: (Int) -> Unit, private val limit: Int = RPC_INBOUND_MAX_BYTES) :
+    Draft_6455(emptyList<IExtension>(), limit) {
+    private var messageBytes = 0L
+
+    override fun processFrame(connection: org.java_websocket.WebSocketImpl, frame: org.java_websocket.framing.Framedata) {
+        // Draft_6455 checks an accumulated message at FIN. Enforce the ceiling on
+        // every continuation, including a peer that never sends a final frame.
+        val data = frame.opcode in setOf(Opcode.TEXT, Opcode.BINARY, Opcode.CONTINUOUS)
+        if (data) {
+            if (frame.opcode != Opcode.CONTINUOUS) messageBytes = 0
+            messageBytes += frame.payloadData.remaining()
+            if (messageBytes > limit) throw org.java_websocket.exceptions.LimitExceededException(limit)
+        }
+        super.processFrame(connection, frame)
+        if (data && frame.isFin) messageBytes = 0
+    }
+
+    override fun reset() { super.reset(); messageBytes = 0 }
     override fun acceptHandshakeAsClient(
         request: ClientHandshake,
         response: ServerHandshake,
@@ -87,13 +106,15 @@ private class StatusDraft(private val status: (Int) -> Unit) :
         return super.acceptHandshakeAsClient(request, response)
     }
 
-    override fun copyInstance(): Draft = StatusDraft(status)
+    override fun copyInstance(): Draft = StatusDraft(status, limit)
 }
 
 class Rpc(
     private val allowLoopbackTest: Boolean = false,
     private val clockMillis: () -> Long = System::currentTimeMillis,
+    private val inboundMaxBytes: Int = RPC_INBOUND_MAX_BYTES,
 ) {
+    init { require(inboundMaxBytes == RPC_INBOUND_MAX_BYTES || allowLoopbackTest) }
     val events = Channel<JsonObject>(1024)
     private val next = AtomicLong()
     private val pending = ConcurrentHashMap<String, CompletableDeferred<JsonObject>>()
@@ -122,7 +143,7 @@ class Rpc(
             object :
                 WebSocketClient(
                     URI(url),
-                    StatusDraft { handshakeStatus = it },
+                    StatusDraft({ handshakeStatus = it }, inboundMaxBytes),
                     mapOf("Authorization" to "Bearer $token"),
                     CONNECT_TIMEOUT_MS,
                 ) {
@@ -141,8 +162,9 @@ class Rpc(
                 }
 
                 override fun onMessage(text: String) {
-                    if (generation != epoch || exceedsUtf8Limit(text, RPC_MESSAGE_MAX_BYTES))
-                        return failed(epoch)
+                    if (generation != epoch) return
+                    if (exceedsUtf8Limit(text, inboundMaxBytes))
+                        return failed(epoch, RpcMessageTooLarge())
                     try {
                         val message = wire.parseToJsonElement(text).jsonObject
                         // Request IDs are independent in the two directions.
@@ -169,15 +191,23 @@ class Rpc(
                     failed(epoch)
                 }
 
-                override fun onClose(code: Int, reason: String, remote: Boolean) {
+                override fun onClose(code: Int, reason: String?, remote: Boolean) {
+                    if (code == CloseFrame.TOOBIG) return failed(epoch, RpcMessageTooLarge())
                     handshakeStatus = handshakeStatus ?: rejectedHttpStatus(reason)
                     if (!ready.isCompleted)
                         ready.completeExceptionally(ConnectionFailure(handshakeStatus, "Closed"))
                     failed(epoch)
                 }
 
+                override fun onClosing(code: Int, reason: String?, remote: Boolean) {
+                    // Preserve a local size rejection before the peer's close acknowledgement.
+                    if (code == CloseFrame.TOOBIG) failed(epoch, RpcMessageTooLarge())
+                }
+
                 override fun onError(error: Exception) {
                     if (generation != epoch) return
+                    if (error is org.java_websocket.exceptions.LimitExceededException)
+                        return failed(epoch, RpcMessageTooLarge())
                     handshakeStatus = handshakeStatus ?: rejectedHttpStatus(error.message)
                     ready.completeExceptionally(
                         ConnectionFailure(handshakeStatus, error.javaClass.simpleName)
@@ -314,7 +344,7 @@ class Rpc(
         val active = socket
         if (active?.isOpen != true) throw ConnectionLost()
         val bytes = message.toString().toByteArray(Charsets.UTF_8)
-        if (bytes.size > RPC_MESSAGE_MAX_BYTES) throw IllegalArgumentException("RPC message too large")
+        if (bytes.size > RPC_OUTBOUND_MAX_BYTES) throw IllegalArgumentException("RPC message too large")
         try {
             var start = 0
             while (start < bytes.size) {
@@ -335,21 +365,22 @@ class Rpc(
         }
     }
 
-    private fun failed(epoch: Long) {
+    private fun failed(epoch: Long, cause: ConnectionLost = ConnectionLost()) {
         synchronized(guard) {
             if (generation != epoch) return
-            close()
-            events.trySend(obj("method" to s("connection/lost"), "_epoch" to JsonPrimitive(generation)))
+            close(cause)
+            events.trySend(obj("method" to s("connection/lost"), "_epoch" to JsonPrimitive(generation),
+                "reason" to s(if (cause is RpcMessageTooLarge) "messageTooLarge" else "connectionLost")))
         }
     }
 
-    fun close() {
+    fun close(cause: ConnectionLost = ConnectionLost()) {
         synchronized(guard) {
             generation++
             socket?.closeConnection(CloseFrame.NORMAL, "")
             socket = null
-            opened.completeExceptionally(ConnectionLost())
-            pending.values.forEach { it.completeExceptionally(ConnectionLost()) }
+            opened.completeExceptionally(cause)
+            pending.values.forEach { it.completeExceptionally(cause) }
             pending.clear()
             serverRequests.clear()
         }

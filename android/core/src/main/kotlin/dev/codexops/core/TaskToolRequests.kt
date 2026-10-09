@@ -12,7 +12,7 @@ class TaskToolRequests(
     private val call: suspend (String, JsonObject, Long) -> JsonObject,
     private val respond: (JsonElement, JsonObject, Long) -> Unit,
     private val timeoutMillis: Long = 30000,
-    private val maxMessageBytes: Int = RPC_MESSAGE_MAX_BYTES,
+    private val maxMessageBytes: Int = RPC_OUTBOUND_MAX_BYTES,
 ) {
     private val jobs = ConcurrentHashMap<JsonElement, Job>()
 

@@ -107,7 +107,7 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
             if ((visible == null || visible.offset != anchor.second) &&
                 (visible == null || scroll.canScrollBackward || visible.offset > anchor.second)) {
                 scroll.requestScrollToItem(index + if (hasHistory) 1 else 0,
-                    layout.viewportStartOffset - anchor.second)
+                    -anchor.second)
             }
         }
     }

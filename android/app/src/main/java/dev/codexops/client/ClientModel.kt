@@ -63,6 +63,8 @@ constructor(
     private val timeline = Timeline()
     private val attachmentStore = AttachmentStore(app)
     private val mediaRepository = MediaRepository(app)
+    private val toolDetails = ToolDetailsStore(app)
+    private var automaticReconnectBlocked = false
     private val remoteFileRepository = RemoteFileRepository(app)
     private val _state = MutableStateFlow(ScreenState(host = host))
     val state = _state.asStateFlow()
@@ -239,6 +241,7 @@ constructor(
     private var modelCatalogSelection = 0
     private var queueSelection = 0
     private var hydrating = false
+    private var historyOwner: Job? = null
     private var codexHome = expectedHome
     private val buffered = mutableListOf<JsonObject>()
     private val requests = linkedMapOf<String, Decision>()
@@ -249,7 +252,7 @@ constructor(
     private val callback =
         object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                viewModelScope.launch { if (foreground && !_state.value.ready) connect() }
+                viewModelScope.launch { if (foreground && !_state.value.ready && !automaticReconnectBlocked) connect() }
             }
         }
 
@@ -371,13 +374,14 @@ constructor(
         foreground = value
         _state.update { it.copy(appForeground = value) }
         if (value) UpdateInstallResults.consume(getApplication())?.let(::applyInstallResult)
-        if (value && !_state.value.ready) connect()
+        if (value && !_state.value.ready && !automaticReconnectBlocked) connect()
         if (reopening && _state.value.ready && !_state.value.busy) followUps.opened()
     }
 
     override fun connect() {
         reports.actions.add("connect")
         if (connectionJob?.isActive == true || _state.value.busy) return
+        automaticReconnectBlocked = false
         cancelStreamingHaptics()
         connectionJob =
             viewModelScope.launch {
@@ -454,6 +458,7 @@ constructor(
                         return@launch
                     } catch (e: Exception) {
                         if (e is CancellationException) throw e
+                        if (e is RpcMessageTooLarge) automaticReconnectBlocked = true
                         // Deliberately omit throwable messages and stack traces: these may
                         // contain server data. Log only transport status/type for diagnosis.
                         val reason = when (e) {
@@ -479,10 +484,11 @@ constructor(
                                 speedError = if (it.speedSaving) SPEED_OUTCOME_UNKNOWN else it.speedError,
                                 speedSaving = false,
                                 modelCatalogStatus = ModelCatalogStatus.Unavailable,
-                                error = connectionError,
+                                error = if (e is RpcMessageTooLarge) e.message else connectionError,
                             )
                         }
                         publish()
+                        if (automaticReconnectBlocked) return@launch
                     }
                     attempt++
                     delay((1000L shl attempt.coerceAtMost(4)))
@@ -643,7 +649,8 @@ constructor(
     }
 
     override fun back() {
-        if (_state.value.busy) return
+        if (_state.value.busy && historyOwner?.isActive != true) return
+        stopHistory()
         when (_state.value.page) {
             "todo" -> if (_state.value.todo.editor != null) todoController.close() else home()
             "archives", "snoozed" -> {
@@ -659,7 +666,8 @@ constructor(
 
     override fun home() {
         reports.actions.add("home")
-        if (_state.value.busy) return
+        if (_state.value.busy && historyOwner?.isActive != true) return
+        stopHistory()
         selection++
         resetHistoryLoading()
         resetApprovalContexts()
@@ -1035,7 +1043,7 @@ constructor(
             } finally {
                 if (share != null) {
                     _state.update { it.copy(busy = false) }
-                    if (foreground && !_state.value.ready) connect()
+                    if (foreground && !_state.value.ready && !automaticReconnectBlocked) connect()
                 }
             }
         }
@@ -1043,7 +1051,8 @@ constructor(
 
     override fun openTask(id: String) {
         reports.actions.add("openTask", id)
-        if (_state.value.busy) return
+        if (_state.value.busy && historyOwner?.isActive != true) return
+        stopHistory()
         chatOrigin = if (_state.value.archived) "archives" else "home"
         cancelList(); saveList()
         viewModelScope.launch { guarded { loadTask(id) } }
@@ -1147,32 +1156,20 @@ constructor(
             publish()
             val thread = response.map("thread")
             if (n == selection) chatUsagePath = thread.str("path").takeIf { it.startsWith('/') && !it.contains('\u0000') }
-            // Resume already returns the newest full turn, including live items.
-            // Render that page immediately instead of downloading it again with
-            // potentially enormous older tool outputs.
+            // Summary status is small; full items are fetched individually below.
             val history = (response["initialTurnsPage"] as? JsonObject) ?:
                 readEventually(
                     "thread/turns/list",
                     obj(
                         "threadId" to s(id),
                         "limit" to JsonPrimitive(1),
-                        "itemsView" to s("full"),
+                        "itemsView" to s("summary"),
                         "sortDirection" to s("desc"),
                     ),
                 )
             if (n != selection || epoch != rpc.generation) return
-            fileApprovalContexts.snapshot(id, history.list("data"), epoch)
-            timeline.hydrate(
-                history.list("data").reversed(),
-                buffered.filter { it.map("params").str("threadId") == id },
-            )
-            hapticTurn = timeline.activeTurn ?: timeline.values().lastOrNull()?.turn
-            streamingHaptics.baseline(id, hapticTurn)
-            buffered.removeAll {
-                !it.containsKey("id") &&
-                    it.str("method") != "serverRequest/resolved" &&
-                    it.map("params").str("threadId") == id
-            }
+            timeline.snapshot(history.list("data").map { JsonObject(it - "items") })
+            publish()
             _state.update {
                 val threadModel = response.str("model").takeIf(String::isNotBlank)
                 val options =
@@ -1186,7 +1183,6 @@ constructor(
                         thread.str("name").ifBlank {
                             thread.str("preview").take(80).ifBlank { "Conversation" }
                         },
-                    historyCursor = history.cursor(),
                     uncertainTaskRenames = if (id !in it.pendingTaskRenames) it.uncertainTaskRenames - id else it.uncertainTaskRenames,
                     newTaskOptions = options.options,
                     threadModel = threadModel,
@@ -1201,6 +1197,14 @@ constructor(
                         else it.modelCatalogMessage,
                     attention = thread.map("status")["activeFlags"].toString().contains("waiting"),
                 )
+            }
+            readHistory(id, n, epoch, initial = history)
+            timeline.hydrate(emptyList(), buffered.filter { it.map("params").str("threadId") == id })
+            hapticTurn = timeline.activeTurn ?: timeline.values().lastOrNull()?.turn
+            streamingHaptics.baseline(id, hapticTurn)
+            buffered.removeAll {
+                !it.containsKey("id") && it.str("method") != "serverRequest/resolved" &&
+                    it.map("params").str("threadId") == id
             }
             readQueue(id)
             opened = true
@@ -1473,21 +1477,21 @@ constructor(
         _state.update { it.copy(historyLoading = true, historyError = false) }
         historyJob = viewModelScope.launch(start = CoroutineStart.LAZY) {
             try {
-                val history = rpc.call(
-                    "thread/turns/list",
-                    obj("threadId" to s(id), "cursor" to s(cursor),
-                        "limit" to JsonPrimitive(1), "itemsView" to s("full"),
-                        "sortDirection" to s("desc")),
-                )
+                readHistory(id, n, epoch, cursor = cursor)
                 if (!current()) return@launch
                 loadedHistoryCursors.add(cursor)
-                timeline.snapshot(history.list("data").reversed(), true)
                 _state.update {
-                    it.copy(historyCursor = history.cursor()?.takeUnless(loadedHistoryCursors::contains))
+                    it.copy(historyCursor = it.historyCursor?.takeUnless(loadedHistoryCursors::contains))
                 }
                 publish()
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: IllegalArgumentException) {
+                if (current()) _state.update {
+                    if (e.message in setOf("History cursor did not advance", "Item history cursor did not advance"))
+                        it.copy(historyCursor = null)
+                    else it.copy(historyError = true)
+                }
             } catch (_: Exception) {
                 if (current()) _state.update { it.copy(historyError = true) }
             } finally {
@@ -1498,6 +1502,41 @@ constructor(
             }
         }
         historyJob?.start()
+    }
+
+    private suspend fun readHistory(id: String, selected: Int, epoch: Long, cursor: String? = null, initial: JsonObject? = null) {
+        val owner = currentCoroutineContext()[Job]
+        if (historyOwner?.isActive == true && historyOwner !== owner) return
+        historyOwner = owner
+        fun current() {
+            if (selection != selected || _state.value.thread != id || rpc.generation != epoch)
+                throw CancellationException("History selection changed")
+        }
+        try { val page = HistoryPages.read(id, cursor, initial = initial,
+            call = { method, params -> current(); rpc.callForGeneration(method, params, epoch).also { current() } },
+            normalize = { item, before -> mediaRepository.retain(boundedToolItem(item, before)).also { current() } },
+            checkpoint = { next -> current(); _state.update { it.copy(historyCursor = next) } },
+            progress = { turn, next ->
+                current()
+                fileApprovalContexts.snapshot(id, listOf(turn), epoch)
+                timeline.snapshot(listOf(turn), prepend = true)
+                _state.update { it.copy(historyCursor = next) }
+                publish()
+            })
+            current()
+            _state.update { it.copy(historyCursor = page.nextCursor) }
+        } finally { if (historyOwner === owner) historyOwner = null }
+    }
+
+    /** Navigation may cancel a read; other busy operations retain their mutation guards. */
+    private fun stopHistory() {
+        val owner = historyOwner ?: return
+        selection++
+        historyOwner = null
+        hydrating = false
+        buffered.clear()
+        _state.update { it.copy(busy = false) }
+        owner.cancel()
     }
 
     override fun draft(value: String) {
@@ -1609,6 +1648,47 @@ constructor(
 
     override suspend fun loadMedia(media: MediaRef): ByteArray =
         mediaRepository.load(media) { rpc.readFile(it) }
+
+    override suspend fun loadToolDetails(entry: Entry, offset: Int): ToolDetailsPage {
+        val thread = requireNotNull(_state.value.thread)
+        val epoch = rpc.generation
+        val selected = selection
+        fun current() {
+            if (selected != selection || _state.value.thread != thread)
+                throw CancellationException("Details selection changed")
+            if (epoch != rpc.generation) throw ConnectionLost()
+        }
+        current()
+        return toolDetails.read("$thread/${entry.key}", offset) {
+            current()
+            val cursor = entry.raw.str("_detailsCursor").takeIf(String::isNotBlank)
+            if (cursor != null) {
+                val page = HistoryPages.read(thread, cursor, itemLimit = 1,
+                    call = { method, params -> current(); rpc.callForGeneration(method, params, epoch).also { current() } })
+                val item = page.turns.single().list("items").single()
+                require(item.str("id") == entry.id) { "Complete details are unavailable" }
+                item
+            } else {
+                var next: String? = null
+                var found: JsonObject? = null
+                for (index in 0 until 200) {
+                    current()
+                    val page = rpc.callForGeneration("thread/items/list", obj("threadId" to s(thread),
+                        "turnId" to s(entry.turn), "limit" to JsonPrimitive(1), "sortDirection" to s("desc"),
+                        "cursor" to next?.let(::s)), epoch)
+                    current()
+                    val row = page.list("data").singleOrNull()
+                    if (row?.str("turnId") == entry.turn && row.map("item").str("id") == entry.id) {
+                        found = row.map("item"); break
+                    }
+                    val after = page.cursor() ?: break
+                    require(after != next) { "Details cursor did not advance" }
+                    next = after
+                }
+                requireNotNull(found) { "Complete details are not available in this bounded history scan. Try again after the turn finishes." }
+            }
+        }.also { current() }
+    }
 
     override suspend fun loadVisualization(reference: VisualizationRef): String =
         withContext(Dispatchers.IO) { readVisualization(reference, rpc::getMetadata, rpc::readFile) }
@@ -1824,7 +1904,7 @@ constructor(
         } finally {
             if (_state.value.ready) readQueue(thread)
             _state.update { it.copy(busy = false) }
-            if (foreground && !_state.value.ready) connect()
+            if (foreground && !_state.value.ready && !automaticReconnectBlocked) connect()
         }
     }
 
@@ -2230,7 +2310,7 @@ constructor(
             }
         } finally {
             _state.update { it.copy(busy = false) }
-            if (foreground && !_state.value.ready) connect()
+            if (foreground && !_state.value.ready && !automaticReconnectBlocked) connect()
         }
     }
 
@@ -2525,10 +2605,18 @@ constructor(
         }
     }
 
-    private fun handle(event: JsonObject) {
+    private suspend fun handle(incoming: JsonObject) {
+        if (incoming.str("_epoch").toLongOrNull()?.let { it != rpc.generation } == true) return
+        val event = if (incoming.str("method") in setOf("item/started", "item/completed")) {
+            val params = incoming.map("params")
+            val item = mediaRepository.retain(boundedToolItem(params.map("item")))
+            JsonObject(incoming + ("params" to JsonObject(params + ("item" to item))))
+        } else incoming
         if (event.str("_epoch").toLongOrNull()?.let { it != rpc.generation } == true) return
         if (event.str("method") == "connection/lost") {
             resetHistoryLoading()
+            val oversized = event.str("reason") == "messageTooLarge"
+            if (oversized) automaticReconnectBlocked = true
             weeklyUsage.disconnected()
             verifiedTaskGeneration = null
             taskTools.cancelAll()
@@ -2548,9 +2636,10 @@ constructor(
                     decisions = emptyList(),
                     fileApprovalContexts = emptyMap(),
                     modelCatalogStatus = ModelCatalogStatus.Unavailable,
+                    error = if (oversized) RpcMessageTooLarge().message else it.error,
                 )
             }
-            if (foreground && connectionJob?.isActive != true) {
+            if (foreground && !automaticReconnectBlocked && connectionJob?.isActive != true) {
                 connect()
             }
             return
@@ -2788,7 +2877,8 @@ constructor(
             _state.update {
                 it.copy(
                     error =
-                        if (e is RpcRejected) "Server: ${e.message}"
+                        if (e is RpcMessageTooLarge) e.message
+                        else if (e is RpcRejected) "Server: ${e.message}"
                         else "Could not refresh. Check the connection and try again.",
                     busy = false,
                 )

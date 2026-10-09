@@ -79,6 +79,15 @@ class FileApprovalContextsTest {
         assertEquals("", contexts.text(decision(epoch = 0)))
         val params = FileApprovalContexts.resumeParams("thread")
         assertEquals(JsonPrimitive(true), params["excludeTurns"])
-        assertEquals(obj("limit" to JsonPrimitive(1), "itemsView" to s("full"), "sortDirection" to s("desc")), params["initialTurnsPage"])
+        assertEquals(obj("limit" to JsonPrimitive(1), "itemsView" to s("summary"), "sortDirection" to s("desc")), params["initialTurnsPage"])
+    }
+
+    @Test fun truncatedPatchCannotRetainStaleApprovalDetails() {
+        val contexts = FileApprovalContexts()
+        contexts.select("thread", 1)
+        contexts.event("item/started", event(), 1)
+        assertTrue(contexts.text(decision()).isNotBlank())
+        contexts.event("item/started", event(item("x".repeat(TOOL_PREVIEW_CHARS + 1))), 1)
+        assertEquals("", contexts.text(decision()))
     }
 }

@@ -232,6 +232,8 @@ internal class BugReportController(
                 _state.update { it.copy(error = e.message ?: "The reporting destination or artifacts could not be validated.") }
             } catch (e: IllegalStateException) {
                 _state.update { it.copy(error = e.message ?: "The saved report operation needs review.") }
+            } catch (e: RpcMessageTooLarge) {
+                _state.update { it.copy(error = e.message) }
             } catch (_: Exception) {
                 _state.update { it.copy(error = "The report operation could not be completed. Check the connection, then check and continue. Uncertain mutations are never replayed.") }
             } finally { _state.update { it.copy(busy = false) } }

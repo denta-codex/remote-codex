@@ -3,6 +3,8 @@ package dev.codexops.client
 import android.animation.ValueAnimator
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
@@ -21,6 +23,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.codexops.core.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.serialization.json.JsonPrimitive
 
 @Composable
 internal fun ToolActivityRow(group: ConversationRow.Activity, scope: String,
@@ -103,6 +108,7 @@ private fun ActivitySummary(text: String, shimmer: Boolean, modifier: Modifier) 
 private fun ToolCallDetails(call: ToolCall, scope: String, actions: ConversationActions) {
     var expanded by rememberSaveable(scope, call.entry.key) { mutableStateOf(false) }
     var technical by rememberSaveable(scope, call.entry.key) { mutableStateOf(false) }
+    var complete by remember(scope, call.entry.key) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth().heightIn(min = 48.dp)
@@ -135,6 +141,12 @@ private fun ToolCallDetails(call: ToolCall, scope: String, actions: Conversation
             FileReferenceList(call.entry.files, actions)
             if (call.details.isEmpty()) Text("Details unavailable", fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (call.entry.raw["_detailsOmitted"] == JsonPrimitive(true)) {
+                Text("Showing a preview. Complete details remain on the server.", fontSize = 12.sp)
+                TextButton(onClick = { complete = true }, modifier = Modifier.testTag("load-complete-details-${call.entry.key}")) {
+                    Text("Load complete details")
+                }
+            }
             call.details.forEach { detail ->
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(detail.label, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -159,4 +171,40 @@ private fun ToolCallDetails(call: ToolCall, scope: String, actions: Conversation
             }
         }
     }
+    if (complete) CompleteToolDetails(call.entry, actions) { complete = false }
+}
+
+@Composable
+private fun CompleteToolDetails(entry: Entry, actions: ConversationActions, close: () -> Unit) {
+    var offset by remember { mutableIntStateOf(0) }
+    var previous by remember { mutableStateOf(emptyList<Int>()) }
+    var retry by remember { mutableIntStateOf(0) }
+    val page by produceState<Result<ToolDetailsPage>?>(null, entry.key, offset, retry) {
+        value = null
+        value = try { Result.success(actions.loadToolDetails(entry, offset)) }
+        catch (e: CancellationException) { throw e }
+        catch (_: Exception) { Result.failure(IllegalStateException("Complete details unavailable. Check the connection and try again.")) }
+    }
+    AlertDialog(onDismissRequest = close,
+        title = { Text("Complete tool details") },
+        text = {
+            Column(Modifier.fillMaxWidth()) {
+                when {
+                    page == null -> CircularProgressIndicator()
+                    page!!.isFailure -> Text("Complete details unavailable. Check the connection and try again.")
+                    else -> SelectionContainer {
+                        Text(page!!.getOrThrow().text, Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                            fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                    }
+                }
+                Row {
+                    if (previous.isNotEmpty()) TextButton(onClick = { offset = previous.last(); previous = previous.dropLast(1) }) { Text("Previous") }
+                    page?.getOrNull()?.nextOffset?.let { next ->
+                        TextButton(onClick = { previous = previous + offset; offset = next }) { Text("Next") }
+                    }
+                    if (page?.isFailure == true) TextButton(onClick = { retry++ }) { Text("Retry") }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = close) { Text("Close") } })
 }
