@@ -44,7 +44,13 @@ fun parseAttachmentContext(value: String): ParsedAttachmentContext? {
     return ParsedAttachmentContext(request, files)
 }
 
-data class Entry(val turn: String, val raw: JsonObject) {
+data class Entry(
+    val turn: String,
+    val raw: JsonObject,
+    // Session-only presentation metadata; never added to RPC payloads or operational logs.
+    val progressMessage: String = "",
+    val summaryFinal: Boolean = false,
+) {
     val id
         get() = raw.str("id")
 
@@ -53,6 +59,11 @@ data class Entry(val turn: String, val raw: JsonObject) {
 
     val key
         get() = "$turn/$id"
+
+    val summaries: List<String>
+        get() = (raw["summary"] as? JsonArray).orEmpty().map {
+            (it as? JsonPrimitive)?.contentOrNull.orEmpty()
+        }
 
     val media: List<MediaRef>
         get() =
@@ -180,6 +191,7 @@ data class Entry(val turn: String, val raw: JsonObject) {
 class Timeline {
     private val entries = linkedMapOf<String, Entry>()
     private val statuses = linkedMapOf<String, String>()
+    private val progress = mutableMapOf<String, String>()
     val turnStatuses: Map<String, String>
         get() = statuses.toMap()
     var activeTurn: String? = null
@@ -187,9 +199,18 @@ class Timeline {
 
     fun values(): List<Entry> = entries.values.toList()
 
+    fun progressMessages(): Map<String, String> = progress.toMap()
+
+    /** Restore only observed progress for a reconnect to the same selected thread. */
+    fun restoreProgress(messages: Map<String, String>) {
+        progress.putAll(messages)
+        entries.replaceAll { key, entry -> entry.copy(progressMessage = progress[key].orEmpty()) }
+    }
+
     fun clear() {
         entries.clear()
         statuses.clear()
+        progress.clear()
         activeTurn = null
     }
 
@@ -207,6 +228,8 @@ class Timeline {
                     Entry(
                         turn.str("id"),
                         JsonObject(item + ("_completed" to JsonPrimitive(true))),
+                        progressMessage = progress["${turn.str("id")}/${item.str("id")}"].orEmpty(),
+                        summaryFinal = item.str("type") == "reasoning" && turn.str("status") != "inProgress",
                     )
                 page[e.key] = e
             }
@@ -231,32 +254,31 @@ class Timeline {
         }
         live.values().forEach { e ->
             val old = entries[e.key]
-            if (old == null || e.key in completed) entries[e.key] = e
+            val message = e.progressMessage.ifBlank { progress[e.key].orEmpty() }
+            if (message.isNotBlank()) progress[e.key] = message
+            if (old == null || e.key in completed) entries[e.key] = e.copy(progressMessage = message)
             else if (old.kind == "plan" && old.completed) Unit
             else {
                 val merged = old.raw.toMutableMap()
                 e.raw.forEach { (k, v) ->
-                    if (k !in setOf("text", "aggregatedOutput")) merged[k] = v
+                    if (k !in setOf("text", "aggregatedOutput", "summary")) merged[k] = v
+                }
+                if (old.kind == "reasoning") {
+                    // A terminal history snapshot supersedes buffered partial summaries.
+                    if (!old.summaryFinal) merged["summary"] = JsonArray(
+                        List(maxOf(old.summaries.size, e.summaries.size)) { index ->
+                            s(mergeStream(old.summaries.getOrElse(index) { "" }, e.summaries.getOrElse(index) { "" }))
+                        },
+                    )
+                    if (old.summaryFinal) merged["_completed"] = JsonPrimitive(true)
                 }
                 for (field in listOf("text", "aggregatedOutput")) {
                     val a = old.raw.str(field)
                     val b = e.raw.str(field)
-                    val text =
-                        when {
-                            b.isEmpty() -> a
-                            a.isEmpty() || b.startsWith(a) -> b
-                            a.startsWith(b) || a.endsWith(b) -> a
-                            else -> {
-                                val overlap =
-                                    (minOf(a.length, b.length) downTo 1).firstOrNull {
-                                        a.endsWith(b.take(it))
-                                    } ?: 0
-                                a + b.drop(overlap)
-                            }
-                        }
+                    val text = mergeStream(a, b)
                     if (text.isNotEmpty()) merged[field] = s(text)
                 }
-                entries[e.key] = Entry(e.turn, JsonObject(merged))
+                entries[e.key] = Entry(e.turn, JsonObject(merged), message, old.summaryFinal || e.summaryFinal)
             }
         }
         events
@@ -283,8 +305,41 @@ class Timeline {
                         p.map("item") +
                             ("_completed" to JsonPrimitive(method == "item/completed"))
                     )
-                val e = Entry(turn, item)
+                val key = "$turn/${item.str("id")}"
+                val old = entries[key]
+                if (method == "item/started" && item.str("type") == "reasoning" && old?.summaryFinal == true) return
+                val raw = if (method == "item/started" && item.str("type") == "reasoning" && old != null) {
+                    JsonObject(item + ("summary" to JsonArray(
+                        List(maxOf(old.summaries.size, (item["summary"] as? JsonArray).orEmpty().size)) { index ->
+                            val part = ((item["summary"] as? JsonArray)?.getOrNull(index) as? JsonPrimitive)?.contentOrNull.orEmpty()
+                            s(mergeStream(part, old.summaries.getOrElse(index) { "" }))
+                        },
+                    )))
+                } else item
+                val e = Entry(turn, raw, progress[key].orEmpty(), item.str("type") == "reasoning" && method == "item/completed")
                 entries[e.key] = e
+            }
+            "item/reasoning/summaryPartAdded",
+            "item/reasoning/summaryTextDelta" -> {
+                val id = p.str("itemId")
+                val index = (p["summaryIndex"] as? JsonPrimitive)?.intOrNull ?: return
+                if (turn.isBlank() || id.isBlank() || index !in 0..255) return
+                val key = "$turn/$id"
+                val old = entries[key] ?: Entry(turn, obj("id" to s(id), "type" to s("reasoning")))
+                if (old.summaryFinal || statuses[turn] in setOf("completed", "failed", "interrupted")) return
+                val parts = old.summaries.toMutableList()
+                while (parts.size <= index) parts.add("")
+                if (method.endsWith("summaryTextDelta")) parts[index] = (parts[index] + p.str("delta")).takeLast(100000)
+                entries[key] = old.copy(raw = JsonObject(old.raw + ("summary" to JsonArray(parts.map(::s)))))
+            }
+            "item/mcpToolCall/progress" -> {
+                val id = p.str("itemId")
+                val message = p.str("message").takeLast(100000)
+                if (turn.isBlank() || id.isBlank() || message.isBlank()) return
+                val key = "$turn/$id"
+                progress[key] = message
+                val old = entries[key] ?: Entry(turn, obj("id" to s(id), "type" to s("mcpToolCall")))
+                entries[key] = old.copy(progressMessage = message)
             }
             "item/agentMessage/delta",
             "item/commandExecution/outputDelta",
@@ -305,6 +360,18 @@ class Timeline {
                         ),
                     )
             }
+        }
+    }
+
+    private fun mergeStream(snapshot: String, stream: String): String = when {
+        stream.isEmpty() -> snapshot
+        snapshot.isEmpty() || stream.startsWith(snapshot) -> stream
+        snapshot.startsWith(stream) || snapshot.endsWith(stream) -> snapshot
+        else -> {
+            val overlap = (minOf(snapshot.length, stream.length) downTo 1).firstOrNull {
+                snapshot.endsWith(stream.take(it))
+            } ?: 0
+            snapshot + stream.drop(overlap)
         }
     }
 }

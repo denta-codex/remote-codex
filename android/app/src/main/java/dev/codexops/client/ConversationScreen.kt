@@ -289,7 +289,9 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
                             if (st.busy && st.journal != null)
                                 StockWorkspaceAdapter.progress(st.journal.str("stage"))
                             else if (st.busy) "Updating…"
-                            else "Working on ${st.host.displayName}",
+                            else if (!st.ready) "Connection lost"
+                            else if (st.attention || st.decisions.any { it.blocksUser }) "Waiting for you"
+                            else "Waiting for the next update",
                             fontSize = 13.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

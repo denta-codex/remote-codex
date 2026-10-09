@@ -15,9 +15,10 @@ internal sealed interface ConversationRow {
         override val key = "changes/$turn"
     }
 
-    data class Activity(val calls: List<ToolCall>, val summary: String, val working: Boolean,
-        val representsActiveTurn: Boolean) : ConversationRow {
-        override val key = "tools/${calls.first().entry.key}"
+    data class Activity(val entries: List<Entry>, val calls: List<ToolCall>, val summary: String,
+        val working: Boolean, val representsActiveTurn: Boolean,
+        val previewSummary: String?, val progressMessage: String?) : ConversationRow {
+        override val key = "tools/${entries.first().key}"
     }
 }
 
@@ -43,7 +44,7 @@ internal enum class ToolCategory(val activity: String, val singular: String, val
 
 internal data class ToolDetail(val label: String, val value: String, val code: Boolean = false)
 internal data class ToolCall(val entry: Entry, val category: ToolCategory, val title: String,
-    val state: ToolState) {
+    val state: ToolState, val activity: String) {
     // Large output and opaque results are formatted only when their disclosure is opened.
     val details: List<ToolDetail> by lazy { toolDetails(entry) }
     val technicalDetails: String by lazy { JsonObject(entry.raw.filterKeys { it != "_completed" }).display() }
@@ -64,7 +65,7 @@ internal fun conversationRows(entries: List<Entry>, activeTurn: String?, connect
     val representedEdits = changes.keys.let { turns ->
         entries.filter { it.turn in turns && it.isRecordedFileChange() }.map { it.key }.toSet()
     }
-    val visible = entries.filter { it.kind != "reasoning" }
+    val visible = entries
     // Attach to the last reply, or the last item for turns without a reply.
     val anchors = changes.mapValues { (turn, _) ->
         visible.lastOrNull { it.turn == turn && it.kind in setOf("agentMessage", "plan") }?.key
@@ -76,29 +77,42 @@ internal fun conversationRows(entries: List<Entry>, activeTurn: String?, connect
         if (group.isEmpty()) return
         val turn = group.first().turn
         val active = turn == activeTurn && turnStatuses[turn] !in setOf("completed", "failed", "interrupted")
-        val calls = group.map { toolCall(it, active, connected, turnStatuses[turn], active && waitingForUser) }
+        val calls = group.filter { it.kind != "reasoning" }
+            .map { toolCall(it, active, connected, turnStatuses[turn], active && waitingForUser) }
         val running = calls.lastOrNull { it.state == ToolState.Running }
-        val waiting = waitingForUser || calls.any { it.state == ToolState.Waiting }
-        val pending = calls.any { it.state in setOf(ToolState.Running, ToolState.Waiting, ToolState.Disconnected) }
+        val waiting = (active && waitingForUser) || calls.any { it.state == ToolState.Waiting }
+        val pending = calls.any { it.state in setOf(ToolState.Running, ToolState.Waiting, ToolState.Disconnected) } ||
+            group.any { it.kind == "reasoning" && !it.completed && !it.summaryFinal }
         val representsActive = active && (trailing || pending)
         val working = representsActive && connected && !waiting
         val failures = calls.count { it.state == ToolState.Failed }
         val interrupted = turnStatuses[turn] == "interrupted" || calls.any { it.state == ToolState.Interrupted }
         val failedTurn = turnStatuses[turn] == "failed"
-        val counts = calls.groupingBy { it.category }.eachCount().entries.joinToString(" · ") { (type, count) ->
+        val toolCounts = calls.groupingBy { it.category }.eachCount().entries.map { (type, count) ->
             "$count ${if (count == 1) type.singular else type.plural}"
         }
+        val summaries = group.filter { it.kind == "reasoning" }.flatMap { it.summaries }.filter(String::isNotBlank)
+        // Empty reasoning items have no history to disclose once they stop representing live work.
+        if (calls.isEmpty() && summaries.isEmpty() && !representsActive) {
+            group = mutableListOf()
+            return
+        }
+        val counts = (toolCounts + if (summaries.isEmpty()) emptyList() else listOf(
+            "${summaries.size} progress ${if (summaries.size == 1) "summary" else "summaries"}",
+        )).joinToString(" · ").ifBlank { "Activity finished" }
         val summary = when {
             representsActive && !connected -> "Connection lost"
             representsActive && waiting -> "Waiting for you"
-            running != null -> running.category.activity
-            working -> "Working…"
+            running != null -> running.activity
+            working -> if (summaries.isNotEmpty()) "Progress update" else "Waiting for the next update"
             interrupted -> "Interrupted · $counts"
             failedTurn -> "Failed · $counts"
             calls.any { it.state == ToolState.Unknown } -> "Status unavailable · $counts"
             else -> counts.replaceFirstChar { it.uppercase() }
         } + if (failures > 0 && !failedTurn) " · $failures failed" else ""
-        rows += ConversationRow.Activity(calls, summary, working, representsActive)
+        rows += ConversationRow.Activity(group.toList(), calls, summary, working, representsActive,
+            if (working) summaries.lastOrNull() else null,
+            if (working) running?.entry?.progressMessage?.takeIf(String::isNotBlank) else null)
         group = mutableListOf()
     }
     visible.forEach { entry ->
@@ -168,14 +182,19 @@ internal fun toolCall(entry: Entry, active: Boolean = false, connected: Boolean 
         ToolCategory.Read -> commandActions.firstOrNull()?.let { it.str("name").ifBlank { it.str("path").substringAfterLast('/') } }.orEmpty()
         ToolCategory.SearchFiles -> commandActions.firstOrNull()?.str("query").orEmpty()
         ToolCategory.ListFiles -> commandActions.firstOrNull()?.str("path").orEmpty()
-        ToolCategory.WebSearch -> action.str("query").ifBlank { raw.str("query") }
+        ToolCategory.WebSearch -> action.str("query").ifBlank { raw.str("query") }.ifBlank {
+            (action["queries"] as? JsonArray)?.firstOrNull().display()
+        }
         ToolCategory.OpenPage, ToolCategory.FindInPage -> action.str("url")
         ToolCategory.Tool, ToolCategory.Agent -> raw.str("tool").ifBlank { raw.str("kind") }
         ToolCategory.Command -> raw.str("command")
+        ToolCategory.ChangeFiles -> raw.list("changes").map { it.str("path").substringAfterLast('/') }
+            .filter(String::isNotBlank).joinToString(", ")
         else -> ""
     }
     val title = if (target.isBlank()) category.title else "${category.title} · $target"
-    return ToolCall(entry, category, title, toolState(entry, active, connected, turnStatus, waiting))
+    val activity = if (target.isBlank()) category.activity else "${category.activity} · $target"
+    return ToolCall(entry, category, title, toolState(entry, active, connected, turnStatus, waiting), activity)
 }
 
 private fun toolDetails(entry: Entry): List<ToolDetail> {
@@ -185,6 +204,7 @@ private fun toolDetails(entry: Entry): List<ToolDetail> {
         fun field(label: String, value: String, code: Boolean = false) {
             if (value.isNotBlank()) add(ToolDetail(label, value, code))
         }
+        field("Progress", entry.progressMessage)
         when (entry.kind) {
             "commandExecution" -> {
                 field("Command", raw.str("command"), true)
