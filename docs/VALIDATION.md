@@ -1,5 +1,32 @@
 # Validation
 
+## 2026-10-09 — Fast opening and seamless conversation scrollback
+
+- Opening still uses resume's latest full turn. Upward scrolling prefetches one
+  older full turn at a time near the beginning, with independent loading/error
+  state and an explicit retry after failure. Reader anchors survive prepends,
+  Markdown measurement, and live deltas. Cursor cycles stop further loading.
+- Nine focused managed Android 16 scenarios passed through
+  `scripts/emulator-test --tests`, in bounded batches:
+  `AppTest#conversationOpensFromResumePageWithoutWaitingForOlderHistory`,
+  `AppTest#upwardScrollLoadsHistoryWithoutDuplicateRequestsAndPreservesAnchor`,
+  `AppTest#historyFailurePausesAutomaticLoadingUntilRetryAndStopsAtRepeatedCursor`,
+  `AppTest#historyContinuesNearBeginningAndIgnoresRepliesAfterSwitchingChats`,
+  `AppTest#historyReconnectDropsPendingPageAndAllowsFreshPagination`,
+  `AppTest#historyDoesNotPrefetchWhenReadingFarFromBeginning`,
+  `AppTest#emptyRecentPageStillAllowsUpwardScrollback`,
+  `AppTest#streamingTallReplyKeepsVisibleParagraphStillWhenReading`, and
+  `AppTest#tallLatestMessageOpensAtItsStartAndFollowsOnlyAfterJump`.
+- Fixtures include tall Markdown, large command outputs, held/failed page reads,
+  draft editing during pagination, end-of-history, and streaming while reading.
+- An initial emulator installation rejected a locally signature-verified APK;
+  installation succeeded on retry. A later host JDK crashed inside G1 GC;
+  successful validation used command-local `JAVA_TOOL_OPTIONS=-XX:+UseSerialGC`
+  with the existing managed JDK and SDK, without shared configuration changes.
+- Loaded history remains in memory while the chat is open. Pagination limits
+  turns rather than bytes, so an exceptionally large turn can still be costly.
+
+
 ## 2026-10-06 — Android 0.4.9 (41)
 
 - Source revision: `87c10d4c5aba711abb652ea0fdd54f8d8b852fc6`.

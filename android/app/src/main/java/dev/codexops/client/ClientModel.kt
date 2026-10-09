@@ -47,6 +47,8 @@ constructor(
     override fun returnSnoozedTask(id: String) = snoozeController.restore(id)
     override fun refreshSnoozes() = snoozeController.refresh()
     private val modelEnrichment = ModelEnrichmentRepository(rpc, local)
+    private var historyJob: Job? = null
+    private val loadedHistoryCursors = mutableSetOf<String>()
     private var chatCostJob: Job? = null
     private var chatUsage: ChatUsage? = null
     private var chatUsagePath: String? = null
@@ -409,6 +411,7 @@ constructor(
                         )
                     }
                     weeklyUsage.disconnected()
+                    resetHistoryLoading()
                     resetApprovalContexts()
                     verifiedTaskGeneration = null
                     taskTools.cancelAll()
@@ -666,6 +669,7 @@ constructor(
         reports.actions.add("home")
         if (_state.value.busy) return
         selection++
+        resetHistoryLoading()
         resetApprovalContexts()
         showList(false)
     }
@@ -951,6 +955,7 @@ constructor(
         viewModelScope.launch {
             try {
                 selection++
+                resetHistoryLoading()
                 resetApprovalContexts()
                 chatCostJob?.cancel()
                 chatUsage = null
@@ -1070,6 +1075,7 @@ constructor(
     }
 
     private suspend fun loadTask(id: String) {
+        resetHistoryLoading()
         cancelStreamingHaptics()
         chatCostJob?.cancel()
         chatUsage = null
@@ -1454,33 +1460,50 @@ constructor(
         }
     }
 
+    private fun resetHistoryLoading() {
+        historyJob?.cancel()
+        historyJob = null
+        loadedHistoryCursors.clear()
+        _state.update { it.copy(historyLoading = false, historyError = false) }
+    }
+
     override fun older() {
-        viewModelScope.launch {
-            guarded {
-                val before = _state.value
-                val id = before.thread ?: return@guarded
-                val cursor = before.historyCursor ?: return@guarded
-                val n = selection
-                val history =
-                    rpc.call(
-                        "thread/turns/list",
-                        obj(
-                            "threadId" to s(id),
-                            "cursor" to s(cursor),
-                            "limit" to JsonPrimitive(1),
-                            "itemsView" to s("full"),
-                            "sortDirection" to s("desc"),
-                        ),
-                    )
-                if (n == selection) {
-                    timeline.snapshot(history.list("data").reversed(), true)
-                    _state.update {
-                        it.copy(historyCursor = history.cursor()?.takeUnless { c -> c == cursor })
-                    }
-                    publish()
+        val before = _state.value
+        if (!before.ready || before.busy || historyJob != null) return
+        val id = before.thread ?: return
+        val cursor = before.historyCursor ?: return
+        val n = selection
+        val epoch = rpc.generation
+        fun current() = n == selection && epoch == rpc.generation &&
+            _state.value.thread == id && _state.value.ready
+        _state.update { it.copy(historyLoading = true, historyError = false) }
+        historyJob = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                val history = rpc.call(
+                    "thread/turns/list",
+                    obj("threadId" to s(id), "cursor" to s(cursor),
+                        "limit" to JsonPrimitive(1), "itemsView" to s("full"),
+                        "sortDirection" to s("desc")),
+                )
+                if (!current()) return@launch
+                loadedHistoryCursors.add(cursor)
+                timeline.snapshot(history.list("data").reversed(), true)
+                _state.update {
+                    it.copy(historyCursor = history.cursor()?.takeUnless(loadedHistoryCursors::contains))
+                }
+                publish()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                if (current()) _state.update { it.copy(historyError = true) }
+            } finally {
+                if (historyJob === coroutineContext[Job]) {
+                    historyJob = null
+                    _state.update { it.copy(historyLoading = false) }
                 }
             }
         }
+        historyJob?.start()
     }
 
     override fun draft(value: String) {
@@ -2511,6 +2534,7 @@ constructor(
     private fun handle(event: JsonObject) {
         if (event.str("_epoch").toLongOrNull()?.let { it != rpc.generation } == true) return
         if (event.str("method") == "connection/lost") {
+            resetHistoryLoading()
             weeklyUsage.disconnected()
             verifiedTaskGeneration = null
             taskTools.cancelAll()
