@@ -46,7 +46,7 @@ internal data class ToolCall(val entry: Entry, val category: ToolCategory, val t
     val state: ToolState) {
     // Large output and opaque results are formatted only when their disclosure is opened.
     val details: List<ToolDetail> by lazy { toolDetails(entry) }
-    val technicalDetails: String by lazy { JsonObject(entry.raw.filterKeys { it != "_completed" }).display() }
+    val technicalDetails: String by lazy { JsonObject(entry.raw.filterKeys { !it.startsWith('_') }).display() }
 }
 
 private val detailJson = Json { prettyPrint = true }

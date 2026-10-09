@@ -19,6 +19,19 @@ class ReadOnlyTaskToolsTest {
             "startedAt" to JsonPrimitive(123), "completedAt" to JsonPrimitive(125),
             "durationMs" to JsonPrimitive(2000), "items" to JsonArray(items))
 
+    private fun paged(items: List<JsonObject>): suspend (String, JsonObject) -> JsonObject = { method, args ->
+        when (method) {
+            "thread/read" -> obj("thread" to metadata)
+            "thread/turns/list" -> obj("data" to JsonArray(listOf(turn(view = "summary"))))
+            "thread/items/list" -> {
+                val index = args.str("cursor").ifBlank { "${items.lastIndex}" }.toInt()
+                obj("data" to JsonArray(if (index >= 0) listOf(obj("turnId" to s("turn"), "item" to items[index])) else emptyList()),
+                    "nextCursor" to if (index > 0) s("${index - 1}") else null)
+            }
+            else -> error("Unexpected method $method")
+        }
+    }
+
     @Test
     fun listingThenReadingUsesOnlyStockReadApisAndPreservesCursorStatusAndTime() = runBlocking {
         val calls = mutableListOf<Pair<String, JsonObject>>()
@@ -30,6 +43,8 @@ class ReadOnlyTaskToolsTest {
                 "thread/turns/list" -> obj("data" to JsonArray(listOf(turn(listOf(
                     item("agentMessage", "text" to s("Final"), "phase" to s("final")),
                 )))), "nextCursor" to if (args.str("cursor").isEmpty()) s("opaque/older") else JsonNull)
+                "thread/items/list" -> obj("data" to JsonArray(listOf(obj("turnId" to s("turn"), "item" to
+                    item("agentMessage", "text" to s("Final"), "phase" to s("final"))))))
                 else -> error("Unexpected mutation: $method")
             }
         }
@@ -48,16 +63,16 @@ class ReadOnlyTaskToolsTest {
         assertEquals(metadata["createdAt"], read.map("thread")["createdAt"])
         assertEquals("2000", read.list("turns").single().str("durationMs"))
         assertEquals("final", read.list("turns").single().list("items").single().str("phase"))
-        assertEquals("opaque/older", read.map("page").str("nextCursor"))
+        assertTrue(read.map("page").str("nextCursor").isNotBlank())
         assertEquals(JsonPrimitive(true), read.map("page")["hasMore"])
         assertEquals(JsonPrimitive(false), calls[1].second["includeTurns"])
-        assertEquals("full", calls[2].second.str("itemsView"))
+        assertEquals("summary", calls[2].second.str("itemsView"))
         assertEquals("desc", calls[2].second.str("sortDirection"))
         assertEquals("1", calls[2].second.str("limit"))
         val older = tools.execute(params("read_thread", JsonObject(args + ("cursor" to read.map("page")["nextCursor"]!!))))
         assertEquals(JsonPrimitive(false), older.map("page")["hasMore"])
-        assertEquals(listOf("thread/list", "thread/read", "thread/turns/list", "thread/read", "thread/turns/list"), calls.map { it.first })
-        assertEquals("opaque/older", calls.last().second.str("cursor"))
+        assertEquals(listOf("thread/list", "thread/read", "thread/turns/list", "thread/items/list", "thread/read", "thread/turns/list", "thread/items/list"), calls.map { it.first })
+        assertEquals("opaque/older", calls[5].second.str("cursor"))
     }
 
     @Test
@@ -96,8 +111,7 @@ class ReadOnlyTaskToolsTest {
             item("dynamicToolCall", "tool" to s("fixture"), "contentItems" to JsonArray(listOf(obj("text" to s("Dynamic payload"))))),
             item("functionCallOutput", "output" to s("Function payload")),
         )
-        val tools = ReadOnlyTaskTools("grace") { method, _ -> if (method == "thread/read") obj("thread" to metadata)
-            else obj("data" to JsonArray(listOf(turn(items)))) }
+        val tools = ReadOnlyTaskTools("grace", paged(items))
         val args = obj("threadId" to s("task"))
         val without = tools.execute(params("read_thread", args)).list("turns").single().list("items")
         assertEquals("Answer", without[1].str("text"))
@@ -124,8 +138,7 @@ class ReadOnlyTaskToolsTest {
             item("commandExecution", "aggregatedOutput" to s("x".repeat(21000))),
             item("commandExecution", "aggregatedOutput" to s("last")),
         )
-        val tools = ReadOnlyTaskTools("grace") { method, _ -> if (method == "thread/read") obj("thread" to metadata)
-            else obj("data" to JsonArray(listOf(turn(items)))) }
+        val tools = ReadOnlyTaskTools("grace", paged(items))
         val small = tools.execute(params("read_thread", obj("threadId" to s("task"), "includeOutputs" to JsonPrimitive(true),
             "maxOutputCharsPerItem" to JsonPrimitive(3)))).list("turns").single().list("items")
         assertEquals("123", small[0].list("content")[0].str("text"))
@@ -133,9 +146,9 @@ class ReadOnlyTaskToolsTest {
         assertEquals("🙂", small[1].map("output").str("text"))
         val full = tools.execute(params("read_thread", obj("threadId" to s("task"), "includeOutputs" to JsonPrimitive(true),
             "maxOutputCharsPerItem" to JsonPrimitive(20000)))).list("turns").single().list("items")
-        assertEquals(19984, full[2].map("output").str("text").length)
-        assertEquals("", full[3].map("output").str("text"))
-        assertEquals(JsonPrimitive(true), full[3].map("output")["truncated"])
+        assertEquals(19996, full[2].map("output").str("text").length)
+        assertEquals("last", full[3].map("output").str("text"))
+        assertEquals(JsonPrimitive(true), full[2].map("output")["truncated"])
     }
 
     @Test
@@ -143,13 +156,12 @@ class ReadOnlyTaskToolsTest {
         var response = obj("data" to JsonArray(emptyList()))
         val tools = ReadOnlyTaskTools("grace") { method, _ -> if (method == "thread/read") obj("thread" to metadata) else response }
         assertTrue(tools.execute(params("list_threads", obj("limit" to JsonPrimitive(50)))).list("threads").isEmpty())
-        val args = obj("threadId" to s("task"), "turnLimit" to JsonPrimitive(10), "cursor" to s("cursor"))
+        val args = obj("threadId" to s("task"), "turnLimit" to JsonPrimitive(10))
         val empty = tools.execute(params("read_thread", args))
         assertTrue(empty.list("turns").isEmpty())
         assertEquals(JsonPrimitive(false), empty.map("page")["hasMore"])
         val incompletePages = listOf(
             obj(), obj("data" to JsonArray(listOf(turn(view = "summary")))),
-            obj("data" to JsonArray(emptyList()), "nextCursor" to s("cursor")),
         )
         for (bad in incompletePages) {
             response = bad
@@ -160,6 +172,26 @@ class ReadOnlyTaskToolsTest {
     private fun event(id: JsonElement = s("request"), epoch: Long = 1, args: JsonElement = obj()) =
         obj("id" to id, "method" to s("item/tool/call"), "_epoch" to JsonPrimitive(epoch), "params" to params("list_threads", args))
     private fun data(result: JsonObject) = wire.parseToJsonElement(result.list("contentItems").last().str("text")).jsonObject
+
+    @Test fun visibleHistoryBudgetContinuesWithoutSkippingAndInlineBytesAreOmitted() = runBlocking {
+        val messages = (0..1).map { index -> obj("id" to s("reply-$index"), "type" to s("agentMessage"), "text" to s("$index" + "x".repeat(1100000))) }
+        val tools = ReadOnlyTaskTools("grace", paged(messages))
+        val args = obj("threadId" to s("task"))
+        val first = tools.execute(params("read_thread", args))
+        assertEquals("reply-1", first.list("turns").single().list("items").single().str("id"))
+        assertEquals(JsonPrimitive(true), first.map("page")["partial"])
+        val next = tools.execute(params("read_thread", JsonObject(args + ("cursor" to first.map("page")["nextCursor"]!!))))
+        assertEquals("reply-0", next.list("turns").single().list("items").single().str("id"))
+        assertEquals(JsonPrimitive(false), next.map("page")["hasMore"])
+        val media = ReadOnlyTaskTools("grace", paged(listOf(item("userMessage", "content" to JsonArray(listOf(
+            obj("type" to s("image"), "url" to s("data:image/png;base64,PRIVATE_FIXTURE_BYTES"))))))))
+            .execute(params("read_thread", args))
+        assertFalse(media.toString().contains("PRIVATE_FIXTURE_BYTES"))
+        assertEquals(JsonPrimitive(true), media.list("turns").single().list("items").single().list("content").single()["omitted"])
+        val large = ReadOnlyTaskTools("grace", paged(listOf(item("agentMessage", "text" to s("x".repeat(2 * 1024 * 1024))))))
+        try { large.execute(params("read_thread", args)); fail("Accepted oversized visible item") }
+        catch (_: TaskToolFailure) { }
+    }
 
     @Test
     fun asyncFailuresAreBoundedAndDoNotExposeServerErrorPayloads() = runBlocking {

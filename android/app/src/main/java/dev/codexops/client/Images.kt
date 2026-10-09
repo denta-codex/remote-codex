@@ -250,6 +250,13 @@ class MediaRepository(private val context: Context) {
     suspend fun load(media: MediaRef, hostReader: suspend (String) -> ByteArray): ByteArray =
         withContext(Dispatchers.IO) {
             when (media.location) {
+                MediaLocation.CACHE -> {
+                    require(media.value.matches(Regex("[0-9a-f]{64}"))) { "Invalid cached image" }
+                    val target = File(root, media.value)
+                    require(target.isFile) { "Cached image is unavailable. Reopen the conversation to reload it." }
+                    target.setLastModified(System.currentTimeMillis())
+                    validateDisplayBytes(target.readBytes())
+                }
                 MediaLocation.HOST_PATH -> {
                     val target = File(root, digest(media.value))
                     if (target.exists()) return@withContext validateDisplayBytes(target.readBytes())
@@ -267,6 +274,40 @@ class MediaRepository(private val context: Context) {
                 MediaLocation.EXTERNAL_URL -> error("External images require explicit opening.")
             }
         }
+
+    /** Release inline base64 from retained conversation state after writing the bounded cache. */
+    suspend fun retain(item: JsonObject): JsonObject = withContext(Dispatchers.IO) {
+        suspend fun cached(value: String, dataUrl: Boolean): String {
+            val bytes = validateDisplayBytes(if (dataUrl) decodeDataUrl(value) else Base64.decode(value, Base64.DEFAULT))
+            val key = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+            val target = File(root, key)
+            if (!target.exists()) {
+                val part = File.createTempFile(".inline-", ".part", root)
+                try { part.writeBytes(bytes); check(part.renameTo(target)) { "Image cache unavailable" } }
+                finally { part.delete() }
+            }
+            target.setLastModified(System.currentTimeMillis())
+            trim()
+            return key
+        }
+        when (item.str("type")) {
+            "userMessage" -> JsonObject(item + ("content" to JsonArray(item.list("content").map { part ->
+                val url = part.str("url")
+                if (part.str("type") == "image" && url.startsWith("data:image/")) {
+                    try { JsonObject(part - "url" + ("cacheKey" to s(cached(url, true)))) }
+                    catch (_: Exception) { JsonObject(part - "url" + ("_mediaUnavailable" to JsonPrimitive(true))) }
+                } else part
+            })))
+            "imageGeneration" -> {
+                val result = item.str("result")
+                if (result.isBlank()) item else {
+                    try { JsonObject(item - "result" + ("cacheKey" to s(cached(result, result.startsWith("data:image/"))))) }
+                    catch (_: Exception) { JsonObject(item - "result" + ("status" to s("Image unavailable; reopen the conversation to retry."))) }
+                }
+            }
+            else -> item
+        }
+    }
 
     private fun validateDisplayBytes(bytes: ByteArray): ByteArray {
         require(bytes.isNotEmpty() && bytes.size <= MAX_IMAGE_BYTES) {

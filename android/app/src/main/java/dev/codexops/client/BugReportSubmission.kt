@@ -116,7 +116,7 @@ internal class BugReportSubmission(private val rpc: RemoteSession, private val h
                 record("taskReady", "threadId" to s(requireNotNull(found)))
             }
             "namingTask" -> {
-                val task = rpc.call("thread/read", obj("threadId" to s(draft.journal.str("threadId")))).map("thread")
+                val task = rpc.call("thread/read", obj("threadId" to s(draft.journal.str("threadId")), "includeTurns" to JsonPrimitive(false))).map("thread")
                 requireConfirmed(task.str("name") == draft.journal.str("name"), "task title")
                 record("named")
             }
@@ -222,12 +222,13 @@ internal class BugReportSubmission(private val rpc: RemoteSession, private val h
     private suspend fun findSubmission(threadId: String, operation: String): Boolean {
         var cursor: String? = null
         val seen = mutableSetOf<String>()
-        repeat(50) {
-            val page = rpc.call("thread/turns/list", obj("threadId" to s(threadId), "limit" to JsonPrimitive(100),
-                "itemsView" to s("full"), "sortDirection" to s("asc"), "cursor" to cursor?.let(::s)))
-            if (page.list("data").any { turn -> turn.list("items").any { item ->
+        repeat(200) {
+            val page = rpc.call("thread/items/list", obj("threadId" to s(threadId), "limit" to JsonPrimitive(1),
+                "sortDirection" to s("asc"), "cursor" to cursor?.let(::s)))
+            if (page.list("data").any { row ->
+                    val item = row.map("item")
                     item.str("type") == "userMessage" && (item.str("id") == operation || item.str("clientUserMessageId") == operation)
-                } }) return true
+                }) return true
             cursor = page.cursor() ?: return false
             if (!seen.add(requireNotNull(cursor))) return false
         }

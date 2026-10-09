@@ -164,7 +164,7 @@ internal class ChatActivityMonitor(
         if (active) return
         // The latest turn is enough to compare assistant output; title/project edits never create unread.
         val history = rpc.call("thread/turns/list", obj("threadId" to s(id), "limit" to JsonPrimitive(1),
-            "itemsView" to s("full"), "sortDirection" to s("desc")))
+            "itemsView" to s("summary"), "sortDirection" to s("desc")))
         if (epoch != rpc.generation || version != version(id)) return
         val turn = history.list("data").firstOrNull()
         if (turn?.str("status") == "failed" && runtime[id] == ChatIndicator.None) runtime[id] = ChatIndicator.Error

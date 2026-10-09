@@ -75,6 +75,7 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     androidTestImplementation("com.squareup.okhttp3:okhttp:4.12.0")
+    androidTestImplementation("org.java-websocket:Java-WebSocket:1.6.0")
     androidTestImplementation(platform("androidx.compose:compose-bom:2025.08.01"))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")

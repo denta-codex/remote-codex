@@ -299,6 +299,7 @@ interface SettingsActions {
 }
 
 interface ConversationActions {
+    suspend fun loadToolDetails(entry: Entry, offset: Int = 0): ToolDetailsPage = error("Complete details unavailable")
     fun sendFollowUp(text: String) {}
     fun refreshWorktreeChanges() {}
     fun assistantTextRendered(update: LiveAssistantText, visible: Boolean): Float? = null

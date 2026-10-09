@@ -15,7 +15,7 @@ object ReadOnlyTaskToolSpecs {
                     "limit" to integer(10, 1, 50)), emptyList()),
             tool("read_thread",
                 "Read task metadata and recent turn history without opening or resuming it. " +
-                    "Use the returned opaque cursor to read older turns. MCP and dynamic-tool result payloads are omitted.",
+                    "Pages contain at most 20 items and may contain only part of a turn. Follow the returned opaque cursor until exhausted. MCP and dynamic-tool result payloads are omitted.",
                 obj("threadId" to text("Task ID returned by list_threads."),
                     "hostId" to text("Optional active host ID returned by list_threads."),
                     "cursor" to text("Opaque continuation cursor from an earlier read_thread page."),

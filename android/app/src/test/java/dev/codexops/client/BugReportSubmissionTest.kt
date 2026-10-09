@@ -242,8 +242,8 @@ class BugReportSubmissionTest {
             "thread/name/set" -> { taskName = params.str("name"); mutation("name"); obj() }
             "thread/read" -> obj("thread" to obj("id" to s("fix-task"), "name" to s(taskName)))
             "turn/start" -> { sendParams = params; messageVisible = true; mutation("send"); obj() }
-            "thread/turns/list" -> obj("data" to JsonArray(if (!messageVisible) emptyList() else listOf(
-                obj("items" to JsonArray(listOf(obj("type" to s("userMessage"), "id" to s(id))))))))
+            "thread/items/list" -> obj("data" to JsonArray(if (!messageVisible) emptyList() else listOf(
+                obj("turnId" to s("report-turn"), "item" to obj("type" to s("userMessage"), "id" to s(id))))))
             else -> error("Unexpected RPC $method")
         }
         private fun project() = obj("id" to s("project"), "roots" to JsonArray(listOf(obj("path" to s("/repo")))))

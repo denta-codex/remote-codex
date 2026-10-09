@@ -1479,3 +1479,45 @@ gesture are still pending user-authorized live deployment and delivery.
   targeted checks passed across these runs.
 - Added the stock 0.154.0 facet inventory in `SEARCH-CAPABILITIES.md`, including
   unavailable aggregation/count fields and the cost of client-side scope scans.
+## Large-thread memory recovery — 2026-10-09
+
+- Preserved the October 8 Ed trading-card crash evidence under ignored
+  `artifacts/diagnostics/ed-cards-2026-10-08/`. The phone exhausted its heap
+  decoding an incoming WebSocket message. Inbound messages now have a 32 MiB
+  ceiling before assembly/text decoding; outbound messages retain 100 MiB.
+  History readers use summary turns and single-item stock pagination.
+- All 76 core tests and 153 app unit tests passed, as did `:app:lintDebug`.
+  Transport coverage includes oversized frame headers, single-frame and
+  unfinished fragmented messages, exact UTF-8 boundaries, pending-request
+  failure and successful explicit reconnection. The 20 MiB file/base64 fit
+  is checked arithmetically; stock filesystem helper tests cover download
+  decoding. A full 20 MiB transfer was not run in this validation.
+- Twelve unique focused Android 16 fixture scenarios passed (14 executions):
+  `hundredMiBTurnLoadsByItemAndLargeDetailsArePagedOnDemand`,
+  `oversizedHistoryItemKeepsDraftAndContentWithoutReconnectLoop`,
+  `textChatStreamsAndCanReopen`,
+  `inlineImagesMoveToPrivateCacheWithoutRetainingBase64`,
+  `imageOnlyUploadsAndRendersThroughStockRpc`,
+  `fileApprovalRecoversLiveSnapshotBeforeHistoryFinishes`,
+  `fileApprovalMissingDetailsStaysDisabledAndCanRetry`,
+  `bugReportCapturesScreenAndStartsIsolatedFixTask`,
+  `nativeTaskToolsReadDuringHistoryLoadingWithoutOpeningTasks`,
+  `conversationOpensFromResumePageWithoutWaitingForOlderHistory`,
+  `itemHistoryMergesBufferedCompletionWithoutDuplicatingText`, and
+  `switchingTasksDiscardsLateItemPageAndStopsFurtherReads`.
+  These cover roughly 100 MiB spread across history items, opaque continuation,
+  paged complete tool details, a 33 MiB fragmented response rejected without
+  process death or automatic reopening, retained drafts/content, live overlap,
+  approvals, media caching, report submission and cancellation on navigation.
+- Validation used a disposable isolated worktree and existing managed JDK/SDK.
+  A host dex-compiler C1 crash required the command-local option
+  `-XX:CompileCommand=exclude,com.android.tools.r8.internal.k04::a`.
+  No shared toolchain settings changed. XML results, lint output and bounded
+  compiler-crash evidence are retained beside the phone crash evidence; the
+  disposable checkout and temporary investigation files were removed.
+- The separate original report-submission failure remains unconfirmed. Its
+  workspace had no confirmed setup receipt or report upload, and the phone's
+  saved private journal was unavailable on the non-debuggable release. No
+  uncertain submission was replayed. Saved-report recreation and a full-size
+  file transfer were deferred when integration requested stopping further
+  validation. No release was published, forwarder deployed, or phone app installed.
