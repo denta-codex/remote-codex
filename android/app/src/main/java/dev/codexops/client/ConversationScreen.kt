@@ -21,6 +21,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -40,6 +42,8 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
     val cover = LocalAppWindowClass.current.coverScreen
     var confirmUnlock by remember { mutableStateOf(false) }
     val scroll = rememberLazyListState()
+    val rowHeights = remember { mutableStateMapOf<String, Int>() }
+    val historyHeaderHeight = with(LocalDensity.current) { 48.dp.roundToPx() }
     val haptics = LocalAppHaptics.current
     val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
     var followLatest by remember { mutableStateOf(true) }
@@ -47,12 +51,16 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
     var openingAnchorKey by remember { mutableStateOf<String?>(null) }
     var initialRenderedKey by remember { mutableStateOf<String?>(null) }
     var readerScrolled by remember { mutableStateOf(false) }
+    var readingEarlier by remember { mutableStateOf(false) }
+    var historyAnchor by remember { mutableStateOf<Pair<String, Int>?>(null) }
     val readingScroll = remember(scroll) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                 // Stop before the next layout/streaming update, even for a short drag.
                 if (source == NestedScrollSource.UserInput && available.y != 0f) {
                     readerScrolled = true
+                    historyAnchor = null
+                    readingEarlier = available.y > 0f
                     followLatest = false
                 }
                 return Offset.Zero
@@ -67,6 +75,41 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
     val rows = remember(st.entries, st.activeTurn, st.ready, st.turnStatuses, st.decisions, st.attention) {
         conversationRows(st.entries, st.activeTurn, st.ready, st.turnStatuses,
             st.decisions.any { it.blocksUser } || st.attention)
+    }
+    var previousFirstRow by remember { mutableStateOf<String?>(null) }
+    var previousHadHistory by remember { mutableStateOf(false) }
+    val firstRow = rows.firstOrNull()?.key
+    if (readerScrolled && !followLatest &&
+        ((previousFirstRow != null && previousFirstRow != firstRow) ||
+            (previousHadHistory && st.historyCursor == null))) {
+        // A header is not a reading anchor. Pin actual content across both the
+        // prepend and later Markdown measurements, until the reader moves again.
+        val layout = scroll.layoutInfo
+        val anchor = layout.visibleItemsInfo.firstOrNull { it.key != "history" }
+        SideEffect {
+            if (historyAnchor == null && anchor?.key is String)
+                historyAnchor = anchor.key as String to anchor.offset
+        }
+    }
+    SideEffect {
+        previousFirstRow = firstRow
+        previousHadHistory = st.historyCursor != null
+    }
+    val currentRows by rememberUpdatedState(rows)
+    val hasHistory by rememberUpdatedState(st.historyCursor != null)
+    LaunchedEffect(scroll, historyAnchor, followLatest) {
+        val anchor = historyAnchor ?: return@LaunchedEffect
+        if (followLatest) return@LaunchedEffect
+        snapshotFlow { scroll.layoutInfo }.collect { layout ->
+            val index = currentRows.indexOfFirst { it.key == anchor.first }
+            if (index < 0) return@collect
+            val visible = layout.visibleItemsInfo.firstOrNull { it.key == anchor.first }
+            if ((visible == null || visible.offset != anchor.second) &&
+                (visible == null || scroll.canScrollBackward || visible.offset > anchor.second)) {
+                scroll.requestScrollToItem(index + if (hasHistory) 1 else 0,
+                    layout.viewportStartOffset - anchor.second)
+            }
+        }
     }
     val openingMessageKey = rows.lastOrNull { it is ConversationRow.Message }?.key
     var changesTurn by rememberSaveable(st.host.endpoint, st.thread) { mutableStateOf<String?>(null) }
@@ -87,7 +130,8 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
     // anchors its bottom, moving the paragraph being read when that message grows.
     LaunchedEffect(scroll) {
         snapshotFlow {
-                initiallyPositioned && readerScrolled && !scroll.isScrollInProgress && !scroll.canScrollForward
+                initiallyPositioned && readerScrolled && !readingEarlier &&
+                    !scroll.isScrollInProgress && !scroll.canScrollForward
             }
             .collect { atRestAtEnd ->
                 if (atRestAtEnd) followLatest = true
@@ -144,6 +188,35 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
             }
         }
     }
+    // Short pages can require another turn to fill the reader's buffer, but
+    // opening alone must never fetch history.
+    LaunchedEffect(scroll, initiallyPositioned, readingEarlier, st.ready, st.busy,
+        st.historyCursor, st.historyLoading, st.historyError, rows) {
+        if ((!initiallyPositioned && rows.any { it is ConversationRow.Message }) ||
+            !readingEarlier || !st.ready || st.busy || st.historyCursor == null ||
+            st.historyLoading || st.historyError) return@LaunchedEffect
+        withFrameNanos { }
+        snapshotFlow {
+            val layout = scroll.layoutInfo
+            val first = layout.visibleItemsInfo.firstOrNull()
+            val height = layout.viewportEndOffset - layout.viewportStartOffset
+            // Retain measured row heights, including Markdown's final size.
+            // Estimate unseen rows without composing offscreen content. A tall
+            // visible reply must not inflate the estimate for every earlier row.
+            val estimatedHeight = if (height > 0) height / 3 else 0
+            val precedingRows = (scroll.firstVisibleItemIndex - 1).coerceAtLeast(0)
+            var distance = (if (scroll.firstVisibleItemIndex > 0) historyHeaderHeight.toLong() else 0L) +
+                scroll.firstVisibleItemIndex.toLong() * layout.mainAxisItemSpacing +
+                scroll.firstVisibleItemScrollOffset
+            // Stop as soon as the boundary is farther than a viewport, keeping
+            // this per-layout check cheap even after extensive scrollback.
+            for (index in 0 until minOf(precedingRows, rows.size)) {
+                if (distance > height) break
+                distance += rowHeights[rows[index].key] ?: estimatedHeight
+            }
+            first != null && height > 0 && distance <= height
+        }.collect { nearBeginning -> if (nearBeginning) actions.older() }
+    }
     val latestTurn = st.entries.lastOrNull()?.turn
     val latestReply = st.entries.lastOrNull { it.turn == latestTurn && it.kind in setOf("agentMessage", "plan") }
     val signature = remember(st.entries) { latestTurn?.let { turn -> replySignature(turn, st.entries.filter { it.turn == turn }.map { it.raw }) } }
@@ -175,48 +248,54 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
         ) {
             if (st.historyCursor != null)
                 item(key = "history") {
-                    TextButton(onClick = actions::older, modifier = Modifier.fillMaxWidth()) {
-                        Glyph(R.drawable.ic_up)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Load earlier messages")
+                    Box(Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.Center) {
+                        if (st.historyError) {
+                            TextButton(onClick = actions::older, modifier = Modifier.testTag("history-retry")) {
+                                Text("Retry loading earlier messages")
+                            }
+                        } else if (st.historyLoading) {
+                            CircularProgressIndicator(Modifier.size(20.dp).testTag("history-loading"), strokeWidth = 2.dp)
+                        }
                     }
                 }
             items(rows, key = { it.key }) { row ->
-                if (row is ConversationRow.Activity) ToolActivityRow(row,
-                    "${st.host.endpoint}/${st.thread}", actions, st.appForeground)
-                else if (row is ConversationRow.Changes) TurnChangesRow(row) { changesTurn = row.turn }
-                else if (row is ConversationRow.Message) {
-                    val entry = row.entry
-                    Message(
-                        entry = entry,
-                        actions = actions,
-                        visualizationScope = "${st.host.endpoint}/${st.thread}/${entry.key}",
-                        canImplement =
-                            entry.key == actionablePlan?.key &&
-                                st.ready &&
-                                !st.busy &&
-                                st.activeTurn == null &&
-                                st.queuedMessages.isEmpty() &&
-                                st.queueReady &&
-                                st.journal == null,
-                        onImplement = { actions.implementPlan(entry.key) },
-                        onTextRendered = {
-                            if (!initiallyPositioned && entry.key == openingMessageKey) initialRenderedKey = entry.key
-                            st.liveAssistantText?.takeIf {
-                                it.thread == st.thread && it.key == entry.key &&
-                                    it.textLength == entry.text.length && it.textHash == entry.text.hashCode()
-                            }?.let { update ->
-                                val layout = scroll.layoutInfo
-                                val item = layout.visibleItemsInfo.firstOrNull { it.key == entry.key }
-                                val visible = followLatest && st.appForeground && st.ready &&
-                                    lifecycle.isAtLeast(Lifecycle.State.RESUMED) && layout.viewportSize.height > 0 &&
-                                    item != null && item.offset < layout.viewportEndOffset &&
-                                    item.offset + item.size > layout.viewportStartOffset &&
-                                    item.offset + item.size <= layout.viewportEndOffset
-                                actions.assistantTextRendered(update, visible)?.let(haptics::stream)
-                            }
-                        },
-                    )
+                Box(Modifier.fillMaxWidth().onSizeChanged { rowHeights[row.key] = it.height }) {
+                    if (row is ConversationRow.Activity) ToolActivityRow(row,
+                        "${st.host.endpoint}/${st.thread}", actions, st.appForeground)
+                    else if (row is ConversationRow.Changes) TurnChangesRow(row) { changesTurn = row.turn }
+                    else if (row is ConversationRow.Message) {
+                        val entry = row.entry
+                        Message(
+                            entry = entry,
+                            actions = actions,
+                            visualizationScope = "${st.host.endpoint}/${st.thread}/${entry.key}",
+                            canImplement =
+                                entry.key == actionablePlan?.key &&
+                                    st.ready &&
+                                    !st.busy &&
+                                    st.activeTurn == null &&
+                                    st.queuedMessages.isEmpty() &&
+                                    st.queueReady &&
+                                    st.journal == null,
+                            onImplement = { actions.implementPlan(entry.key) },
+                            onTextRendered = {
+                                if (!initiallyPositioned && entry.key == openingMessageKey) initialRenderedKey = entry.key
+                                st.liveAssistantText?.takeIf {
+                                    it.thread == st.thread && it.key == entry.key &&
+                                        it.textLength == entry.text.length && it.textHash == entry.text.hashCode()
+                                }?.let { update ->
+                                    val layout = scroll.layoutInfo
+                                    val item = layout.visibleItemsInfo.firstOrNull { it.key == entry.key }
+                                    val visible = followLatest && st.appForeground && st.ready &&
+                                        lifecycle.isAtLeast(Lifecycle.State.RESUMED) && layout.viewportSize.height > 0 &&
+                                        item != null && item.offset < layout.viewportEndOffset &&
+                                        item.offset + item.size > layout.viewportStartOffset &&
+                                        item.offset + item.size <= layout.viewportEndOffset
+                                    actions.assistantTextRendered(update, visible)?.let(haptics::stream)
+                                }
+                            },
+                        )
+                    }
                 }
             }
             items(st.decisions, key = { it.key }) { decision ->
@@ -339,7 +418,7 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
         }
         if (!followLatest)
             FilledTonalIconButton(
-                onClick = { followLatest = true },
+                onClick = { historyAnchor = null; readingEarlier = false; followLatest = true },
                 modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp)
                     .testTag("jump-to-latest"),
             ) {
@@ -351,7 +430,7 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
         ConversationComposer(
             state = st,
             actions = actions,
-            onSend = { followLatest = true },
+            onSend = { historyAnchor = null; readingEarlier = false; followLatest = true },
         )
     if (confirmUnlock)
         AlertDialog(

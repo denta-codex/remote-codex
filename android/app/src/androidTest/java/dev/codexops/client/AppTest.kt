@@ -1042,6 +1042,8 @@ class AppTest {
     @Volatile private var rejectQueueRead = false
     private val userInputResponses = CopyOnWriteArrayList<JsonObject>()
     private val serverRequestResponses = CopyOnWriteArrayList<JsonObject>()
+    private val historyRequests = CopyOnWriteArrayList<JsonObject>()
+    @Volatile private var rejectHistory = false
     @Volatile private var holdHistoryReply = false
     @Volatile private var historyReplyExemption: String? = null
     private val heldHistoryRequests = CopyOnWriteArrayList<JsonElement>()
@@ -1221,6 +1223,14 @@ class AppTest {
                                         followUpRequests.add(m)
                                         if (holdFollowUpReply) {
                                             heldFollowUpRequests.add(m)
+                                            return
+                                        }
+                                    }
+                                    if (method == "thread/turns/list") {
+                                        historyRequests.add(params)
+                                        if (rejectHistory) {
+                                            ws.send(obj("id" to m["id"], "error" to obj(
+                                                "code" to JsonPrimitive(-32000), "message" to s("Fixture history failure"))).toString())
                                             return
                                         }
                                     }
@@ -2681,11 +2691,169 @@ class AppTest {
         compose.waitUntil(5000) { !model.state.value.busy && model.state.value.entries.any { it.text == "Latest reply" } }
         assertEquals("older-turns", model.state.value.historyCursor)
         assertTrue(heldHistoryRequests.isEmpty())
+        compose.waitUntil(5000) { compose.onNodeWithText("Latest reply").isDisplayed() }
         compose.onNodeWithText("Latest reply").assertIsDisplayed()
         compose.runOnUiThread { model.older() }
         compose.waitUntil(5000) { heldHistoryRequests.isNotEmpty() }
         holdHistoryReply = false
         heldHistoryRequests.forEach { peer!!.send(obj("id" to it, "result" to history()).toString()) }
+    }
+
+    private fun scrollbackPage(index: Int, cursor: String? = null, tall: Boolean = false): JsonObject =
+        obj("data" to JsonArray(listOf(obj("id" to s("back-$index"), "status" to s("completed"),
+            "items" to JsonArray(listOf(
+                obj("id" to s("user"), "type" to s("userMessage"), "content" to JsonArray(listOf(
+                    obj("type" to s("text"), "text" to s("Scrollback question $index"))))),
+                obj("id" to s("command"), "type" to s("commandExecution"),
+                    "command" to s("fixture-check"), "status" to s("completed"),
+                    "aggregatedOutput" to s("Large fixture output\n".repeat(10000))),
+                obj("id" to s("reply"), "type" to s("agentMessage"), "text" to s(
+                    if (tall) (1..35).joinToString("\n\n") { "Scrollback paragraph $index.$it: Keep this paragraph steady while loading." }
+                    else "Scrollback reply $index")),
+            ))))), "nextCursor" to cursor?.let(::s))
+
+    private fun openScrollback(tall: Boolean = false) {
+        approvalResumePage = scrollbackPage(3, "before-3", tall)
+        holdHistoryReply = true
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(5000) { !model.state.value.busy && model.state.value.entries.any { it.turn == "back-3" } }
+        compose.waitForIdle()
+        assertTrue("Opening must not crawl history", historyRequests.isEmpty())
+    }
+
+    private fun finishScrollback(page: JsonObject) {
+        val request = heldHistoryRequests.last()
+        peer!!.send(obj("id" to request, "result" to page).toString())
+        compose.waitUntil(5000) { !model.state.value.historyLoading }
+        compose.waitForIdle()
+    }
+
+    @Test
+    fun upwardScrollLoadsHistoryWithoutDuplicateRequestsAndPreservesAnchor() {
+        openScrollback(tall = true)
+        compose.onNodeWithTag("timeline").performTouchInput { swipeDown() }
+        compose.waitUntil(5000) { heldHistoryRequests.size == 1 }
+        assertTrue(model.state.value.historyLoading)
+        assertFalse(model.state.value.busy)
+        compose.onNodeWithTag("composer").performTextInput("Draft survives history loading")
+        compose.runOnUiThread { repeat(5) { model.older() } }
+        compose.waitForIdle()
+        assertEquals(1, historyRequests.size)
+        assertEquals(1, historyRequests.single()["limit"]?.jsonPrimitive?.int)
+        assertEquals("full", historyRequests.single().str("itemsView"))
+        val paragraph = compose.onNodeWithText("Scrollback paragraph 3.1: Keep this paragraph steady while loading.")
+        paragraph.assertIsDisplayed()
+        val before = paragraph.getUnclippedBoundsInRoot().top
+        finishScrollback(scrollbackPage(2, tall = true))
+        paragraph.assertIsDisplayed()
+        assertTrue("Prepending Markdown moved the reader", kotlin.math.abs(
+            paragraph.getUnclippedBoundsInRoot().top.value - before.value) < 2f)
+        assertEquals("Draft survives history loading", model.state.value.draft)
+        assertNull(model.state.value.historyCursor)
+        emit(peer!!, "item/agentMessage/delta", obj("turnId" to s("back-3"),
+            "itemId" to s("reply"), "delta" to s("\n\nLive update while reading")))
+        compose.waitUntil(5000) { model.state.value.entries.last().text.endsWith("Live update while reading") }
+        compose.waitForIdle()
+        assertTrue(kotlin.math.abs(paragraph.getUnclippedBoundsInRoot().top.value - before.value) < 2f)
+    }
+
+    @Test
+    fun historyFailurePausesAutomaticLoadingUntilRetryAndStopsAtRepeatedCursor() {
+        openScrollback()
+        rejectHistory = true
+        holdHistoryReply = false
+        compose.onNodeWithTag("timeline").performTouchInput { swipeDown() }
+        compose.waitUntil(5000) { model.state.value.historyError }
+        compose.onNodeWithTag("history-retry").assertIsDisplayed()
+        compose.onNodeWithTag("timeline").performTouchInput { swipeDown() }
+        compose.waitForIdle()
+        assertEquals(1, historyRequests.size)
+        assertNull(model.state.value.error)
+        assertFalse(model.state.value.busy)
+        rejectHistory = false
+        holdHistoryReply = true
+        compose.onNodeWithTag("history-retry").performClick()
+        compose.waitUntil(5000) { heldHistoryRequests.size == 1 }
+        finishScrollback(scrollbackPage(2, "before-3"))
+        assertNull(model.state.value.historyCursor)
+        assertFalse(model.state.value.historyError)
+        assertEquals(2, historyRequests.size)
+    }
+
+    @Test
+    fun historyContinuesNearBeginningAndIgnoresRepliesAfterSwitchingChats() {
+        openScrollback()
+        compose.onNodeWithTag("timeline").performTouchInput { swipeDown() }
+        compose.waitUntil(5000) { heldHistoryRequests.size == 1 }
+        peer!!.send(obj("id" to heldHistoryRequests[0], "result" to
+            obj("data" to JsonArray(emptyList()), "nextCursor" to s("before-2"))).toString())
+        compose.waitUntil(5000) { heldHistoryRequests.size == 2 }
+        assertEquals("before-2", historyRequests.last().str("cursor"))
+        compose.runOnUiThread { model.newChat() }
+        compose.waitUntil(5000) { model.state.value.thread == null }
+        peer!!.send(obj("id" to heldHistoryRequests[1], "result" to scrollbackPage(1)).toString())
+        compose.waitForIdle()
+        assertTrue(model.state.value.entries.isEmpty())
+        assertFalse(model.state.value.historyLoading)
+        assertFalse(model.state.value.historyError)
+    }
+
+    @Test
+    fun historyReconnectDropsPendingPageAndAllowsFreshPagination() {
+        openScrollback()
+        compose.runOnUiThread { model.older() }
+        compose.waitUntil(5000) { heldHistoryRequests.size == 1 }
+        val oldRequest = heldHistoryRequests[0]
+        val previousResumes = approvalResumeRequests.size
+        compose.runOnUiThread { model.connect() }
+        compose.waitUntil(10000) {
+            approvalResumeRequests.size > previousResumes && model.state.value.ready && !model.state.value.busy
+        }
+        assertFalse(model.state.value.historyLoading)
+        peer!!.send(obj("id" to oldRequest, "result" to scrollbackPage(1)).toString())
+        compose.waitForIdle()
+        assertFalse(model.state.value.entries.any { it.turn == "back-1" })
+        compose.runOnUiThread { model.older() }
+        compose.waitUntil(5000) { heldHistoryRequests.size == 2 }
+        finishScrollback(scrollbackPage(2))
+        assertTrue(model.state.value.entries.any { it.turn == "back-2" })
+    }
+
+    @Test
+    fun historyDoesNotPrefetchWhenReadingFarFromBeginning() {
+        approvalResumePage = JsonObject(longHistory(tallLastMessage = true) +
+            ("nextCursor" to s("older-than-checkpoints")))
+        holdHistoryReply = true
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(5000) { !model.state.value.busy && model.state.value.entries.size >= 40 }
+        compose.waitForIdle()
+        assertTrue(historyRequests.isEmpty())
+        compose.waitUntil(5000) {
+            compose.onNodeWithText("Review note 1: Keep the layout clear and comfortable to read.").isDisplayed()
+        }
+        compose.waitForIdle()
+        compose.onNodeWithTag("jump-to-latest").performClick()
+        compose.waitUntil(5000) { latestReply().isDisplayed() }
+        compose.onNodeWithTag("timeline").performTouchInput {
+            swipe(center, center.copy(y = height * .85f), durationMillis = 1200)
+        }
+        compose.waitForIdle()
+        assertTrue("Reading within a tall recent reply must not crawl older history", historyRequests.isEmpty())
+    }
+
+    @Test
+    fun emptyRecentPageStillAllowsUpwardScrollback() {
+        approvalResumePage = obj("data" to JsonArray(emptyList()), "nextCursor" to s("older-empty"))
+        holdHistoryReply = true
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(5000) { !model.state.value.busy && model.state.value.historyCursor == "older-empty" }
+        compose.waitForIdle()
+        assertTrue(historyRequests.isEmpty())
+        compose.onNodeWithTag("timeline").performTouchInput { swipeDown() }
+        compose.waitUntil(5000) { heldHistoryRequests.size == 1 }
+        finishScrollback(scrollbackPage(2))
+        compose.waitUntil(5000) { compose.onNodeWithText("Scrollback reply 2").isDisplayed() }
+        assertNull(model.state.value.historyCursor)
     }
 
     @Test

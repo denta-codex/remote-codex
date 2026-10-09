@@ -292,6 +292,17 @@ found` just after creation. This is retried only on history/resume reads, for a
 bounded interval. The first live turn already has a subscription and is rendered
 from its events, without an immediate resume call.
 
+Conversation opening renders resume's newest full turn immediately. Older history
+loads only after upward reader input, when the beginning is within roughly one
+viewport. The client uses measured row heights and estimates uncomposed rows,
+fetches one full turn at a time, and retains loaded history while the chat is open.
+A separate loading indicator and explicit Retry keep history errors out of the
+composer's busy/error state. Failed pages pause automatic loading. Cursor cycles
+stop pagination; selection and connection-generation guards reject stale pages.
+Reader anchors survive prepends and asynchronous Markdown measurement until the
+next user scroll, send, or jump to latest. Opening, sending, and jumping do not
+start a background history crawl.
+
 New Android tasks (including report tasks) advertise exactly `codex_app.list_threads`
 and `codex_app.read_thread` through stock `thread/start.dynamicTools`, using the
 installed 0.159.2 namespaced `DynamicToolSpec` contract with eager tool loading.
