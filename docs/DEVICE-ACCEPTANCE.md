@@ -36,11 +36,12 @@ Record Android version, APK version/code, signer fingerprint, Codex version and 
 - [ ] Disconnect around send acknowledgement; no automatic duplicate submission.
 - [ ] Disconnect during an attachment write; confirm no file write or turn is replayed.
 - [ ] With Wi-Fi/mobile data available and Tailscale disconnected, confirm the
-      connection banner reports no active VPN and tells you to open Tailscale.
+      connection banner says no VPN was detected and tells you to open Tailscale.
       With all networks off, confirm it asks for Wi-Fi or mobile data first.
 - [ ] With a VPN active but Grace unreachable, confirm the banner does not claim
-      Tailscale is connected; DNS failures mention Tailscale DNS. Android's VPN
+      Tailscale is connected; it asks you to check Tailscale and reconnect. Android's VPN
       capability identifies a VPN available to this app, not its provider or health.
+      Confirm connection attempts proceed regardless of the detected VPN state.
 - [ ] Restore Tailscale; reconnect and inspect uncertain operation before unlocking composer.
 - [ ] Higher-version same-signer APK preserves credential/drafts/assistant selection.
 - [ ] Scheduled host restart: user service and persistent Serve route return.

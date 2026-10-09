@@ -11,27 +11,24 @@ class ConnectionDiagnosticsTest {
 
     @Test fun missingVpnGivesActionForDnsAndOtherTransportFailures() {
         for (transport in listOf("UnknownHostException", "ConnectException", "SocketTimeoutException")) {
-            assertEquals("No VPN connection is active for Remote Codex. Open Tailscale and connect, then return here and tap Reconnect.",
+            assertEquals("Cannot connect to Grace. No VPN connection was detected. Open Tailscale and connect, then reconnect.",
                 message(ConnectionNetwork.NoVpn, transport))
         }
     }
 
     @Test fun activeVpnDoesNotClaimTailscaleIsConnected() {
-        val dns = message(ConnectionNetwork.VpnActive)
-        assertTrue(dns.contains("A VPN is active"))
-        assertTrue(dns.contains("address could not be found"))
-        assertTrue(dns.contains("Check that Tailscale is connected"))
-        assertTrue(dns.contains("Tailscale DNS"))
-        val timeout = message(ConnectionNetwork.VpnActive, "SocketTimeoutException")
-        assertTrue(timeout.contains("Grace is unreachable"))
-        assertTrue(timeout.contains("Grace is online"))
-        assertFalse(timeout.contains("address could not be found"))
+        for (network in listOf(ConnectionNetwork.VpnActive, ConnectionNetwork.Unknown)) {
+            for (transport in listOf("UnknownHostException", "ConnectException", "SocketTimeoutException")) {
+                assertEquals("Cannot connect to Grace. Check that Tailscale is connected, then reconnect.",
+                    message(network, transport))
+            }
+        }
     }
 
     @Test fun offlineAndUnknownNetworkStatesDoNotClaimVpnIsOff() {
-        assertEquals("No network connection is available. Connect to Wi-Fi or mobile data, then reconnect.",
+        assertEquals("Cannot connect to Grace. Connect to Wi-Fi or mobile data, then reconnect.",
             message(ConnectionNetwork.Offline))
-        assertEquals("Cannot reach Grace. Check that Tailscale is connected, then reconnect.",
+        assertEquals("Cannot connect to Grace. Check that Tailscale is connected, then reconnect.",
             message(ConnectionNetwork.Unknown))
     }
 
@@ -49,7 +46,7 @@ class ConnectionDiagnosticsTest {
     @Test fun nonTailscaleEndpointsDoNotRequireVpn() {
         for (endpoint in listOf("ws://127.0.0.1:1234/codex/rpc", "wss://example.com/codex/rpc", "wss://grace.ts.net.example.com/codex/rpc")) {
             val host = GraceHost.copy(endpoint = endpoint)
-            assertEquals("Cannot reach Grace (ConnectException). Check the network and reconnect.",
+            assertEquals("Cannot connect to Grace. Check your network connection, then reconnect.",
                 connectionFailureMessage(host, ConnectionFailure(null, "ConnectException"), ConnectionNetwork.NoVpn))
         }
     }

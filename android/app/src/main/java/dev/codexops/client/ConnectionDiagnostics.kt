@@ -38,16 +38,12 @@ internal fun connectionFailureMessage(
             .getOrDefault(false)
         when {
             network == ConnectionNetwork.Offline ->
-                "No network connection is available. Connect to Wi-Fi or mobile data, then reconnect."
+                "Cannot connect to ${host.displayName}. Connect to Wi-Fi or mobile data, then reconnect."
             tailscaleHost && network == ConnectionNetwork.NoVpn ->
-                "No VPN connection is active for Remote Codex. Open Tailscale and connect, then return here and tap Reconnect."
-            tailscaleHost && network == ConnectionNetwork.VpnActive && error.transport == "UnknownHostException" ->
-                "A VPN is active, but ${host.displayName}'s Tailscale address could not be found. Check that Tailscale is connected and using Tailscale DNS, then reconnect."
-            tailscaleHost && network == ConnectionNetwork.VpnActive ->
-                "A VPN is active, but ${host.displayName} is unreachable. Check that Tailscale is connected and ${host.displayName} is online, then reconnect."
+                "Cannot connect to ${host.displayName}. No VPN connection was detected. Open Tailscale and connect, then reconnect."
             tailscaleHost ->
-                "Cannot reach ${host.displayName}. Check that Tailscale is connected, then reconnect."
-            else -> "Cannot reach ${host.displayName} (${error.transport}). Check the network and reconnect."
+                "Cannot connect to ${host.displayName}. Check that Tailscale is connected, then reconnect."
+            else -> "Cannot connect to ${host.displayName}. Check your network connection, then reconnect."
         }
     }
     error is RpcRejected -> "${host.displayName} rejected connection setup (RPC ${error.code})."
