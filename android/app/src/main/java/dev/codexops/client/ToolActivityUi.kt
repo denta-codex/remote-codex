@@ -45,10 +45,36 @@ internal fun ToolActivityRow(group: ConversationRow.Activity, scope: String,
             ActivitySummary(group.summary, group.working && foreground && animationsEnabled, Modifier.weight(1f))
             Glyph(if (expanded) R.drawable.ic_up else R.drawable.ic_down, modifier = Modifier.size(16.dp))
         }
+        if (!expanded) {
+            group.progressMessage?.let { message ->
+                Text(message, Modifier.testTag("tool-progress-preview-${group.key}"),
+                    fontSize = 13.sp, maxLines = 3, overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            group.previewSummary?.let { summary ->
+                Text(summary, Modifier.testTag("progress-summary-preview-${group.key}"),
+                    fontSize = 13.sp, maxLines = 3, overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
         if (expanded) Column(Modifier.padding(start = 12.dp).testTag("tool-activity-details-${group.key}")) {
-            group.calls.forEach { call -> key(call.entry.key) {
-                ToolCallDetails(call, scope, actions)
+            val calls = group.calls.associateBy { it.entry.key }
+            group.entries.forEach { entry -> key(entry.key) {
+                if (entry.kind == "reasoning") {
+                    val summaries = entry.summaries.filter(String::isNotBlank)
+                    if (summaries.isNotEmpty()) Column(
+                        Modifier.fillMaxWidth().padding(vertical = 8.dp).testTag("progress-summary-${entry.key}"),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text("Progress summary", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        summaries.forEach { summary -> SelectionContainer {
+                            Text(summary, fontSize = 13.sp, lineHeight = 18.sp)
+                        } }
+                    }
+                } else calls[entry.key]?.let { ToolCallDetails(it, scope, actions) }
             } }
+            if (group.calls.isEmpty() && group.entries.none { it.summaries.any(String::isNotBlank) })
+                Text("Details unavailable", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -69,8 +95,8 @@ private fun ActivitySummary(text: String, shimmer: Boolean, modifier: Modifier) 
             start = Offset(center - width * .3f, 0f), end = Offset(center + width * .3f, 0f),
         )
         Text(text, modifier.onSizeChanged { width = it.width.toFloat().coerceAtLeast(1f) }.testTag("tool-activity-shimmer"),
-            style = style.copy(brush = brush))
-    } else Text(text, modifier, color = base, style = style)
+            style = style.copy(brush = brush), maxLines = 2, overflow = TextOverflow.Ellipsis)
+    } else Text(text, modifier, color = base, style = style, maxLines = 2, overflow = TextOverflow.Ellipsis)
 }
 
 @Composable
@@ -94,6 +120,10 @@ private fun ToolCallDetails(call: ToolCall, scope: String, actions: Conversation
                 Text(call.state.label, fontSize = 12.sp,
                     color = if (call.state == ToolState.Failed) MaterialTheme.colorScheme.error
                         else MaterialTheme.colorScheme.onSurfaceVariant)
+                if (call.entry.progressMessage.isNotBlank())
+                    Text(call.entry.progressMessage, Modifier.testTag("tool-progress-${call.entry.key}"),
+                        fontSize = 13.sp, maxLines = 3, overflow = TextOverflow.Ellipsis,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Glyph(if (expanded) R.drawable.ic_up else R.drawable.ic_down, modifier = Modifier.size(16.dp))
         }

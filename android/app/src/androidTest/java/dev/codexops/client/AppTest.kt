@@ -2081,7 +2081,7 @@ class AppTest {
             SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "In progress · Expanded"))
         compose.onNodeWithText("Working on Grace").assertDoesNotExist()
         compose.onNodeWithTag(toggle).performScrollTo().performClick()
-        compose.onNodeWithText("Running commands").assertIsDisplayed()
+        compose.onNodeWithText("Running commands · echo fixture-9").assertIsDisplayed()
         if (android.animation.ValueAnimator.areAnimatorsEnabled())
             compose.onNodeWithTag("tool-activity-shimmer", useUnmergedTree = true).assertExists()
         emit(peer!!, "item/completed", obj("turnId" to s("tools-turn"), "item" to command(9)))
@@ -2104,7 +2104,7 @@ class AppTest {
         emit(peer!!, "turn/started", obj("turn" to obj("id" to s("web-turn"), "status" to s("inProgress"))))
         emit(peer!!, "item/started", obj("turnId" to s("web-turn"), "item" to call))
         compose.waitUntil(5000) { model.state.value.entries.size == 1 }
-        compose.onNodeWithText("Searching the web").assertIsDisplayed()
+        compose.onNodeWithText("Searching the web · fixture median wages").assertIsDisplayed()
         if (android.animation.ValueAnimator.areAnimatorsEnabled())
             compose.onNodeWithTag("tool-activity-shimmer", useUnmergedTree = true).assertExists()
         compose.onNodeWithTag("tool-activity-toggle-tools/web-turn/search").performClick()
@@ -2129,7 +2129,9 @@ class AppTest {
     fun groupedActivitySupportsCompactLargeTextAndReducedMotion() {
         val entry = Entry("compact", obj("id" to s("tool"), "type" to s("futureTool"),
             "_completed" to JsonPrimitive(false), "opaque" to obj("value" to s("Fixture detail"))))
-        val group = conversationRows(listOf(entry), "compact", true).single() as ConversationRow.Activity
+        val reason = Entry("compact", obj("id" to s("reason"), "type" to s("reasoning"),
+            "summary" to JsonArray(listOf(s("Checking the fixture.")))))
+        val group = conversationRows(listOf(entry, reason), "compact", true).single() as ConversationRow.Activity
         val dark = androidx.compose.runtime.mutableStateOf(true)
         val animate = androidx.compose.runtime.mutableStateOf(false)
         val foreground = androidx.compose.runtime.mutableStateOf(true)
@@ -2149,6 +2151,7 @@ class AppTest {
         val toggle = compose.onNodeWithTag("tool-activity-toggle-tools/compact/tool")
         toggle.assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp)
         toggle.assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, androidx.compose.ui.semantics.Role.Button))
+        compose.onNodeWithTag("progress-summary-preview-tools/compact/tool").assertIsDisplayed()
         compose.onNodeWithTag("tool-activity-shimmer", useUnmergedTree = true).assertDoesNotExist()
         toggle.performClick()
         compose.onNodeWithTag("tool-call-toggle-compact/tool").performClick()
@@ -2161,6 +2164,113 @@ class AppTest {
         compose.onNodeWithTag("tool-activity-shimmer", useUnmergedTree = true).assertExists()
         compose.runOnUiThread { foreground.value = false }
         compose.onNodeWithTag("tool-activity-shimmer", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun summaryOnlyActivityStreamsWithoutOpeningHistoryAndRetainsCompletedSections() {
+        historyOverride = obj("data" to JsonArray(emptyList()))
+        compose.runOnUiThread { model.foreground(true); model.openTask("task-test") }
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.thread == "task-test" }
+        emit(peer!!, "turn/started", obj("turn" to obj("id" to s("summary-turn"), "status" to s("inProgress"))))
+        compose.waitUntil(5000) { model.state.value.activeTurn == "summary-turn" }
+        compose.onNodeWithText("Waiting for the next update").assertIsDisplayed()
+        fun summary(index: Int, text: String) = obj("turnId" to s("summary-turn"), "itemId" to s("reason"),
+            "summaryIndex" to JsonPrimitive(index), "delta" to s(text))
+        emit(peer!!, "item/reasoning/summaryPartAdded", summary(0, ""))
+        emit(peer!!, "item/reasoning/summaryTextDelta", summary(0, "Checking recovery instructions"))
+        compose.waitUntil(5000) { model.state.value.entries.singleOrNull()?.summaries == listOf("Checking recovery instructions") }
+        val groupKey = "tools/summary-turn/reason"
+        val toggle = compose.onNodeWithTag("tool-activity-toggle-$groupKey")
+        toggle.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "In progress · Collapsed"))
+        compose.onNodeWithTag("progress-summary-preview-$groupKey").assertTextEquals("Checking recovery instructions").assertIsDisplayed()
+        compose.onNodeWithTag("tool-activity-details-$groupKey").assertDoesNotExist()
+        val second = (1..6).joinToString("\n") { "Available progress section line $it" }
+        emit(peer!!, "item/reasoning/summaryTextDelta", summary(1, second))
+        compose.waitUntil(5000) { model.state.value.entries.single().summaries.size == 2 }
+        val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+        compose.onNodeWithTag("progress-summary-preview-$groupKey").performSemanticsAction(
+            androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        assertEquals(3, layouts.single().lineCount)
+        toggle.performClick()
+        compose.onNodeWithText("Checking recovery instructions").assertExists()
+        compose.onNodeWithText(second).assertExists()
+        val completed = obj("id" to s("reason"), "type" to s("reasoning"),
+            "summary" to JsonArray(listOf(s("Checking recovery instructions"), s(second))))
+        emit(peer!!, "item/completed", obj("turnId" to s("summary-turn"), "item" to completed))
+        emit(peer!!, "turn/completed", obj("turn" to obj("id" to s("summary-turn"), "status" to s("completed"))))
+        compose.waitUntil(5000) { model.state.value.activeTurn == null }
+        toggle.performScrollTo()
+        compose.onNodeWithText("2 progress summaries").assertIsDisplayed()
+        compose.onNodeWithTag("progress-summary-preview-$groupKey").assertDoesNotExist()
+        compose.onNodeWithText(second).assertExists()
+        compose.onNodeWithTag("tool-activity-shimmer", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun liveToolProgressSurvivesStreamingAndReconnectWithoutDuplicatingSummaries() {
+        val reason = obj("id" to s("reason"), "type" to s("reasoning"), "summary" to JsonArray(listOf(s("Checking instructions"))))
+        val tool = obj("id" to s("inspect"), "type" to s("mcpToolCall"), "tool" to s("read_guide"), "status" to s("inProgress"))
+        fun history(vararg items: JsonObject) = obj("data" to JsonArray(listOf(obj("id" to s("activity-turn"),
+            "status" to s("inProgress"), "items" to JsonArray(items.toList())))))
+        historyOverride = history(reason)
+        compose.runOnUiThread { model.foreground(true); model.openTask("task-test") }
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.activeTurn == "activity-turn" }
+        fun progress(text: String) = obj("turnId" to s("activity-turn"), "itemId" to s("inspect"), "message" to s(text))
+        emit(peer!!, "item/mcpToolCall/progress", progress("Reading the official guide"))
+        emit(peer!!, "item/started", obj("turnId" to s("activity-turn"), "item" to tool))
+        compose.waitUntil(5000) { model.state.value.entries.lastOrNull()?.raw?.str("tool") == "read_guide" }
+        val groupKey = "tools/activity-turn/reason"
+        val toggle = compose.onNodeWithTag("tool-activity-toggle-$groupKey")
+        compose.onNodeWithText("Using tools · read_guide").assertIsDisplayed()
+        compose.onNodeWithTag("tool-progress-preview-$groupKey").assertTextEquals("Reading the official guide").assertIsDisplayed()
+        captureComposer("live-tool-progress-preview.png")
+        toggle.performClick()
+        compose.onNodeWithTag("tool-call-toggle-activity-turn/inspect").performScrollTo()
+        compose.onNodeWithTag("tool-progress-activity-turn/inspect", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithTag("tool-call-details-activity-turn/inspect").assertDoesNotExist()
+        compose.onNodeWithTag("tool-call-toggle-activity-turn/inspect").performClick()
+        emit(peer!!, "item/mcpToolCall/progress", progress("Checking the recovery section"))
+        compose.waitUntil(5000) { model.state.value.entries.last().progressMessage == "Checking the recovery section" }
+        compose.onNodeWithTag("tool-call-details-activity-turn/inspect").assertExists()
+        historyOverride = history(reason, tool)
+        val resumes = threadResumes.get()
+        compose.runOnUiThread { model.connect() }
+        compose.waitUntil(15000) { threadResumes.get() > resumes && model.state.value.ready && !model.state.value.busy }
+        assertEquals(2, model.state.value.entries.size)
+        assertEquals(listOf("Checking instructions"), model.state.value.entries.first().summaries)
+        assertEquals("Checking the recovery section", model.state.value.entries.last().progressMessage)
+        toggle.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "In progress · Expanded"))
+        compose.onNodeWithTag("tool-call-details-activity-turn/inspect").assertExists()
+        emit(peer!!, "turn/completed", obj("turn" to obj("id" to s("activity-turn"), "status" to s("interrupted"))))
+        compose.waitUntil(5000) { model.state.value.turnStatuses["activity-turn"] == "interrupted" }
+        compose.onNodeWithText("Interrupted · 1 tool call · 1 progress summary").assertExists()
+        compose.onNodeWithTag("tool-progress-activity-turn/inspect", useUnmergedTree = true).assertTextEquals("Checking the recovery section")
+        compose.onNodeWithTag("tool-activity-shimmer", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun activitySummaryUpdatesKeepTheEarlierParagraphStillWhenReading() {
+        openLongHistory(tallLastMessage = true)
+        compose.onNodeWithTag("jump-to-latest").performClick()
+        compose.waitUntil(5000) { latestReply().isDisplayed() }
+        compose.onNodeWithTag("timeline").performTouchInput {
+            swipe(center, center.copy(y = height * .85f), durationMillis = 1200)
+        }
+        compose.waitForIdle()
+        val paragraph = (1..35).map { "Review note $it: Keep the layout clear and comfortable to read." }
+            .first { compose.onNodeWithText(it).isDisplayed() }
+        val before = compose.onNodeWithText(paragraph).fetchSemanticsNode().boundsInRoot.top
+        emit(peer!!, "turn/started", obj("turn" to obj("id" to s("activity-turn"), "status" to s("inProgress"))))
+        emit(peer!!, "item/reasoning/summaryTextDelta", obj("turnId" to s("activity-turn"), "itemId" to s("reason"),
+            "summaryIndex" to JsonPrimitive(0), "delta" to s("Reviewing the next step while new activity arrives.")))
+        compose.waitUntil(5000) { model.state.value.entries.last().kind == "reasoning" }
+        compose.waitForIdle()
+        compose.onNodeWithText(paragraph).assertIsDisplayed()
+        assertEquals(before, compose.onNodeWithText(paragraph).fetchSemanticsNode().boundsInRoot.top, 1f)
+        compose.onNodeWithTag("jump-to-latest").performClick()
+        compose.waitUntil(5000) {
+            compose.onNodeWithTag("progress-summary-preview-tools/activity-turn/reason").isDisplayed()
+        }
     }
 
     @Test

@@ -36,6 +36,9 @@ class ToolActivityTest {
             obj("type" to s("read"), "name" to s("Timeline.kt"), "path" to s("/src/Timeline.kt"))))))
         assertEquals(ToolCategory.Read, toolCall(read).category)
         assertEquals("File read · Timeline.kt", toolCall(read).title)
+        val edit = entry("edit", "fileChange", completed = false, fields = arrayOf("changes" to JsonArray(listOf(
+            obj("path" to s("/src/Timeline.kt")), obj("path" to s("/src/ToolActivity.kt"))))))
+        assertEquals("Editing files · Timeline.kt, ToolActivity.kt", toolCall(edit, active = true).activity)
         val search = entry("web", "webSearch", fields = arrayOf("action" to obj(
             "type" to s("search"), "queries" to JsonArray(listOf(s("median wages"), s("government data")))),
             "results" to JsonNull))
@@ -57,7 +60,7 @@ class ToolActivityTest {
         assertTrue(group.working)
         assertTrue(group.representsActiveTurn)
         val gap = conversationRows(listOf(entry("done")), "t", true).single() as ConversationRow.Activity
-        assertEquals("Working…", gap.summary)
+        assertEquals("Waiting for the next update", gap.summary)
         assertTrue(gap.working)
         val afterMessage = conversationRows(listOf(entry("done"), entry("a", "agentMessage")), "t", true)
             .filterIsInstance<ConversationRow.Activity>().single()
@@ -104,5 +107,68 @@ class ToolActivityTest {
         assertTrue(call.details.isEmpty())
         assertTrue(call.technicalDetails.contains("retained"))
         assertFalse(call.technicalDetails.contains("_completed"))
+    }
+
+    @Test fun summaryOnlyActivityHasLivePreviewAndInspectableTerminalHistory() {
+        val reason = entry("r", "reasoning", completed = false, fields = arrayOf(
+            "summary" to JsonArray(listOf(s("Checking recovery settings"), s(""), s("Inspecting the photo")))))
+        val active = conversationRows(listOf(reason), "t", true).single() as ConversationRow.Activity
+        assertEquals("Progress update", active.summary)
+        assertEquals("Inspecting the photo", active.previewSummary)
+        assertTrue(active.representsActiveTurn)
+        assertTrue(active.calls.isEmpty())
+        assertEquals(listOf(reason), active.entries)
+        val done = conversationRows(listOf(reason), null, true, mapOf("t" to "completed"))
+            .single() as ConversationRow.Activity
+        assertEquals("2 progress summaries", done.summary)
+        assertNull(done.previewSummary)
+        assertFalse(done.working)
+        assertEquals(active.key, done.key)
+        val interrupted = conversationRows(listOf(reason), null, true, mapOf("t" to "interrupted"))
+            .single() as ConversationRow.Activity
+        assertEquals("Interrupted · 2 progress summaries", interrupted.summary)
+        assertNull(interrupted.previewSummary)
+    }
+
+    @Test fun livePreviewIncludesTheRunningTargetAndToolProgress() {
+        val reason = entry("r", "reasoning", completed = false,
+            fields = arrayOf("summary" to JsonArray(listOf(s("Checking instructions")))))
+        val search = entry("s", "webSearch", completed = false,
+            fields = arrayOf("action" to obj("type" to s("search"), "queries" to JsonArray(listOf(s("Dell recovery"))))))
+            .copy(progressMessage = "Checking the official guide")
+        val group = conversationRows(listOf(reason, search), "t", true).single() as ConversationRow.Activity
+        assertEquals("Searching the web · Dell recovery", group.summary)
+        assertEquals("Checking instructions", group.previewSummary)
+        assertEquals("Checking the official guide", group.progressMessage)
+        assertEquals("tools/t/r", group.key)
+        val waiting = conversationRows(listOf(reason, search), "t", true, waitingForUser = true)
+            .single() as ConversationRow.Activity
+        assertEquals("Waiting for you", waiting.summary)
+        assertNull(waiting.previewSummary)
+        assertNull(waiting.progressMessage)
+        val disconnected = conversationRows(listOf(reason, search), "t", false).single() as ConversationRow.Activity
+        assertEquals("Connection lost", disconnected.summary)
+        assertNull(disconnected.previewSummary)
+    }
+
+    @Test fun reasoningSectionsPreserveMessageBoundariesAndGroupExpansionIdentity() {
+        val first = entry("r", "reasoning", completed = false)
+        val before = conversationRows(listOf(first), "t", true).single()
+        val streaming = first.copy(raw = JsonObject(first.raw + ("summary" to JsonArray(listOf(s("Reviewing"))))))
+        val after = conversationRows(listOf(streaming, entry("tool", completed = false)), "t", true).single()
+        assertEquals(before.key, after.key)
+        val rows = conversationRows(listOf(streaming, entry("a", "agentMessage"), entry("r2", "reasoning")), "t", true)
+        assertEquals(3, rows.size)
+        assertTrue(rows[1] is ConversationRow.Message)
+        assertEquals(listOf(streaming), (rows[0] as ConversationRow.Activity).entries)
+    }
+
+    @Test fun emptyReasoningHasNoTerminalHistoryOrInventedDescription() {
+        val empty = entry("r", "reasoning", completed = false)
+        val active = conversationRows(listOf(empty), "t", true).single() as ConversationRow.Activity
+        assertEquals("Waiting for the next update", active.summary)
+        assertNull(active.previewSummary)
+        assertTrue(conversationRows(listOf(empty), null, true, mapOf("t" to "completed")).isEmpty())
+        assertTrue(conversationRows(listOf(empty), null, true, mapOf("t" to "interrupted")).isEmpty())
     }
 }

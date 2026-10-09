@@ -1078,7 +1078,9 @@ constructor(
         val n = ++selection
         val epoch = rpc.generation
         resetApprovalContexts(id)
+        val observedProgress = if (_state.value.thread == id) timeline.progressMessages() else emptyMap()
         timeline.clear()
+        timeline.restoreProgress(observedProgress)
         hapticTurn = null
         buffered.clear()
         hydrating = true
