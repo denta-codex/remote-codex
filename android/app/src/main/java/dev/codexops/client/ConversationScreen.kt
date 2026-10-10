@@ -35,6 +35,8 @@ import dev.codexops.core.*
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 
+private data class HistoryScrollAnchor(val key: String, val entryKey: String?, val offset: Int, val motion: Long)
+
 @Composable
 internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: ConversationActions) {
     val cover = LocalAppWindowClass.current.coverScreen
@@ -47,12 +49,19 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
     var openingAnchorKey by remember { mutableStateOf<String?>(null) }
     var initialRenderedKey by remember { mutableStateOf<String?>(null) }
     var readerScrolled by remember { mutableStateOf(false) }
+    var upwardMotion by remember { mutableLongStateOf(0L) }
+    var movingUp by remember { mutableStateOf(false) }
+    var readerMotion by remember { mutableLongStateOf(0L) }
+    val nearHistory by remember { derivedStateOf { scroll.firstVisibleItemIndex <= 3 } }
     val readingScroll = remember(scroll) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                 // Stop before the next layout/streaming update, even for a short drag.
                 if (source == NestedScrollSource.UserInput && available.y != 0f) {
+                    readerMotion++
                     readerScrolled = true
+                    movingUp = available.y > 0f
+                    if (movingUp) upwardMotion++
                     followLatest = false
                 }
                 return Offset.Zero
@@ -64,9 +73,9 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
             uri?.let(actions::saveFile)
         }
     val messages = st.entries.filter { it.kind != "reasoning" }
-    val rows = remember(st.entries, st.activeTurn, st.ready, st.turnStatuses, st.decisions, st.attention) {
+    val rows = remember(st.entries, st.activeTurn, st.ready, st.turnStatuses, st.decisions, st.attention, st.historyGroupStarts) {
         conversationRows(st.entries, st.activeTurn, st.ready, st.turnStatuses,
-            st.decisions.any { it.blocksUser } || st.attention)
+            st.decisions.any { it.blocksUser } || st.attention, st.historyGroupStarts)
     }
     val openingMessageKey = rows.lastOrNull { it is ConversationRow.Message }?.key
     var changesTurn by rememberSaveable(st.host.endpoint, st.thread) { mutableStateOf<String?>(null) }
@@ -144,6 +153,43 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
             }
         }
     }
+    // One background page after opening. Further pages require fresh upward
+    // input near the boundary; layout changes alone never drain the history.
+    var pendingHistoryAnchor by remember { mutableStateOf<HistoryScrollAnchor?>(null) }
+    var prefetched by remember { mutableStateOf(false) }
+    var consumedMotion by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(initiallyPositioned, st.ready, st.busy, st.historyLoading,
+        st.historyFailed, st.historyRecovery, st.historyCursor, st.recoveryHasMore, upwardMotion, movingUp, nearHistory) {
+        val freshMotion = upwardMotion > consumedMotion
+        if (st.historyLoading || !movingUp) consumedMotion = upwardMotion
+        if (!initiallyPositioned || !st.ready || st.busy || st.historyLoading ||
+            st.historyFailed || st.historyRecovery != null ||
+            (st.historyCursor == null && !st.recoveryHasMore)) return@LaunchedEffect
+        if (!prefetched || (freshMotion && movingUp && nearHistory)) {
+            consumedMotion = upwardMotion
+            prefetched = true
+            if (readerScrolled) {
+                val visible = scroll.layoutInfo.visibleItemsInfo.firstOrNull { it.key != "history" }
+                val row = rows.firstOrNull { it.key == visible?.key }
+                if (visible != null && row != null) pendingHistoryAnchor = HistoryScrollAnchor(
+                    row.key, (row as? ConversationRow.Activity)?.entries?.firstOrNull()?.key,
+                    -visible.offset, readerMotion)
+            }
+            actions.older()
+        }
+    }
+    LaunchedEffect(st.historyLoading, st.entries) {
+        if (st.historyLoading) return@LaunchedEffect
+        val anchor = pendingHistoryAnchor ?: return@LaunchedEffect
+        pendingHistoryAnchor = null
+        if (readerMotion != anchor.motion || followLatest) return@LaunchedEffect
+        val index = rows.indexOfFirst { row ->
+            row.key == anchor.key || (anchor.entryKey != null && row is ConversationRow.Activity &&
+                row.entries.any { it.key == anchor.entryKey })
+        }
+        if (index >= 0) scroll.requestScrollToItem(
+            index + if (st.historyCursor != null || st.recoveryHasMore) 1 else 0, anchor.offset)
+    }
     val latestTurn = st.entries.lastOrNull()?.turn
     val latestReply = st.entries.lastOrNull { it.turn == latestTurn && it.kind in setOf("agentMessage", "plan") }
     val signature = remember(st.entries) { latestTurn?.let { turn -> replySignature(turn, st.entries.filter { it.turn == turn }.map { it.raw }) } }
@@ -181,12 +227,14 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
         ) {
             if (st.historyCursor != null || st.recoveryHasMore)
                 item(key = "history") {
-                    TextButton(onClick = actions::older,
-                        enabled = st.ready && !st.historyLoading && st.historyRecovery == null,
-                        modifier = Modifier.fillMaxWidth()) {
-                        Glyph(R.drawable.ic_up)
-                        Spacer(Modifier.width(8.dp))
-                        Text(if (st.historyLoading) "Loading history…" else "Load earlier messages")
+                    if (st.historyFailed) {
+                        TextButton(onClick = actions::older,
+                            enabled = st.ready && !st.historyLoading && st.historyRecovery == null,
+                            modifier = Modifier.fillMaxWidth()) { Text("Retry loading earlier messages") }
+                    } else {
+                        Box(Modifier.fillMaxWidth().height(40.dp), contentAlignment = Alignment.Center) {
+                            if (st.historyLoading) CircularProgressIndicator(Modifier.size(24.dp))
+                        }
                     }
                 }
             items(rows, key = { it.key }) { row ->

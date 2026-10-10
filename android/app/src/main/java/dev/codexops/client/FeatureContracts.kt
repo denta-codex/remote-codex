@@ -203,6 +203,8 @@ data class ScreenState(
     val turnStatuses: Map<String, String> = emptyMap(),
     val historyCursor: String? = null,
     val historyLoading: Boolean = false,
+    val historyFailed: Boolean = false,
+    val historyGroupStarts: Set<String> = emptySet(),
     val historyRecovery: HistoryRecoveryAction? = null,
     val recoveryHasMore: Boolean = false,
     val historyNotice: String? = null,

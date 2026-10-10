@@ -31,6 +31,16 @@ class ToolActivityTest {
         assertEquals(before.key, after.key)
     }
 
+    @Test fun recoveryPageBoundaryPreservesExistingGroupAndItsContents() {
+        val existing = listOf(entry("one"), entry("two"))
+        val before = conversationRows(existing, null, true).single() as ConversationRow.Activity
+        val after = conversationRows(listOf(entry("older")) + existing, null, true,
+            groupStarts = setOf(existing.first().key)).filterIsInstance<ConversationRow.Activity>()
+        assertEquals(2, after.size)
+        assertEquals(before.key, after.last().key)
+        assertEquals(before.entries, after.last().entries)
+    }
+
     @Test fun usesServerCommandActionsAndFormatsWebActionsWithoutBookkeeping() {
         val read = entry("read", fields = arrayOf("commandActions" to JsonArray(listOf(
             obj("type" to s("read"), "name" to s("Timeline.kt"), "path" to s("/src/Timeline.kt"))))))

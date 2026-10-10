@@ -303,18 +303,22 @@ from its events, without an immediate resume call.
 Conversation loading is restored to the `812d416` baseline, retaining the
 independent live activity summaries and tool progress. Opening consumes resume's
 newest full turn without downloading it again. If the initial page is unsupported,
-the existing metadata-only resume path reads one full turn. "Load earlier
-messages" explicitly reads another full turn; scrolling alone does not fetch
-history. Conversation and read-only task history use server cursors directly.
-The item-page wrapper, automatic scrollback state/effects, truncated tool preview
+the existing metadata-only resume path reads one full turn. After the newest
+message is positioned, one older page is fetched in the background.
+Fresh upward input near the loaded boundary requests another page, with one
+request at a time. Layout changes and downward scrolling do not fetch history.
+Failures latch automatic loading until explicit retry; size recovery remains
+explicit. Conversation and read-only task history use server cursors directly.
+The retired item-page wrapper, scrollback controller, truncated tool preview
 markers, and separate complete-details downloader/cache have been removed.
 The cleanup is committed at `2940ea8` as the baseline for explicit recovery.
 
 Smaller-history recovery is a session-only mode, entered by the explicit action
 after a size rejection. `RecoveryHistory` keeps separate unchanged turn/item
-cursors and requests one summary turn and at most one 20-item page per action.
+cursors and requests one summary turn and at most one 20-item page per fetch.
 It validates page ownership and rejects repeated cursor cycles; a failed item
-read retains its cursor. Subsequent actions fetch one page, never drain a turn or
+read retains its cursor. Subsequent scroll requests fetch one page, never drain
+a turn or
 session. If that page exceeds the transport limit, the user can reconnect and
 retry at one item per page for the remainder of the recovery session. If the
 single-item request also fails, the user can skip the rest of that turn using
@@ -326,7 +330,10 @@ Opening and paging share one cancellable job. Navigation invalidates its owner;
 selection and connection-generation checks reject late responses, and duplicate
 page requests are suppressed. Recovery preserves drafts and displayed entries.
 It reconciles buffered events with the first page and then applies events live;
-later prepends preserve newer live entries and turn outcomes. Reconnect uses
+later prepends preserve newer live entries and turn outcomes. Recovery page seams
+preserve existing activity groups and their expansion state; visible rows are
+anchored when a fetch completes unless the reader has moved during the request.
+Reconnect uses
 metadata-only resume, so recovery is not a complete replay of events missed while
 offline. Retained content and skipped portions must not be treated as a complete
 current snapshot. Approvals are invalidated on disconnect and require server
@@ -336,8 +343,11 @@ missing details remain disabled until live evidence or explicit context retry.
 The explicit recovery operation is also the future entry point for an automatic
 policy; this implementation adds no automatic downshift/reconnect ladder. Stock
 RPC deadlines and the 32 MiB inbound ceiling remain unchanged. Batch counts do
-not bound an individual item's bytes. Loaded history and hydration/event buffers
-still need a separate bounded-retention design: this change does not establish
+not bound an individual item's bytes. Loaded history is retained without an
+eviction budget for fast backtracking.
+Leaving for the list, snoozed chats, or todo cancels loading and clears the selected
+conversation cache; settings temporarily retains it for returning to the chat.
+Unlimited retention and hydration/event buffers mean this change does not establish
 arbitrary large-item usability or total-memory safety. Cost snapshots
 use the separate bounded accounting controller; recovery starts that calculation
 after opening without waiting for it.

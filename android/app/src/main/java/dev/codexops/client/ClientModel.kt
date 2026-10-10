@@ -120,6 +120,7 @@ constructor(
     private val todoController = TodoController(viewModelScope, local, ServiceTodoOperations(todoConnection),
         { _state.value }, { todo -> _state.update { it.copy(todo = todo) } })
     override fun openTodo() {
+        releaseConversation()
         chatCosts.cancel()
         cancelStreamingHaptics()
         cancelList(); saveList()
@@ -220,8 +221,21 @@ constructor(
         }
     }
 
+    private fun releaseConversation() {
+        cancelHistory()
+        timeline.clear()
+        buffered.clear()
+        resetApprovalContexts()
+        recoveryHistory = null
+        olderCursors.clear()
+        _state.update { it.copy(thread = null, entries = emptyList(), turnStatuses = emptyMap(),
+            historyCursor = null, recoveryHasMore = false, historyRecovery = null, historyFailed = false, historyGroupStarts = emptySet(),
+            historyNotice = null, activeTurn = null, liveAssistantText = null,
+            decisions = emptyList(), fileApprovalContexts = emptyMap()) }
+    }
+
     private fun showList(archive: Boolean) {
-        if (_state.value.historyLoading) cancelHistory()
+        releaseConversation()
         chatCosts.cancel()
         cancelStreamingHaptics()
         cancelList()
@@ -678,13 +692,12 @@ constructor(
         reports.actions.add("home")
         if (_state.value.historyLoading) cancelHistory()
         if (_state.value.busy) return
-        selection++
-        resetApprovalContexts()
         showList(false)
     }
 
     override fun openArchives() { showList(true) }
     override fun openSnoozed() {
+        releaseConversation()
         chatCosts.cancel()
         cancelStreamingHaptics(); cancelList(); saveList()
         _state.update { it.copy(page = "snoozed", error = null) }
@@ -1030,6 +1043,7 @@ constructor(
                         queueError = null,
                         decisions = emptyList(),
                         historyCursor = null,
+                        historyFailed = false, historyGroupStarts = emptySet(),
                         historyRecovery = null,
                         recoveryHasMore = false,
                         historyNotice = null,
@@ -1084,14 +1098,15 @@ constructor(
         _state.update { it.copy(historyLoading = false, busy = if (opening) false else it.busy) }
     }
 
-    private fun launchHistory(block: suspend () -> Unit): Job {
+    private fun launchHistory(older: Boolean = false, block: suspend () -> Unit): Job {
         historyJob?.cancel()
         return viewModelScope.launch(start = CoroutineStart.LAZY) {
-            _state.update { it.copy(historyLoading = true) }
+            _state.update { it.copy(historyLoading = true, historyFailed = false) }
             try {
                 guarded {
                     try { block() } catch (e: Exception) {
                         currentCoroutineContext().ensureActive()
+                        if (older) _state.update { it.copy(historyFailed = true) }
                         if (e is TimeoutCancellationException) {
                             _state.update { it.copy(error = "History loading timed out. Reconnect or try loading the page again.") }
                         } else throw e
@@ -1146,6 +1161,7 @@ constructor(
                 threadServiceTier = response.str("serviceTier").takeIf(String::isNotBlank),
                 threadServiceTierKnown = response.containsKey("serviceTier"),
                 historyCursor = null,
+                historyFailed = false,
             ) }
             if (recovery.hasMore) readRecoveryPage(recovery, n, epoch)
             if (!current()) return
@@ -1178,6 +1194,10 @@ constructor(
             result
         }
         if (n != selection || epoch != rpc.generation || !_state.value.ready || _state.value.thread != recovery.thread || _state.value.page != "chat") return
+        // Keep an already displayed activity group intact when item pages split a turn.
+        timeline.values().firstOrNull()?.key?.let { key ->
+            _state.update { it.copy(historyGroupStarts = it.historyGroupStarts + key) }
+        }
         // Prepending preserves newer entries/statuses already observed live. Buffered events
         // are merged with the snapshot only for the brief initial recovery hydration.
         if (hydrating) {
@@ -1238,6 +1258,7 @@ constructor(
                 queueReady = false,
                 queueError = null,
                 historyCursor = null,
+                historyFailed = false, historyGroupStarts = emptySet(),
                 historyRecovery = null,
                 recoveryHasMore = false,
                 historyNotice = null,
@@ -1600,7 +1621,7 @@ constructor(
 
     override fun older() {
         if (historyJob?.isActive == true || !_state.value.ready || _state.value.historyRecovery != null) return
-        launchHistory {
+        launchHistory(older = true) {
             val before = _state.value
             val id = before.thread ?: return@launchHistory
             val n = selection

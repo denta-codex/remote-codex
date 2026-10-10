@@ -2701,20 +2701,67 @@ class AppTest {
         compose.runOnUiThread { model.openTask("task-test") }
         compose.waitUntil(5000) { !model.state.value.busy && model.state.value.entries.any { it.text == "Latest reply" } }
         assertEquals("older-turns", model.state.value.historyCursor)
-        assertTrue(heldHistoryRequests.isEmpty())
+
         assertEquals("full", approvalResumeRequests.single().map("initialTurnsPage").str("itemsView"))
         compose.onNodeWithText("Latest reply").assertIsDisplayed()
-        compose.onNodeWithText("Load earlier messages").performScrollTo().assertIsDisplayed()
-        compose.waitForIdle()
-        assertTrue("Scrolling alone must not fetch history", heldHistoryRequests.isEmpty())
-        compose.onNodeWithText("Load earlier messages").performClick()
         compose.waitUntil(5000) { heldHistoryRequests.isNotEmpty() }
+        compose.onNodeWithText("Latest reply").assertIsDisplayed()
+        assertEquals(1, heldHistoryRequests.size)
         holdHistoryReply = false
         heldHistoryRequests.forEach { peer!!.send(obj("id" to it, "result" to history()).toString()) }
         compose.waitUntil(5000) {
             model.state.value.historyCursor == null && model.state.value.entries.any { it.text == "Earlier reply" }
         }
         assertTrue(model.state.value.entries.any { it.text == "Latest reply" })
+        compose.onNodeWithText("Latest reply").assertIsDisplayed()
+    }
+
+    @Test
+    fun automaticHistoryLoadsOnUpwardInputRetainsPagesAndStopsAfterFailure() {
+        val turns = longHistory().list("data")
+        approvalResumePage = obj("data" to JsonArray(turns.take(1)), "nextCursor" to s("page-1"))
+        val cursors = CopyOnWriteArrayList<String>()
+        browserResponse = { method, params ->
+            if (method == "thread/turns/list") {
+                cursors.add(params.str("cursor"))
+                if (params.str("cursor") == "page-2") SystemClock.sleep(500)
+                obj("data" to JsonArray(turns.drop(cursors.size).take(1)),
+                    "nextCursor" to s("page-${cursors.size + 1}"))
+            } else null
+        }
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(5000) { cursors.size == 1 && !model.state.value.historyLoading }
+        compose.waitForIdle()
+        assertEquals(listOf("page-1"), cursors.toList())
+        compose.onNodeWithText("Load earlier messages").assertDoesNotExist()
+        compose.onNodeWithTag("timeline").performTouchInput { swipeDown() }
+        compose.waitUntil(5000) { cursors.size == 2 && !model.state.value.historyLoading }
+        assertTrue(model.state.value.entries.any { it.key.contains("reply-20") })
+        assertTrue(model.state.value.entries.any { it.key.contains("reply-18") })
+        compose.onNodeWithTag("timeline").performTouchInput { swipeUp() }
+        compose.waitForIdle()
+        assertEquals(2, cursors.size)
+
+        holdHistoryReply = true
+        // Real upward input ends follow-latest before test-only positioning.
+        compose.onNodeWithTag("timeline").performTouchInput { swipeDown() }
+        compose.onNodeWithTag("timeline").performScrollToIndex(0)
+        compose.onNodeWithTag("timeline").performTouchInput { swipeDown() }
+        compose.waitUntil(5000) { heldHistoryRequests.isNotEmpty() }
+        peer!!.send(obj("id" to heldHistoryRequests.last(), "error" to obj(
+            "code" to JsonPrimitive(-32000), "message" to s("Fixture history unavailable"))).toString())
+        compose.waitUntil(5000) { model.state.value.historyFailed && !model.state.value.historyLoading }
+        compose.onNodeWithTag("timeline").performTouchInput { swipeDown() }
+        compose.waitForIdle()
+        assertEquals(1, heldHistoryRequests.size)
+        compose.onNodeWithText("Retry loading earlier messages").performScrollTo().assertIsDisplayed()
+        holdHistoryReply = false
+        compose.onNodeWithText("Retry loading earlier messages").performClick()
+        compose.waitUntil(5000) { cursors.size == 3 && !model.state.value.historyLoading }
+        compose.runOnUiThread { model.home() }
+        compose.waitUntil(5000) { model.state.value.page == "home" }
+        assertTrue(model.state.value.entries.isEmpty())
+        assertNull(model.state.value.thread)
     }
 
     @Test
@@ -2976,7 +3023,7 @@ class AppTest {
             compose.runOnUiThread { model.openTask("task-test") }
             compose.waitUntil(10000) { !model.state.value.busy && model.state.value.entries.any { it.text == "Retained reply" } }
             compose.runOnUiThread { model.older() }
-            compose.waitUntil(20000) { !model.state.value.busy && model.state.value.error?.contains("32 MiB") == true }
+            compose.waitUntil(20000) { !model.state.value.busy && !model.state.value.ready && model.state.value.error?.contains("32 MiB") == true }
             assertFalse(model.state.value.ready)
             assertEquals("Keep this unsent message", model.state.value.draft)
             assertTrue(model.state.value.entries.any { it.text == "Retained reply" })
