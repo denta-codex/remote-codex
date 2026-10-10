@@ -45,7 +45,9 @@ finish() {
     trap - EXIT
     cleanup
     export IOS_CHECK_STATUS="$status"
-    node scripts/ios-report.mjs "$output" || true
+    local report_status=0
+    node scripts/ios-report.mjs "$output" || report_status=$?
+    if [[ "$status" == 0 && "$report_status" != 0 ]]; then status="$report_status"; fi
     exit "$status"
 }
 trap finish EXIT

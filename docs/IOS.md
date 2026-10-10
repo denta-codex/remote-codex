@@ -61,7 +61,10 @@ Markdown, durations, selected synthetic screenshots, and bounded failure logs
 are uploaded, with one-day retention. DerivedData and complete success xcresults
 are excluded. Fixture mode uses synthetic content, isolated
 `RemoteCodexFixture/client.sqlite` storage, and in-memory credentials; it never
-opens the production transport or Keychain. Launch with `--fixture`.
+opens the production transport or Keychain. Launch with `--fixture`. Each UI
+test also uses `--reset-fixture` on its initial launch to clear only synthetic
+storage; the restart test removes that flag on relaunch to prove persistence.
+Physical fixture launches use only `--fixture` and preserve saved data.
 
 Required scenarios include dropped mutation replies, request-ID collisions,
 stale generations, restart journals, queue races, history/live overlap,

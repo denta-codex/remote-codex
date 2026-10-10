@@ -65,6 +65,12 @@ final class AppController: ObservableObject {
         do {
             let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent(fixture ? "RemoteCodexFixture" : "RemoteCodex", isDirectory: true)
+            // An explicit UI-test reset affects synthetic storage only. Ordinary
+            // --fixture launches and in-place upgrades preserve their saved draft.
+            if fixture && ProcessInfo.processInfo.arguments.contains("--reset-fixture") &&
+                FileManager.default.fileExists(atPath: directory.path) {
+                try FileManager.default.removeItem(at: directory)
+            }
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let credentials: any CredentialStore = fixture ? FixtureCredentials() : KeychainCredentials()
             store = try SQLiteClientStore(url: directory.appendingPathComponent("client.sqlite"), credentials: credentials)

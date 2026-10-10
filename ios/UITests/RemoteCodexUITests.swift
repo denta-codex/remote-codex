@@ -10,7 +10,7 @@ final class RemoteCodexUITests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
     func testFixtureChatAndSend() {
         let app = XCUIApplication()
-        app.launchArguments = ["--fixture"]
+        app.launchArguments = ["--fixture", "--reset-fixture"]
         app.launch()
         let chat = app.buttons["chat-fixture-chat"]
         XCTAssertTrue(chat.waitForExistence(timeout: 10))
@@ -25,7 +25,7 @@ final class RemoteCodexUITests: XCTestCase {
     }
     func testFixtureSettingsNeverOffersLiveConnection() {
         let app = XCUIApplication()
-        app.launchArguments = ["--fixture"]
+        app.launchArguments = ["--fixture", "--reset-fixture"]
         app.launch()
         app.buttons["settings"].tap()
         XCTAssertTrue(app.staticTexts["Fixture mode uses synthetic content and never connects to a server."].waitForExistence(timeout: 5))
@@ -34,7 +34,7 @@ final class RemoteCodexUITests: XCTestCase {
     }
     func testDraftSurvivesRestart() {
         let app = XCUIApplication()
-        app.launchArguments = ["--fixture"]
+        app.launchArguments = ["--fixture", "--reset-fixture"]
         app.launch()
         let chat = app.buttons["chat-fixture-chat"]
         XCTAssertTrue(chat.waitForExistence(timeout: 10)); chat.tap()
@@ -47,7 +47,9 @@ final class RemoteCodexUITests: XCTestCase {
         }
         draft.typeText("Saved fixture draft")
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        app.terminate(); app.launch()
+        app.terminate()
+        app.launchArguments = ["--fixture"]
+        app.launch()
         XCTAssertTrue(chat.waitForExistence(timeout: 10)); chat.tap()
         XCTAssertTrue(draft.waitForExistence(timeout: 5))
         XCTAssertTrue((draft.value as? String)?.contains("Saved fixture draft") == true)

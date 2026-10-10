@@ -28,11 +28,22 @@ if (existsSync(result)) {
     execFileSync('xcrun', ['xcresulttool', 'export', 'attachments', '--path', result,
       '--output-path', path.join(output, 'attachments')]);
     const manifest = JSON.parse(readFileSync(path.join(output, 'attachments', 'manifest.json')));
+    const selected = [];
+    const attachmentNames = [];
     for (const test of manifest) for (const attachment of test.attachments ?? []) {
-      if (!/^fixture-(chat|settings|draft)\.png$/.test(attachment.suggestedHumanReadableName ?? '')) continue;
+      const name = attachment.suggestedHumanReadableName ?? attachment.name ?? '';
+      attachmentNames.push({name, file: attachment.exportedFileName});
+      const match = name.match(/fixture-(chat|settings|draft)(?=[^a-z]|$)/);
+      if (!match || !attachment.exportedFileName) continue;
       const {copyFileSync} = await import('node:fs');
-      copyFileSync(path.join(output, 'attachments', attachment.exportedFileName),
-        path.join(report, 'screenshots', attachment.suggestedHumanReadableName));
+      const file = 'fixture-' + match[1] + '.png';
+      copyFileSync(path.join(output, 'attachments', attachment.exportedFileName), path.join(report, 'screenshots', file));
+      selected.push(file);
+    }
+    writeFileSync(path.join(report, 'attachment-index.json'), JSON.stringify(attachmentNames, null, 2)+'\n');
+    identity.screenshots = [...new Set(selected)];
+    if (identity.tests.passedTests === 3 && identity.screenshots.length !== 3) {
+      identity.report_error = 'Expected three selected synthetic screenshots; inspect attachment-index.json';
     }
   } catch (error) {
     // Reporting failures must be visible without masking a test failure.
@@ -40,6 +51,7 @@ if (existsSync(result)) {
     console.error(identity.report_error);
   }
 }
+if (identity.report_error) identity.status = 'failure';
 writeFileSync(path.join(report, 'result.json'), JSON.stringify(identity, null, 2)+'\n');
 const durations = readFileSync(path.join(report, 'durations.tsv'), 'utf8').trim().split('\n').slice(1);
 const lines = [ `iOS checks: **${identity.status}**`, '', `Revision: \`${identity.revision}\``,
@@ -53,3 +65,4 @@ if (identity.report_error) lines.push('', identity.report_error);
 const summary = lines.join('\n')+'\n';
 writeFileSync(path.join(report,'summary.md'), summary);
 if (process.env.GITHUB_STEP_SUMMARY) writeFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+if (identity.report_error) process.exitCode = 1;
