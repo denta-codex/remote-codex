@@ -185,8 +185,8 @@ internal class BugReportController(
     }
 
     fun discard() {
-        if (_state.value.busy || _state.value.capturing || _state.value.draft?.journal?.isNotEmpty() == true) return
-        _state.update { it.copy(busy = true) }
+        if (_state.value.busy || _state.value.capturing) return
+        _state.update { it.copy(busy = true, error = null) }
         scope.launch { lock.withLock {
             try {
                 _state.value.draft?.let { withContext(Dispatchers.IO) { store.discard(it) } }

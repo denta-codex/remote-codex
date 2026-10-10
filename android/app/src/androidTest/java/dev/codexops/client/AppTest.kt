@@ -2459,6 +2459,54 @@ class AppTest {
     }
 
     @Test
+    fun sendingFromTallReplyOpeningPreservesReadingPosition() {
+        openLongHistory(tallLastMessage = true)
+        compose.onNodeWithTag("composer").performTextInput("Keep reviewing while I read")
+        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        compose.waitForIdle()
+        val paragraph = compose.onNodeWithText("Review note 1: Keep the layout clear and comfortable to read.")
+        val before = paragraph.assertIsDisplayed().fetchSemanticsNode().boundsInRoot.top
+        compose.onNodeWithTag("send").performClick()
+        compose.waitUntil(10000) { model.state.value.entries.any { it.text == "Hello from Grace" } && !model.state.value.busy }
+        compose.waitForIdle()
+        paragraph.assertIsDisplayed()
+        assertEquals("Sending must preserve the paragraph being read",
+            before, paragraph.fetchSemanticsNode().boundsInRoot.top, 1f)
+        compose.onNodeWithText("Hello from Grace").assertIsNotDisplayed()
+        compose.onNodeWithTag("jump-to-latest").performClick()
+        compose.waitUntil(5000) { compose.onNodeWithText("Hello from Grace").isDisplayed() }
+    }
+
+    @Test
+    fun queuingWhileReadingEarlierReplyPreservesReadingPosition() {
+        openLongHistory(tallLastMessage = true)
+        compose.onNodeWithTag("jump-to-latest").performClick()
+        compose.waitUntil(5000) { latestReply().isDisplayed() }
+        emit(peer!!, "turn/started", obj("turn" to obj("id" to s("running-turn"), "status" to s("inProgress"))))
+        compose.waitUntil(5000) { model.state.value.activeTurn == "running-turn" }
+        compose.onNodeWithTag("composer").performTextInput("Do this after I finish reading")
+        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        compose.onNodeWithTag("timeline").performTouchInput {
+            swipe(center, center.copy(y = height * .85f), durationMillis = 1200)
+        }
+        compose.waitForIdle()
+        val paragraph = (1..35).map { "Review note $it: Keep the layout clear and comfortable to read." }
+            .first { compose.onNodeWithText(it).isDisplayed() }
+        val before = compose.onNodeWithText(paragraph).fetchSemanticsNode().boundsInRoot.top
+        compose.onNodeWithContentDescription("Queue message").performClick()
+        compose.waitUntil(10000) {
+            !model.state.value.busy && model.state.value.queuedMessages.any { it.text == "Do this after I finish reading" }
+        }
+        compose.waitForIdle()
+        compose.onNodeWithText(paragraph).assertIsDisplayed()
+        assertEquals("Queuing must preserve the paragraph being read",
+            before, compose.onNodeWithText(paragraph).fetchSemanticsNode().boundsInRoot.top, 1f)
+        compose.onNodeWithTag("jump-to-latest").assertIsDisplayed()
+        assertEquals(listOf("thread/queue/add"), queueMutations.map { it.str("method") })
+        assertTrue(turnRequests.isEmpty())
+    }
+
+    @Test
     fun tallLatestMessageOpensAtItsStartAndFollowsOnlyAfterJump() {
         openLongHistory(tallLastMessage = true)
         val firstParagraph = compose.onNodeWithText("Review note 1: Keep the layout clear and comfortable to read.")
@@ -4914,6 +4962,47 @@ class AppTest {
     private fun reportField(tag: String): SemanticsNodeInteraction {
         compose.onNodeWithTag("report-content").performScrollToNode(hasTestTag(tag))
         return compose.onNodeWithTag(tag)
+    }
+
+    @Test
+    fun stuckBugReportCanBeDiscardedAndNextReportCapturesFreshState() {
+        compose.runOnUiThread { model.reports.open() }
+        compose.waitUntil(10000) { model.reports.state.value.visible && !model.reports.state.value.capturing }
+        val original = requireNotNull(model.reports.state.value.draft)
+        val reports = BugReportStore(File(app.filesDir, "bug-reports"))
+        compose.runOnUiThread { store.clear() }
+        reports.save(original.copy(description = "Old stuck request", journal = obj(
+            "stage" to s("creatingTask"), "cwd" to s("/fixture/stuck-workspace"))))
+        compose.runOnUiThread {
+            model = ClientModel(app, "ws://127.0.0.1:${server.port}/rpc", "/fixture", true, "/fixture/remote-codex")
+            store.put("fixture", model)
+            compose.activity.setContent { RemoteTheme { App(model) } }
+        }
+        compose.waitUntil(5000) { model.reports.state.value.loaded }
+        compose.runOnUiThread { model.reports.open() }
+        reportField("bug-description").assertTextContains("Old stuck request").assertIsNotEnabled()
+        compose.onNodeWithTag("submit-bug-report").assertTextContains("Save report")
+        reportField("discard-bug-report").assertIsEnabled().performClick()
+        compose.waitUntil(5000) { model.reports.state.value.draft == null && !model.reports.state.value.busy }
+        assertFalse(model.reports.state.value.visible)
+        assertNull(reports.load())
+        assertFalse(File(reports.root, original.id).exists())
+        assertEquals(0, threadStarts.get())
+        assertEquals(0, worktreeAdds.get())
+        assertEquals(0, sent.get())
+
+        compose.runOnUiThread { model.newChat() }
+        compose.waitUntil(5000) { model.state.value.page == "chat" }
+        compose.onNodeWithTag("composer").performTextInput("Fresh screen context")
+        compose.runOnUiThread { model.reports.open() }
+        compose.waitUntil(10000) { model.reports.state.value.visible && !model.reports.state.value.capturing }
+        val fresh = requireNotNull(model.reports.state.value.draft)
+        assertNotEquals(original.id, fresh.id)
+        assertEquals("", fresh.description)
+        assertTrue(fresh.journal.isEmpty())
+        assertTrue(fresh.review.isEmpty())
+        assertEquals("Fresh screen context", fresh.context.str("draft"))
+        assertEquals(fresh.id, reports.load()!!.id)
     }
 
     @Test

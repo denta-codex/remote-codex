@@ -240,8 +240,9 @@ private fun BugReportDialog(state: BugReportState, connected: Boolean, actions: 
                         }
                         if (!reviewing) item { OutlinedButton(onClick = { picker.launch(arrayOf("*/*")) }, enabled = !locked,
                             modifier = Modifier.fillMaxWidth()) { Text("Add images or files") } }
-                        if (!reviewing && !started) item {
-                            TextButton(onClick = actions::discard, enabled = !state.busy,
+                        item {
+                            if (started) Text("Discarding clears this phone's report. Any task or workspace already created on the host will remain.", fontSize = 12.sp)
+                            TextButton(onClick = actions::discard, enabled = !state.busy && !state.capturing,
                                 modifier = Modifier.fillMaxWidth().testTag("discard-bug-report")) { Text("Discard report") }
                         }
                     }

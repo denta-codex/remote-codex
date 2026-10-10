@@ -359,7 +359,12 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
         ConversationComposer(
             state = st,
             actions = actions,
-            onSend = { followLatest = true },
+            onSend = {
+                // Sending does not end reading earlier content. Only follow a
+                // new message when the reader is already at the bottom.
+                followLatest = !scroll.canScrollForward
+                readerScrolled = true
+            },
         )
     if (confirmUnlock)
         AlertDialog(
