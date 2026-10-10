@@ -60,10 +60,14 @@ Token, completion and settings notifications do not start accounting commands.
 Foregrounding the same page does not refresh cost. Catalog refresh may reprice
 retained buckets without rereading history.
 
-The UI shows a spinner while calculating, `~$… at open` on success, and a red
-warning icon on unavailable cost. The icon's accessibility label identifies
-unavailable cost and tapping it retries explicitly. There is no asterisk or
-cost-details dialog. Navigation and disconnect cancel local work and invalidate
+The UI shows `~$…` on success and hides cost while calculating or unavailable.
+Its accessibility label still identifies the estimate as an opening snapshot.
+The summary pill shows Git statistics only when changed files are present, uses
+a divider only when both statistics and cost are visible, and disappears when
+neither is visible. There is no warning icon, asterisk or cost-details dialog.
+The pill keeps a 48 dp minimum height and the same surrounding margins when
+only cost is visible, so removing Git statistics does not collapse its padding.
+Navigation and disconnect cancel local work and invalidate
 late responses; already dispatched read-only work ends at its stock timeout.
 Cost failure neither disconnects chat nor starts a reconnect or automatic retry.
 

@@ -493,7 +493,7 @@ refresh fetches published data; it never refreshes server inventories or pricing
 The chat header shows an API-equivalent cost snapshot calculated when a thread
 opens or reopens, including after reconnect. Token, completion, and settings
 notifications do not refresh cost; foregrounding the same page does not refresh
-it either. Explicit retry is available on the unavailable icon.
+it either. Reopening the thread starts a new calculation.
 
 Android invokes the installed Rust forwarder's read-only `accounting` subcommand
 through stock `command/exec` on its existing WSS connection. Each command scans a
@@ -509,9 +509,12 @@ part of output. Duplicate cumulative counters are ignored; gaps, resets, unknown
 attribution, or unsupported records never become a complete dollar estimate.
 Price refresh can reprice retained accounting without rescanning the rollout.
 
-The badge shows a spinner while computing, an estimate labelled "at open" when
-complete, or a red unavailable/retry icon. Missing accounting, unavailable helper,
-unknown or stale-only prices, and failed reads show no partial dollar amount.
+The badge shows only the estimated dollar amount when complete and stays hidden
+while computing or unavailable. Its accessibility label identifies the opening
+snapshot. Missing accounting, unavailable helper, unknown or stale-only prices,
+and failed reads show no partial dollar amount. The summary pill shows Git
+statistics only for nonempty changes, separates Git and cost with a divider only
+when both are visible, and disappears when neither is visible.
 Selection and connection guards discard late results. Calculation is limited to
 30 seconds overall; each stock command has a two-second deadline and 64 KiB
 output cap. Cost failure cannot initiate reconnection. There is no persistent

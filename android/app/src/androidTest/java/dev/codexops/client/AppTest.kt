@@ -352,7 +352,7 @@ class AppTest {
         historyOverride = obj("data" to JsonArray(emptyList()))
         compose.runOnUiThread { model.foreground(true); model.openTask("task-test") }
         compose.waitUntil(10000) { model.state.value.thread == "task-test" && !model.state.value.busy }
-        compose.onNodeWithTag("conversation-summary").assertIsDisplayed()
+        compose.onNodeWithTag("conversation-summary").assertDoesNotExist()
         emit(peer!!, "turn/started", obj("turn" to obj("id" to s("edits-turn"), "status" to s("inProgress"))))
         emit(peer!!, "item/completed", obj("turnId" to s("edits-turn"), "item" to recordedEdit()))
         emit(peer!!, "item/completed", obj("turnId" to s("edits-turn"), "item" to obj(
@@ -385,7 +385,7 @@ class AppTest {
     }
 
     @Test
-    fun discussionShowsCleanWorktreeWithoutRecordedChanges() {
+    fun discussionHidesCleanWorktreeWithoutRecordedChanges() {
         val gitReads = AtomicInteger()
         browserResponse = { method, params ->
             if (method == "command/exec" && params.toString().contains("remote-codex-worktree")) gitReads.incrementAndGet()
@@ -400,7 +400,8 @@ class AppTest {
         }
         captureComposer("recorded-changes-discussion.png")
         compose.waitUntil(5000) { model.state.value.worktreeChanges.status == WorktreeStatus.Ready }
-        compose.onNodeWithTag("git-changes").assertIsDisplayed().assertTextContains("0 files")
+        compose.onNodeWithTag("git-changes").assertDoesNotExist()
+        compose.onNodeWithTag("conversation-summary").assertDoesNotExist()
         compose.onNodeWithTag("refresh-git-changes").assertDoesNotExist()
         compose.onNodeWithTag("turn-changes-discussion").assertDoesNotExist()
         assertTrue(gitReads.get() > 0)
@@ -3728,7 +3729,8 @@ class AppTest {
         summary.assertIsDisplayed()
         compose.onNodeWithTag("git-changes").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
             .assertTextContains("1 file").assertTextContains("+1").assertTextContains("−1")
-        compose.onNodeWithTag("chat-cost").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        compose.onNodeWithTag("chat-cost").assertDoesNotExist()
+        compose.onNodeWithTag("conversation-summary-divider").assertDoesNotExist()
         val pill = summary.fetchSemanticsNode().boundsInRoot
         assertTrue(pill.top >= compose.onNodeWithTag("timeline").fetchSemanticsNode().boundsInRoot.bottom)
         assertTrue(pill.bottom <= compose.onNodeWithTag("composer").fetchSemanticsNode().boundsInRoot.top)
@@ -3752,10 +3754,8 @@ class AppTest {
         files = emptyList()
         emit(peer!!, "turn/completed", obj("turn" to obj("id" to s("turn-test"), "status" to s("completed"))))
         compose.waitUntil(5000) { !model.state.value.worktreeChanges.stale && model.state.value.worktreeChanges.files.isEmpty() }
-        compose.onNodeWithTag("git-changes").assertTextContains("0 files")
-        compose.onNodeWithTag("git-changes").performClick()
-        compose.onNodeWithText("No changes in this worktree.").assertIsDisplayed()
-        compose.onNodeWithTag("changes-back").performClick()
+        compose.onNodeWithTag("git-changes").assertDoesNotExist()
+        compose.onNodeWithTag("conversation-summary").assertDoesNotExist()
         compose.onNodeWithTag("app-menu").performClick()
         compose.onNodeWithText("Settings").performClick()
         compose.onNodeWithText("Scan setup QR").assertIsDisplayed()
@@ -3766,7 +3766,7 @@ class AppTest {
     }
 
     @Test
-    fun chatCostSnapshotUsesBoundedHelperOnlyOnOpenAndShowsUnavailableIcon() {
+    fun chatCostSnapshotUsesBoundedHelperOnlyOnOpenAndHidesUnavailableNumbers() {
         compose.waitUntil(10000) { model.state.value.ready && model.state.value.modelCatalogStatus != ModelCatalogStatus.Loading }
         val reads = AtomicInteger()
         val rolloutReads = AtomicInteger()
@@ -3774,8 +3774,13 @@ class AppTest {
         val finish = java.util.concurrent.CountDownLatch(1)
         var unavailable = false
         var unknownPrices = false
+        var gitFiles = "README.md\u00001\u00001\u0000@@ -1 +1 @@\n-old\n+new\u0000"
         val catalog = """{"models":[],"remote_codex":{"schema_version":1,"revision":"${"a".repeat(64)}","models":[{"provider":"openai","model":"gpt-fixture","pricing":{"currency":"USD","source_url":"https://models.dev/api.json","fetched_at":"2026-10-05T00:00:00Z","status":"fresh","rates":[{"tier":"standard","context":"short","input_per_million":4,"output_per_million":20,"cached_input_per_million":0.4}]}}]}}"""
         browserResponse = { method, params -> when {
+            method == "command/exec" && params["command"]?.jsonArray?.any {
+                it.jsonPrimitive.content == "remote-codex-worktree"
+            } == true -> obj("exitCode" to JsonPrimitive(0), "stdout" to s(
+                "remote-codex-worktree-v1\u0000ready\u0000/fixture/remote-codex\u0000${gitFiles}end\u0000"))
             method == "config/read" -> obj("config" to obj("model_provider" to s("openai"),
                 "model_catalog_json" to s("/fixture/cost-catalog.json")))
             method == "thread/resume" -> obj("model" to s("gpt-fixture"), "thread" to obj(
@@ -3813,33 +3818,56 @@ class AppTest {
         } }
         compose.runOnUiThread { model.refreshModels() }
         compose.waitUntil(10000) { model.state.value.models.any { it.enrichment != null } }
+        compose.runOnUiThread { model.foreground(true) }
         compose.onNodeWithText(fixtureTitle).performClick()
         compose.waitUntil(10000) { opened.count == 0L && model.state.value.chatCost.status == ChatCostStatus.Calculating }
-        compose.onNodeWithContentDescription("Calculating cost at opening").assertIsDisplayed()
+        compose.onNodeWithTag("chat-cost").assertDoesNotExist()
         finish.countDown()
         compose.waitUntil(10000) { model.state.value.chatCost.status == ChatCostStatus.Ready }
-        compose.onNodeWithTag("chat-cost").assertIsDisplayed().assertTextContains("~\$5.28 at open")
+        compose.onNodeWithTag("chat-cost").assertIsDisplayed().assertTextEquals("~\$5.28")
+        compose.waitUntil(5000) { model.state.value.worktreeChanges.files.size == 1 }
+        compose.onNodeWithTag("git-changes").assertIsDisplayed()
+        compose.onNodeWithTag("conversation-summary-divider").assertIsDisplayed()
+        val combinedPill = compose.onNodeWithTag("conversation-summary").fetchSemanticsNode().boundsInRoot
+        val topGap = combinedPill.top - compose.onNodeWithTag("timeline").fetchSemanticsNode().boundsInRoot.bottom
+        val bottomGap = compose.onNodeWithTag("composer").fetchSemanticsNode().boundsInRoot.top - combinedPill.bottom
         assertEquals(2, reads.get())
         captureComposer("floating-summary-cost.png")
+        gitFiles = ""
         repeat(20) { emit(peer!!, "thread/tokenUsage/updated", obj("turnId" to s("turn-test"))) }
         emit(peer!!, "turn/completed", obj("turn" to obj("id" to s("turn-test"), "status" to s("completed"))))
         emit(peer!!, "thread/settings/updated", obj("threadSettings" to obj("model" to s("gpt-fixture"), "effort" to s("high"))))
         compose.waitUntil(5000) { model.state.value.threadReasoningEffort == "high" }
         android.os.SystemClock.sleep(800)
         assertEquals(2, reads.get())
-        compose.onNodeWithTag("chat-cost").assertTextContains("~\$5.28 at open")
+        compose.onNodeWithTag("chat-cost").assertTextEquals("~\$5.28")
+        compose.waitUntil(5000) { model.state.value.worktreeChanges.files.isEmpty() }
+        compose.onNodeWithTag("git-changes").assertDoesNotExist()
+        compose.onNodeWithTag("conversation-summary-divider").assertDoesNotExist()
+        compose.onNodeWithTag("conversation-summary").assertIsDisplayed()
+        compose.onNodeWithTag("conversation-summary").assertHeightIsAtLeast(48.dp)
+        val costOnlyPill = compose.onNodeWithTag("conversation-summary").fetchSemanticsNode().boundsInRoot
+        val composerBounds = compose.onNodeWithTag("composer").fetchSemanticsNode().boundsInRoot
+        assertEquals(combinedPill.height, costOnlyPill.height, 0.5f)
+        assertEquals(composerBounds.center.x, costOnlyPill.center.x, 0.5f)
+        assertEquals(topGap, costOnlyPill.top - compose.onNodeWithTag("timeline").fetchSemanticsNode().boundsInRoot.bottom, 0.5f)
+        assertEquals(bottomGap, composerBounds.top - costOnlyPill.bottom, 0.5f)
+        captureComposer("floating-summary-cost-only.png")
 
         unavailable = true
         compose.runOnUiThread { model.settings(); model.back() }
         compose.waitUntil(10000) { model.state.value.chatCost.status == ChatCostStatus.Unavailable && reads.get() == 3 }
-        compose.onNodeWithContentDescription("Cost unavailable. Retry calculation").assertIsDisplayed()
+        compose.onNodeWithTag("chat-cost").assertDoesNotExist()
+        compose.onNodeWithTag("conversation-summary").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Cost unavailable. Retry calculation").assertDoesNotExist()
         unavailable = false
-        compose.onNodeWithTag("chat-cost").performClick()
+        compose.runOnUiThread { model.settings(); model.back() }
         compose.waitUntil(10000) { model.state.value.chatCost.status == ChatCostStatus.Ready && reads.get() == 5 }
         unknownPrices = true
         compose.runOnUiThread { model.refreshModels() }
         compose.waitUntil(10000) { model.state.value.chatCost.status == ChatCostStatus.Unavailable }
-        compose.onNodeWithContentDescription("Cost unavailable. Retry calculation").assertIsDisplayed()
+        compose.onNodeWithTag("chat-cost").assertDoesNotExist()
+        compose.onNodeWithTag("conversation-summary").assertDoesNotExist()
         assertEquals(5, reads.get())
         assertEquals(0, rolloutReads.get())
         assertEquals(0, sent.get())

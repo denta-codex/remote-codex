@@ -25,13 +25,15 @@ internal fun ConversationSummary(st: ScreenState, actions: ConversationActions) 
     val changes = st.worktreeChanges
     val cover = LocalAppWindowClass.current.coverScreen
     val stale = changes.stale || !st.ready
-    val showChanges = st.threadCwd != null && changes.cwd == st.threadCwd && changes.status != WorktreeStatus.NotRepository
-    Box(Modifier.fillMaxWidth().padding(horizontal = if (cover) 8.dp else 16.dp, vertical = 10.dp),
+    val showChanges = st.threadCwd != null && changes.cwd == st.threadCwd &&
+        changes.status == WorktreeStatus.Ready && changes.files.isNotEmpty()
+    val showCost = st.ready && st.chatCost.status == ChatCostStatus.Ready
+    if (showChanges || showCost) Box(Modifier.fillMaxWidth().padding(horizontal = if (cover) 8.dp else 16.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center) {
         Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surface,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), shadowElevation = 3.dp,
             modifier = Modifier.testTag("conversation-summary")) {
-            Row(Modifier.padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.heightIn(min = 48.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (showChanges) {
                     TextButton(onClick = { openChanges = true },
                         modifier = Modifier.weight(1f, fill = false).heightIn(min = 48.dp).testTag("git-changes").semantics {
@@ -57,9 +59,10 @@ internal fun ConversationSummary(st: ScreenState, actions: ConversationActions) 
                         } else Text(if (changes.status == WorktreeStatus.Loading) "Changes…" else "Changes unavailable",
                             style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
-                    VerticalDivider(Modifier.height(18.dp), color = MaterialTheme.colorScheme.outlineVariant)
                 }
-                ChatCostBadge(if (st.ready) st.chatCost else ChatCost(), actions::refreshChatCost)
+                if (showChanges && showCost) VerticalDivider(Modifier.height(18.dp).testTag("conversation-summary-divider"),
+                    color = MaterialTheme.colorScheme.outlineVariant)
+                if (showCost) ChatCostBadge(st.chatCost)
             }
         }
     }
