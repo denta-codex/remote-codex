@@ -1,5 +1,40 @@
 # Validation
 
+## Explicit smaller-history recovery — unreleased
+
+- Cleanup baseline committed as `2940ea8` (Android remains 0.4.14 / build 46).
+  The subsequent recovery implementation is a separate change.
+- Ordinary opening still consumes the full recent resume turn. Size rejection
+  offers an explicit metadata-only reconnect with 20-item pages, an explicit
+  one-item retry, then an explicit skip of the remaining affected turn. Drafts
+  and displayed entries survive each reconnect; skipped content stays labelled.
+- Six new core tests cover batched request counts/order, retained failed-page
+  cursors and explicit retry/skip, non-adjacent cursor cycles, wrong-turn replies,
+  cancellation, and history/live overlap without overwriting newer outcomes.
+- All 83 core and 157 app unit tests passed. Debug app/test compilation and
+  Android lint passed with zero errors (42 existing warnings).
+- Eight selected managed Android 16 fixture tests passed in bounded runs:
+  `conversationOpensFromResumePageWithoutWaitingForOlderHistory`,
+  `explicitHistoryRecoveryBatchesRetriesSkipsAndPreservesDraft`,
+  `navigationCancelsOpeningAndIgnoresLateHistoryReply`,
+  `oversizedOlderTurnKeepsDraftAndContentWithoutReconnectLoop`,
+  `oversizedOpeningRecoversWithoutRepeatingFullResume`,
+  `fileApprovalRecoversLiveSnapshotWithoutReadingPersistedHistory`,
+  `fileApprovalReconnectRequiresServerReissueAndNeverReplaysReply`, and
+  `liveToolProgressSurvivesStreamingAndReconnectWithoutDuplicatingSummaries`.
+  XML results are retained under ignored `artifacts/history-recovery-validation/`.
+- The recovery fixture rejects 33 MiB fragmented responses at the opening,
+  full-turn, batch, and single-item boundaries. It verifies request counts,
+  unchanged retry cursors, live-text/settings overlap, missing approval context,
+  rejection of stale approval replies, and capability rejection without full
+  resume fallback. These are synthetic contract tests, not proof that arbitrary
+  large individual items are usable or that the original OOM was a history RPC.
+- The transport ceiling is unchanged. Timeline retention and event/hydration
+  buffers remain unbounded; reconnect recovery is not a complete offline-event
+  replay. Automatic whole-session cost reads remain a separate workstream.
+  No push, release, deployment, phone installation, or shared configuration
+  change was performed.
+
 ## Conversation loading baseline cleanup — unreleased
 
 - Starting revision: `d6ce9ee` (Android 0.4.14). Restored the conversation

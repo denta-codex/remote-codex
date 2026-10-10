@@ -154,6 +154,12 @@ data class ChatListSnapshot(
     val failed: Boolean = false, val index: Int = 0, val offset: Int = 0,
 )
 
+enum class HistoryRecoveryAction(val label: String) {
+    Open("Open smaller history"),
+    Smaller("Retry with one item per page"),
+    Skip("Skip remaining turn"),
+}
+
 data class ScreenState(
     val page: String = "home",
     val host: HostIdentity = GraceHost,
@@ -196,6 +202,10 @@ data class ScreenState(
     val followUps: FollowUpState = FollowUpState(),
     val turnStatuses: Map<String, String> = emptyMap(),
     val historyCursor: String? = null,
+    val historyLoading: Boolean = false,
+    val historyRecovery: HistoryRecoveryAction? = null,
+    val recoveryHasMore: Boolean = false,
+    val historyNotice: String? = null,
     val draft: String = "",
     val attachments: List<DraftAttachment> = emptyList(),
     val newTaskOptions: NewTaskOptions = NewTaskOptions(),
@@ -320,6 +330,8 @@ interface ConversationActions {
 
 
     fun older()
+
+    fun recoverHistory() {}
 
     fun draft(value: String)
 

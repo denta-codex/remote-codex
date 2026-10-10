@@ -62,6 +62,9 @@ constructor(
     private val attachmentStore = AttachmentStore(app)
     private val mediaRepository = MediaRepository(app)
     private var automaticReconnectBlocked = false
+    private var historyJob: Job? = null
+    private var recoveryHistory: RecoveryHistory? = null
+    private val olderCursors = mutableSetOf<String>()
     private val remoteFileRepository = RemoteFileRepository(app)
     private val _state = MutableStateFlow(ScreenState(host = host))
     val state = _state.asStateFlow()
@@ -216,6 +219,7 @@ constructor(
     }
 
     private fun showList(archive: Boolean) {
+        if (_state.value.historyLoading) cancelHistory()
         cancelStreamingHaptics()
         cancelList()
         saveList()
@@ -448,7 +452,9 @@ constructor(
                         cancelList()
                         launchList()
                         val id = _state.value.thread
-                        if (id != null && _state.value.page == "chat") loadTask(id)
+                        if (id != null && _state.value.page == "chat") launchHistory {
+                            if (recoveryHistory?.thread == id) resumeRecovery(id) else loadTask(id)
+                        }.join()
                         else if (_state.value.page == "chat") recoverNew()
                         return@launch
                     } catch (e: Exception) {
@@ -635,6 +641,7 @@ constructor(
     }
 
     override fun settings() {
+        cancelHistory()
         cancelStreamingHaptics()
         reports.actions.add("settings")
         settingsOrigin = _state.value.page
@@ -644,6 +651,7 @@ constructor(
     }
 
     override fun back() {
+        if (_state.value.historyLoading) cancelHistory()
         if (_state.value.busy) return
         when (_state.value.page) {
             "todo" -> if (_state.value.todo.editor != null) todoController.close() else home()
@@ -660,6 +668,7 @@ constructor(
 
     override fun home() {
         reports.actions.add("home")
+        if (_state.value.historyLoading) cancelHistory()
         if (_state.value.busy) return
         selection++
         resetApprovalContexts()
@@ -935,11 +944,14 @@ constructor(
     private fun openNewChat(share: IncomingShare? = null) {
         cancelStreamingHaptics()
         reports.actions.add("newChat")
+        if (_state.value.historyLoading) cancelHistory()
         if (_state.value.busy) {
             if (share != null) _state.update { it.copy(error = "Please wait for the current operation, then share again.") }
             return
         }
         if (share != null) _state.update { it.copy(busy = true) }
+        recoveryHistory = null
+        olderCursors.clear()
         chatOrigin = "home"
         cancelList(); saveList()
         listSnapshots.remove(false)
@@ -1010,6 +1022,9 @@ constructor(
                         queueError = null,
                         decisions = emptyList(),
                         historyCursor = null,
+                        historyRecovery = null,
+                        recoveryHasMore = false,
+                        historyNotice = null,
                         draft = draft,
                         attachments = attachments,
                         newTaskOptions = restored,
@@ -1042,10 +1057,126 @@ constructor(
 
     override fun openTask(id: String) {
         reports.actions.add("openTask", id)
+        if (_state.value.historyLoading) cancelHistory()
         if (_state.value.busy) return
+        recoveryHistory = null
+        olderCursors.clear()
         chatOrigin = if (_state.value.archived) "archives" else "home"
         cancelList(); saveList()
-        viewModelScope.launch { guarded { loadTask(id) } }
+        launchHistory { loadTask(id) }
+    }
+
+    private fun cancelHistory() {
+        val opening = hydrating
+        selection++
+        historyJob?.cancel()
+        historyJob = null
+        hydrating = false
+        buffered.clear()
+        _state.update { it.copy(historyLoading = false, busy = if (opening) false else it.busy) }
+    }
+
+    private fun launchHistory(block: suspend () -> Unit): Job {
+        historyJob?.cancel()
+        return viewModelScope.launch(start = CoroutineStart.LAZY) {
+            _state.update { it.copy(historyLoading = true) }
+            try {
+                guarded {
+                    try { block() } catch (e: Exception) {
+                        currentCoroutineContext().ensureActive()
+                        if (e is TimeoutCancellationException) {
+                            _state.update { it.copy(error = "History loading timed out. Reconnect or try loading the page again.") }
+                        } else throw e
+                    }
+                }
+            } finally {
+                if (historyJob === coroutineContext[Job]) {
+                    _state.update { it.copy(historyLoading = false) }
+                }
+            }
+        }.also { historyJob = it; it.start() }
+    }
+
+    override fun recoverHistory() {
+        val st = _state.value
+        val id = st.thread ?: return
+        if (st.page != "chat" || st.busy || historyJob?.isActive == true || connectionJob?.isActive == true) return
+        when (st.historyRecovery ?: return) {
+            HistoryRecoveryAction.Open -> recoveryHistory = RecoveryHistory(id)
+            HistoryRecoveryAction.Smaller -> recoveryHistory?.smallerPages() ?: return
+            HistoryRecoveryAction.Skip -> {
+                val skipped = recoveryHistory?.skipTurn() ?: return
+                _state.update { it.copy(historyNotice = "Some history is omitted: the remaining content of turn $skipped was skipped.") }
+            }
+        }
+        _state.update { it.copy(historyRecovery = null, error = null) }
+        connect()
+    }
+
+    /** Explicit reconnect enters here, never through the full-turn opener. */
+    private suspend fun resumeRecovery(id: String) {
+        val recovery = recoveryHistory ?: return
+        recovery.resuming()
+        val n = selection
+        val epoch = rpc.generation
+        fun current() = n == selection && epoch == rpc.generation && _state.value.thread == id && _state.value.page == "chat"
+        hydrating = true
+        buffered.clear()
+        _state.update { it.copy(historyCursor = null, recoveryHasMore = false) }
+        try {
+            val response = rpc.call("thread/resume", obj("threadId" to s(id), "excludeTurns" to JsonPrimitive(true)))
+            if (!current() || !_state.value.ready) return
+            // Metadata-only resume cannot recover unfinished patch details.
+            fileApprovalContexts.resumed(response, epoch)
+            val thread = response.map("thread")
+            _state.update { it.copy(
+                title = thread.str("name").ifBlank { thread.str("preview").take(80).ifBlank { it.title } },
+                threadCwd = thread.str("cwd").takeIf(String::isNotBlank),
+                threadModel = response.str("model").takeIf(String::isNotBlank),
+                threadReasoningEffort = response.str("reasoningEffort").takeIf(String::isNotBlank),
+                threadServiceTier = response.str("serviceTier").takeIf(String::isNotBlank),
+                threadServiceTierKnown = response.containsKey("serviceTier"),
+                historyCursor = null,
+            ) }
+            if (recovery.hasMore) readRecoveryPage(recovery, n, epoch)
+            if (!current()) return
+            _state.update { it.copy(recoveryHasMore = recovery.hasMore) }
+        } catch (e: RpcRejected) {
+            if (current()) _state.update { it.copy(recoveryHasMore = false,
+                error = "The server rejected smaller-history recovery. No full-history fallback was attempted.") }
+            return
+        } finally {
+            if (current()) {
+                hydrating = false
+                val queued = buffered.toList()
+                buffered.clear()
+                queued.forEach { applyEvent(it, live = false) }
+                requests.values.filter { it.thread == id }.forEach { attemptedApprovalContexts.add(it.key) }
+                publish()
+            }
+        }
+        if (current() && _state.value.ready) readQueue(id)
+    }
+
+    private suspend fun readRecoveryPage(recovery: RecoveryHistory, n: Int, epoch: Long) {
+        val turns = recovery.next { method, params ->
+            val result = rpc.callForGeneration(method, params, epoch)
+            if (n != selection || epoch != rpc.generation || !_state.value.ready || _state.value.thread != recovery.thread || _state.value.page != "chat")
+                throw CancellationException("Conversation changed")
+            result
+        }
+        if (n != selection || epoch != rpc.generation || !_state.value.ready || _state.value.thread != recovery.thread || _state.value.page != "chat") return
+        // Prepending preserves newer entries/statuses already observed live. Buffered events
+        // are merged with the snapshot only for the brief initial recovery hydration.
+        if (hydrating) {
+            val events = buffered.filter { it.map("params").str("threadId") == recovery.thread }
+            timeline.snapshot(turns, prepend = true)
+            timeline.hydrate(emptyList(), events)
+            buffered.removeAll { it.map("params").str("threadId") == recovery.thread }
+            events.forEach { applyEvent(it, live = false, timelineApplied = true) }
+        } else timeline.snapshot(turns, prepend = true)
+        _state.update { it.copy(recoveryHasMore = recovery.hasMore, historyRecovery = null) }
+        publish()
     }
 
     private suspend fun readEventually(method: String, params: JsonObject): JsonObject {
@@ -1066,6 +1197,7 @@ constructor(
     }
 
     private suspend fun loadTask(id: String) {
+        olderCursors.clear()
         cancelStreamingHaptics()
         chatCostJob?.cancel()
         chatUsage = null
@@ -1095,6 +1227,9 @@ constructor(
                 queueReady = false,
                 queueError = null,
                 historyCursor = null,
+                historyRecovery = null,
+                recoveryHasMore = false,
+                historyNotice = null,
                 attachments = emptyList(),
                 newTaskOptions = NewTaskOptions(),
                 threadModel = null,
@@ -1453,30 +1588,39 @@ constructor(
     }
 
     override fun older() {
-        viewModelScope.launch {
-            guarded {
-                val before = _state.value
-                val id = before.thread ?: return@guarded
-                val cursor = before.historyCursor ?: return@guarded
-                val n = selection
-                val history =
-                    rpc.call(
-                        "thread/turns/list",
-                        obj(
-                            "threadId" to s(id),
-                            "cursor" to s(cursor),
-                            "limit" to JsonPrimitive(1),
-                            "itemsView" to s("full"),
-                            "sortDirection" to s("desc"),
-                        ),
-                    )
-                if (n == selection) {
-                    timeline.snapshot(history.list("data").reversed(), true)
-                    _state.update {
-                        it.copy(historyCursor = history.cursor()?.takeUnless { c -> c == cursor })
-                    }
-                    publish()
+        if (historyJob?.isActive == true || !_state.value.ready || _state.value.historyRecovery != null) return
+        launchHistory {
+            val before = _state.value
+            val id = before.thread ?: return@launchHistory
+            val n = selection
+            val epoch = rpc.generation
+            val recovery = recoveryHistory?.takeIf { it.thread == id }
+            if (recovery != null) {
+                if (before.recoveryHasMore && recovery.hasMore) readRecoveryPage(recovery, n, epoch)
+                return@launchHistory
+            }
+            val cursor = before.historyCursor ?: return@launchHistory
+            val history =
+                rpc.callForGeneration(
+                    "thread/turns/list",
+                    obj(
+                        "threadId" to s(id),
+                        "cursor" to s(cursor),
+                        "limit" to JsonPrimitive(1),
+                        "itemsView" to s("full"),
+                        "sortDirection" to s("desc"),
+                    ),
+                    epoch,
+                )
+            if (n == selection && epoch == rpc.generation && _state.value.ready && _state.value.page == "chat") {
+                val next = history.cursor()
+                require(next == null || next != cursor && next !in olderCursors) { "Repeated history cursor" }
+                olderCursors.add(cursor)
+                timeline.snapshot(history.list("data").reversed(), true)
+                _state.update {
+                    it.copy(historyCursor = next)
                 }
+                publish()
             }
         }
     }
@@ -2510,7 +2654,7 @@ constructor(
         if (event.str("_epoch").toLongOrNull()?.let { it != rpc.generation } == true) return
         if (event.str("method") == "connection/lost") {
             val oversized = event.str("reason") == "messageTooLarge"
-            if (oversized) automaticReconnectBlocked = true
+            if (oversized) historySizeRejected()
             weeklyUsage.disconnected()
             verifiedTaskGeneration = null
             taskTools.cancelAll()
@@ -2579,7 +2723,7 @@ constructor(
         applyEvent(event)
     }
 
-    private fun applyEvent(event: JsonObject, live: Boolean = true) {
+    private fun applyEvent(event: JsonObject, live: Boolean = true, timelineApplied: Boolean = false) {
         if (event.str("_epoch").toLongOrNull()?.let { it != rpc.generation } == true) return
         val method = event.str("method")
         val p = event.map("params")
@@ -2597,7 +2741,7 @@ constructor(
                     event.str("_epoch").toLongOrNull() ?: rpc.generation,
                 )
             requests.putIfAbsent(d.key, d)
-            if (!hydrating) recoverApprovalContext(d)
+            if (!hydrating && recoveryHistory?.thread != d.thread) recoverApprovalContext(d)
             publish()
             return
         }
@@ -2616,7 +2760,7 @@ constructor(
         val itemId = p.str("itemId").ifEmpty { p.map("item").str("id") }
         val turnId = p.str("turnId")
         val beforeText = if (textEvent) timeline.values().firstOrNull { it.turn == turnId && it.id == itemId }?.text.orEmpty() else ""
-        timeline.event(method, p)
+        if (!timelineApplied) timeline.event(method, p)
         if (method == "turn/started") {
             hapticTurn = p.map("turn").str("id")
             if (live) streamingHaptics.begin(p.str("threadId"), hapticTurn!!, hapticConversationActive())
@@ -2768,6 +2912,7 @@ constructor(
             block()
         } catch (e: Exception) {
             if (e is CancellationException) throw e
+            if (e is RpcMessageTooLarge) historySizeRejected()
             _state.update {
                 it.copy(
                     error =
@@ -2778,6 +2923,20 @@ constructor(
                 )
             }
         }
+    }
+
+    private fun historySizeRejected() {
+        automaticReconnectBlocked = true
+        val recovery = recoveryHistory?.takeIf { it.thread == _state.value.thread }
+        val action = when {
+            _state.value.thread == null -> null
+            recovery == null -> HistoryRecoveryAction.Open
+            !recovery.readingItems -> null
+            recovery.itemLimit > 1 -> HistoryRecoveryAction.Smaller
+            else -> HistoryRecoveryAction.Skip
+        }
+        _state.update { it.copy(historyRecovery = action,
+            historyNotice = it.historyNotice ?: "A received message exceeded the safe size. Smaller history may help. After reconnect, some content may be missing or out of date.") }
     }
 
     private fun parse(value: String) =

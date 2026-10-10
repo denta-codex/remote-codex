@@ -2752,6 +2752,173 @@ class AppTest {
     }
 
     @Test
+    fun explicitHistoryRecoveryBatchesRetriesSkipsAndPreservesDraft() = exerciseHistoryRecovery(false)
+
+    @Test
+    fun oversizedOpeningRecoversWithoutRepeatingFullResume() = exerciseHistoryRecovery(true)
+
+    private fun exerciseHistoryRecovery(oversizedOpening: Boolean) {
+        val started = java.util.concurrent.CountDownLatch(1)
+        val resumeParams = CopyOnWriteArrayList<JsonObject>()
+        val itemParams = CopyOnWriteArrayList<JsonObject>()
+        val mutations = AtomicInteger()
+        val approvalReplies = AtomicInteger()
+        val rejectRecovery = java.util.concurrent.atomic.AtomicBoolean(false)
+        fun reply(id: String) = obj("id" to s(id), "type" to s("agentMessage"), "text" to s(id))
+        fun turn(id: String, vararg items: JsonObject) = obj("id" to s(id), "status" to s("completed"), "items" to JsonArray(items.toList()))
+        fun page(rows: List<JsonObject>, next: String? = null) = obj("data" to JsonArray(rows), "nextCursor" to next?.let(::s))
+        val raw = object : org.java_websocket.server.WebSocketServer(java.net.InetSocketAddress("127.0.0.1", 0), 1) {
+            override fun onStart() { started.countDown() }
+            override fun onOpen(socket: org.java_websocket.WebSocket, handshake: org.java_websocket.handshake.ClientHandshake) {}
+            override fun onClose(socket: org.java_websocket.WebSocket, code: Int, reason: String, remote: Boolean) {}
+            override fun onError(socket: org.java_websocket.WebSocket?, error: Exception) {}
+            override fun onMessage(socket: org.java_websocket.WebSocket, text: String) {
+                val request = wire.parseToJsonElement(text).jsonObject
+                val id = request["id"] ?: return
+                val method = request.str("method")
+                val params = request.map("params")
+                if (method.isEmpty()) { approvalReplies.incrementAndGet(); return }
+                if (method == "thread/resume" && rejectRecovery.get()) {
+                    resumeParams.add(params)
+                    socket.send(obj("id" to id, "error" to obj("code" to JsonPrimitive(-32602), "message" to s("excludeTurns unsupported"))).toString())
+                    return
+                }
+                if (method == "thread/items/list") itemParams.add(params)
+                if (method == "thread/resume" && params.containsKey("initialTurnsPage") && oversizedOpening ||
+                    method == "thread/turns/list" && params.str("itemsView") == "full" ||
+                    method == "thread/items/list" && (params.str("cursor") == "batch-too-large" && params.str("limit") == "20" || params.str("cursor") == "huge-item")) {
+                    if (method == "thread/resume") resumeParams.add(params)
+                    val bytes = ByteArray(256 * 1024) { 120 }
+                    repeat(129) { index -> socket.sendFragmentedFrame(org.java_websocket.enums.Opcode.TEXT,
+                        java.nio.ByteBuffer.wrap(bytes), index == 128) }
+                    return
+                }
+                val result = when (method) {
+                    "initialize" -> obj("codexHome" to s("/fixture"))
+                    "model/list" -> modelCatalog()
+                    "thread/resume" -> {
+                        resumeParams.add(params)
+                        if (!params.containsKey("initialTurnsPage")) socket.send(obj("id" to s("pending-patch"),
+                            "method" to s("item/fileChange/requestApproval"), "params" to obj("threadId" to s("task-test"),
+                                "turnId" to s("turn"), "itemId" to s("unfinished-patch"))).toString())
+                        obj("thread" to obj("id" to s("task-test"), "name" to s("Recovery fixture")),
+                            "initialTurnsPage" to if (params.containsKey("initialTurnsPage"))
+                                page(listOf(turn("turn", reply("Retained reply"))), "full-too-large") else null)
+                    }
+                    "thread/turns/list" -> if (params.str("cursor") == "older-turn") page(listOf(turn("older")))
+                        else page(listOf(turn("turn")), "older-turn")
+                    "thread/items/list" -> {
+                        if (params.str("cursor").isEmpty() && params.str("turnId") == "turn") {
+                            socket.send(obj("method" to s("item/agentMessage/delta"), "params" to obj("threadId" to s("task-test"),
+                                "turnId" to s("turn"), "itemId" to s("Batch reply 20"), "delta" to s("Batch reply 20 plus live text"))).toString())
+                            socket.send(obj("method" to s("thread/settings/updated"), "params" to obj("threadId" to s("task-test"),
+                                "threadSettings" to obj("model" to s("live-model")))).toString())
+                        }
+                        val ids = when {
+                            params.str("turnId") == "older" -> listOf("Older safe reply")
+                            params.str("cursor") == "batch-too-large" -> listOf("Small retry reply")
+                            else -> listOf("Retained reply") + (20 downTo 2).map { "Batch reply $it" }
+                        }
+                        val next = when {
+                            params.str("turnId") == "older" -> null
+                            params.str("cursor") == "batch-too-large" -> "huge-item"
+                            else -> "batch-too-large"
+                        }
+                        page(ids.map { obj("turnId" to params["turnId"], "item" to reply(it)) }, next)
+                    }
+                    "turn/start", "turn/steer", "thread/start", "fs/writeFile" -> { mutations.incrementAndGet(); obj() }
+                    else -> page(emptyList())
+                }
+                socket.send(obj("id" to id, "result" to result).toString())
+            }
+        }
+        raw.start()
+        assertTrue(started.await(5, java.util.concurrent.TimeUnit.SECONDS))
+        try {
+            runBlocking { LocalStore(app).put("draft/task-test", "Keep my draft") }
+            compose.runOnUiThread {
+                store.clear()
+                model = ClientModel(app, "ws://127.0.0.1:${raw.port}/rpc", "/fixture", true)
+                store.put("fixture", model)
+                compose.activity.setContent { RemoteTheme { App(model) } }
+                model.foreground(true)
+            }
+            compose.waitUntil(10000) { model.state.value.ready }
+            compose.runOnUiThread { model.openTask("task-test") }
+            if (!oversizedOpening) {
+                compose.waitUntil(10000) { !model.state.value.historyLoading && model.state.value.entries.isNotEmpty() }
+                compose.runOnUiThread { model.older() }
+            }
+            compose.waitUntil(20000) { !model.state.value.historyLoading && model.state.value.historyRecovery == HistoryRecoveryAction.Open }
+            compose.onNodeWithTag("recover-history").performClick()
+            compose.waitUntil(15000) { model.state.value.ready && !model.state.value.historyLoading && model.state.value.entries.size == 20 }
+            assertEquals("20", itemParams.single().str("limit"))
+            assertEquals("Batch reply 20 plus live text", model.state.value.entries.single { it.id == "Batch reply 20" }.text)
+            assertEquals("live-model", model.state.value.threadModel)
+            val staleApproval = model.state.value.decisions.single()
+            assertTrue(model.state.value.fileApprovalContexts.getValue(staleApproval.key).text.isBlank())
+            assertEquals(2, resumeParams.size)
+            assertFalse(resumeParams.last().containsKey("initialTurnsPage"))
+            assertEquals("true", resumeParams.last().str("excludeTurns"))
+            if (oversizedOpening) {
+                assertEquals("Keep my draft", model.state.value.draft)
+                assertTrue(model.state.value.entries.any { it.text == "Retained reply" })
+                assertEquals(0, mutations.get())
+                return
+            }
+            compose.runOnUiThread { model.older(); model.older() }
+            compose.waitUntil(20000) { !model.state.value.historyLoading && model.state.value.historyRecovery == HistoryRecoveryAction.Smaller }
+            assertEquals(2, itemParams.size)
+            compose.onNodeWithTag("recover-history").performClick()
+            compose.waitUntil(15000) { model.state.value.ready && !model.state.value.historyLoading && model.state.value.entries.any { it.text == "Small retry reply" } }
+            assertEquals("1", itemParams.last().str("limit"))
+            assertEquals("batch-too-large", itemParams.last().str("cursor"))
+            compose.runOnUiThread { model.older() }
+            compose.waitUntil(20000) { !model.state.value.historyLoading && model.state.value.historyRecovery == HistoryRecoveryAction.Skip }
+            compose.onNodeWithTag("recover-history").performClick()
+            compose.waitUntil(15000) { model.state.value.ready && !model.state.value.historyLoading && model.state.value.entries.any { it.text == "Older safe reply" } }
+            assertEquals("Keep my draft", model.state.value.draft)
+            assertTrue(model.state.value.entries.any { it.text == "Retained reply" })
+            assertTrue(model.state.value.historyNotice!!.contains("omitted"))
+            assertFalse(model.state.value.recoveryHasMore)
+            assertEquals(4, resumeParams.size)
+            assertEquals(5, itemParams.size)
+            assertEquals(0, mutations.get())
+            assertTrue(model.state.value.fileApprovalContexts.values.all { it.text.isBlank() })
+            compose.runOnUiThread {
+                model.answer(staleApproval, ApprovalChoices.choices(staleApproval).first { it.grantsAccess }.result)
+                val missingContext = model.state.value.decisions.single()
+                model.answer(missingContext, ApprovalChoices.choices(missingContext).first { it.grantsAccess }.result)
+            }
+            assertEquals(0, approvalReplies.get())
+            rejectRecovery.set(true)
+            compose.runOnUiThread { model.connect() }
+            compose.waitUntil(10000) { !model.state.value.historyLoading && model.state.value.error?.contains("server rejected") == true }
+            assertEquals(5, resumeParams.size)
+            assertEquals(1, resumeParams.count { it.containsKey("initialTurnsPage") })
+            assertEquals(5, itemParams.size)
+        } finally {
+            compose.runOnUiThread { model.foreground(false); store.clear() }
+            raw.stop(1000)
+        }
+    }
+
+    @Test
+    fun navigationCancelsOpeningAndIgnoresLateHistoryReply() {
+        holdHistoryReply = true
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { heldHistoryRequests.isNotEmpty() }
+        compose.runOnUiThread { model.back() }
+        compose.waitUntil(5000) { model.state.value.page == "home" && !model.state.value.historyLoading }
+        holdHistoryReply = false
+        heldHistoryRequests.forEach { peer!!.send(obj("id" to it, "result" to history()).toString()) }
+        compose.runOnUiThread { model.openTask("project-task") }
+        compose.waitUntil(10000) { model.state.value.thread == "project-task" && !model.state.value.historyLoading }
+        assertEquals("Remote Codex project task", model.state.value.title)
+        assertNull(model.state.value.error)
+    }
+
+    @Test
     fun oversizedOlderTurnKeepsDraftAndContentWithoutReconnectLoop() {
         val started = java.util.concurrent.CountDownLatch(1)
         val resumes = AtomicInteger()

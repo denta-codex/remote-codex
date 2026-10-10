@@ -61,6 +61,10 @@ requests cannot be answered. Conversation history resumes with one full recent
 turn and renders that snapshot directly. Explicit older-history reads request one
 full turn at a time using the unchanged server cursor. Bounded read retries
 cover the observed initial persistence delay; mutations are never replayed.
+An oversized incoming message stops automatic reconnect. The user can explicitly
+choose smaller-history recovery, which reconnects with metadata-only resume and
+uses summary turns plus descending item pages. It never repeats a full-turn
+opening as part of recovery. The socket error does not identify the offending RPC.
 Android serializes each stock JSON-RPC message once and emits 256 KiB RFC 6455
 continuation frames, with a 100 MiB outbound message ceiling. Incoming frames and
 cumulative continuation payloads are limited to 32 MiB before assembly and UTF-8
@@ -304,9 +308,38 @@ messages" explicitly reads another full turn; scrolling alone does not fetch
 history. Conversation and read-only task history use server cursors directly.
 The item-page wrapper, automatic scrollback state/effects, truncated tool preview
 markers, and separate complete-details downloader/cache have been removed.
-This is an intermediate cleanup: loaded turns still accumulate while the chat
-is open, and a full turn can exceed the inbound transport limit. It does not
-claim large-turn or bounded-retention support.
+The cleanup is committed at `2940ea8` as the baseline for explicit recovery.
+
+Smaller-history recovery is a session-only mode, entered by the explicit action
+after a size rejection. `RecoveryHistory` keeps separate unchanged turn/item
+cursors and requests one summary turn and at most one 20-item page per action.
+It validates page ownership and rejects repeated cursor cycles; a failed item
+read retains its cursor. Subsequent actions fetch one page, never drain a turn or
+session. If that page exceeds the transport limit, the user can reconnect and
+retry at one item per page for the remainder of the recovery session. If the
+single-item request also fails, the user can skip the rest of that turn using
+the already-known next-turn cursor. The UI retains an omission notice. A failure
+before identifying an item page cannot offer a safe skip; capability rejection
+ends recovery with an explanation, without a full-history fallback.
+
+Opening and paging share one cancellable job. Navigation invalidates its owner;
+selection and connection-generation checks reject late responses, and duplicate
+page requests are suppressed. Recovery preserves drafts and displayed entries.
+It reconciles buffered events with the first page and then applies events live;
+later prepends preserve newer live entries and turn outcomes. Reconnect uses
+metadata-only resume, so recovery is not a complete replay of events missed while
+offline. Retained content and skipped portions must not be treated as a complete
+current snapshot. Approvals are invalidated on disconnect and require server
+reissue. Summary/item pages do not populate unfinished file-approval context;
+missing details remain disabled until live evidence or explicit context retry.
+
+The explicit recovery operation is also the future entry point for an automatic
+policy; this implementation adds no automatic downshift/reconnect ladder. Stock
+RPC deadlines and the 32 MiB inbound ceiling remain unchanged. Batch counts do
+not bound an individual item's bytes. Loaded history and hydration/event buffers
+still need a separate bounded-retention design: this change does not establish
+arbitrary large-item usability or total-memory safety. Whole-session cost reads
+remain independent and are outside this conversation-loading change.
 
 New Android tasks (including report tasks) advertise exactly `codex_app.list_threads`
 and `codex_app.read_thread` through stock `thread/start.dynamicTools`, using the

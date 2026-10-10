@@ -93,7 +93,7 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
                 if (atRestAtEnd) followLatest = true
             }
     }
-    LaunchedEffect(scroll, rows, st.busy, st.historyCursor, initialRenderedKey) {
+    LaunchedEffect(scroll, rows, st.busy, st.historyCursor, st.recoveryHasMore, initialRenderedKey) {
         if (initiallyPositioned || st.busy) return@LaunchedEffect
         val latestMessage = rows.indexOfLast { it is ConversationRow.Message }
         if (latestMessage < 0) return@LaunchedEffect
@@ -101,7 +101,7 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
         // Open at the beginning of the newest message, including replies taller
         // than the viewport. Keep it still until the reader reaches the end.
         followLatest = false
-        scroll.scrollToItem(latestMessage + if (st.historyCursor != null) 1 else 0)
+        scroll.scrollToItem(latestMessage + if (st.historyCursor != null || st.recoveryHasMore) 1 else 0)
         val entry = (rows[latestMessage] as ConversationRow.Message).entry
         // Markdown starts as a small loading box. Re-anchor once its real
         // height is known so clamping that placeholder cannot hide the start.
@@ -111,18 +111,18 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
                 // Earlier Markdown can also grow and push the loading reply
                 // off-screen. Keep it composed until its render callback arrives.
                 if (layout.visibleItemsInfo.none { it.key == entry.key })
-                    scroll.scrollToItem(latestMessage + if (st.historyCursor != null) 1 else 0)
+                    scroll.scrollToItem(latestMessage + if (st.historyCursor != null || st.recoveryHasMore) 1 else 0)
             }
             return@LaunchedEffect
         }
         openingAnchorKey = entry.key
         initiallyPositioned = true
     }
-    LaunchedEffect(scroll, initiallyPositioned, readerScrolled, followLatest, rows, st.historyCursor) {
+    LaunchedEffect(scroll, initiallyPositioned, readerScrolled, followLatest, rows, st.historyCursor, st.recoveryHasMore) {
         if (!initiallyPositioned || readerScrolled || followLatest) return@LaunchedEffect
         val index = rows.indexOfFirst { it.key == openingAnchorKey }
         if (index < 0) return@LaunchedEffect
-        val target = index + if (st.historyCursor != null) 1 else 0
+        val target = index + if (st.historyCursor != null || st.recoveryHasMore) 1 else 0
         // Keep the opening anchor while surrounding Markdown finishes measuring.
         // A user scroll, send, or jump ends this anchoring immediately.
         snapshotFlow { scroll.layoutInfo }.collect {
@@ -159,6 +159,12 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
             reply != null && reply.offset + reply.size <= layout.viewportEndOffset && !scroll.isScrollInProgress
         }.collect { replyViewed -> if (replyViewed) actions.viewedReply(thread, signature) }
     }
+    st.historyNotice?.let { Text(it, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+        style = MaterialTheme.typography.bodySmall) }
+    st.historyRecovery?.let { recovery ->
+        TextButton(onClick = actions::recoverHistory, enabled = !st.historyLoading && !st.busy,
+            modifier = Modifier.fillMaxWidth().testTag("recover-history")) { Text(recovery.label) }
+    }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
     Box(Modifier.weight(1f).fillMaxWidth()) {
         LazyColumn(
@@ -173,12 +179,14 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
                 Alignment.Bottom,
             ),
         ) {
-            if (st.historyCursor != null)
+            if (st.historyCursor != null || st.recoveryHasMore)
                 item(key = "history") {
-                    TextButton(onClick = actions::older, modifier = Modifier.fillMaxWidth()) {
+                    TextButton(onClick = actions::older,
+                        enabled = st.ready && !st.historyLoading && st.historyRecovery == null,
+                        modifier = Modifier.fillMaxWidth()) {
                         Glyph(R.drawable.ic_up)
                         Spacer(Modifier.width(8.dp))
-                        Text("Load earlier messages")
+                        Text(if (st.historyLoading) "Loading history…" else "Load earlier messages")
                     }
                 }
             items(rows, key = { it.key }) { row ->
