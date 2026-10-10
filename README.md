@@ -6,6 +6,10 @@
 Use Codex on a remote host. Native Android text client for Grace's existing stock
 Codex app server, over WSS and Tailscale.
 
+The [Hello World iOS fixture](docs/IOS.md) establishes simulator and physical
+testing infrastructure before iOS client development. It includes a tap counter,
+saved synthetic note, and focused launch/interaction/restart UI tests.
+
 Tap **Todo** on the Chats screen for the native task board. Switch between
 To Do, In Progress, and Done with tabs or a swipe. **Add** creates a task;
 open a row to edit its title and Markdown description or change its status.

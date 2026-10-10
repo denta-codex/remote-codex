@@ -10,3 +10,9 @@ artifacts/
 *.keystore
 .env
 __pycache__/
+
+.build/
+.swiftpm/
+xcuserdata/
+*.xcuserstate
+*.mobileprovision

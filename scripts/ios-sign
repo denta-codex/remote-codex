@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# Called only by ios-development.yml after environment authorization.
+set -euo pipefail
+umask 077
+output="$1"
+for key in IOS_DEVELOPMENT_CERTIFICATE_P12_BASE64 IOS_DEVELOPMENT_CERTIFICATE_PASSWORD IOS_DEVELOPMENT_PROFILE_BASE64 IOS_DEVELOPMENT_TEAM_ID IOS_VERSION; do
+    [[ -n "${!key:-}" ]] || { echo "Missing ios-development input: $key" >&2; exit 1; }
+done
+[[ "$IOS_DEVELOPMENT_TEAM_ID" =~ ^[A-Z0-9]{10}$ && "$IOS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid team identifier or version.' >&2; exit 1; }
+signing="$RUNNER_TEMP/remote-codex-ios-signing-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+mkdir "$signing"
+keychain="$signing/development.keychain-db"
+profile_path=""
+previous=()
+while IFS= read -r line; do
+    line="${line#*\"}"; line="${line%\"*}"
+    previous+=("$line")
+done < <(security list-keychains -d user)
+cleanup() {
+    local status=$?
+    trap - EXIT
+    security list-keychains -d user -s "${previous[@]}" >/dev/null 2>&1 || true
+    security delete-keychain "$keychain" >/dev/null 2>&1 || true
+    [[ -z "$profile_path" ]] || rm -f "$profile_path"
+    rm -rf "$signing" "$output/ArchiveDerivedData" "$output/RemoteCodex.xcarchive"
+    rm -f "$output"/*.log
+    {
+        echo
+        echo "Development build exit status: $status"
+        echo '| Stage | Seconds | Exit status |'
+        echo '| --- | ---: | ---: |'
+        tail -n +2 "$output/report/durations.tsv" | awk -F '\t' '{printf "| %s | %s | %s |\n", $1,$2,$3}'
+    } >> "$GITHUB_STEP_SUMMARY"
+    if [[ "$status" != 0 ]]; then rm -rf "$output/package"; echo 'Development signing failed. No IPA artifact was uploaded; credential-bearing diagnostics were discarded.' >&2; fi
+    exit "$status"
+}
+trap cleanup EXIT
+# Capture all security/build output privately; no secret-bearing logs become artifacts.
+prepare() {
+    printf '%s' "$IOS_DEVELOPMENT_CERTIFICATE_P12_BASE64" | base64 --decode > "$signing/certificate.p12" || return
+    printf '%s' "$IOS_DEVELOPMENT_PROFILE_BASE64" | base64 --decode > "$signing/profile.mobileprovision" || return
+    security cms -D -i "$signing/profile.mobileprovision" > "$signing/profile.plist" || return
+    swift scripts/ios-profile.swift "$signing/profile.plist" "$IOS_DEVELOPMENT_TEAM_ID" "$signing/uuid" || return
+    profile_uuid="$(cat "$signing/uuid")" || return
+    candidate="$HOME/Library/MobileDevice/Provisioning Profiles/$profile_uuid.mobileprovision"
+    [[ ! -e "$candidate" ]] || return 1
+    profile_path="$candidate"
+    mkdir -p "$(dirname "$profile_path")" || return
+    printf '%s' "$profile_path" > "$signing/profile-path" || return
+    cp "$signing/profile.mobileprovision" "$profile_path" || return
+    keychain_password="$(openssl rand -hex 32)" || return
+    security create-keychain -p "$keychain_password" "$keychain" || return
+    security set-keychain-settings -lut 21600 "$keychain" || return
+    security unlock-keychain -p "$keychain_password" "$keychain" || return
+    security import "$signing/certificate.p12" -k "$keychain" -P "$IOS_DEVELOPMENT_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security || return
+    security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" || return
+    security list-keychains -d user -s "$keychain" "${previous[@]}" || return
+}
+measure() {
+    local name="$1" start="$SECONDS" status=0
+    shift
+    echo "Stage: $name"
+    "$@" > "$output/$name.log" 2>&1 || status=$?
+    printf '%s\t%s\t%s\n' "$name" "$((SECONDS-start))" "$status" >> "$output/report/durations.tsv"
+    return "$status"
+}
+measure signing-prepare prepare
+# Single archive/export attempt. No automatic provisioning or App Store access.
+build_number="$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT"
+measure archive xcodebuild -project ios/RemoteCodex.xcodeproj -scheme RemoteCodex -configuration Release \
+    -destination 'generic/platform=iOS' -derivedDataPath "$output/ArchiveDerivedData" \
+    -archivePath "$output/RemoteCodex.xcarchive" CODE_SIGN_STYLE=Manual \
+    DEVELOPMENT_TEAM="$IOS_DEVELOPMENT_TEAM_ID" CODE_SIGN_IDENTITY='Apple Development' \
+    PROVISIONING_PROFILE_SPECIFIER="$profile_uuid" \
+    MARKETING_VERSION="$IOS_VERSION" CURRENT_PROJECT_VERSION="$build_number" archive
+cat > "$signing/ExportOptions.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>method</key><string>debugging</string>
+<key>destination</key><string>export</string>
+<key>signingStyle</key><string>manual</string>
+<key>signingCertificate</key><string>Apple Development</string>
+<key>teamID</key><string>$IOS_DEVELOPMENT_TEAM_ID</string>
+<key>provisioningProfiles</key><dict><key>dev.codexops.client.ios</key><string>$profile_uuid</string></dict>
+<key>manageAppVersionAndBuildNumber</key><false/>
+<key>stripSwiftSymbols</key><true/>
+</dict></plist>
+PLIST
+measure development-export xcodebuild -exportArchive -archivePath "$output/RemoteCodex.xcarchive" \
+    -exportPath "$signing/export" -exportOptionsPlist "$signing/ExportOptions.plist"
+mkdir -p "$output/package"
+cp "$signing/export/RemoteCodex.ipa" "$output/package/RemoteCodex.ipa"
+[[ -s "$output/package/RemoteCodex.ipa" ]]
+# Validate the actual exported app, rather than assuming archive settings survived export.
+unzip -q "$output/package/RemoteCodex.ipa" -d "$signing/verify"
+app="$signing/verify/Payload/RemoteCodex.app"
+/usr/bin/codesign --verify --deep --strict "$app" > "$output/verify.log" 2>&1
+plist=/usr/libexec/PlistBuddy
+[[ "$("$plist" -c 'Print :CFBundleIdentifier' "$app/Info.plist")" == dev.codexops.client.ios ]]
+[[ "$("$plist" -c 'Print :CFBundleVersion' "$app/Info.plist")" == "$build_number" ]]
+[[ "$("$plist" -c 'Print :CFBundleShortVersionString' "$app/Info.plist")" == "$IOS_VERSION" ]]
+[[ "$("$plist" -c 'Print :MinimumOSVersion' "$app/Info.plist")" == 18.0 ]]
+/usr/bin/codesign -d --entitlements :- "$app" > "$signing/app-entitlements.plist" 2> "$output/entitlements.log"
+[[ "$("$plist" -c 'Print :get-task-allow' "$signing/app-entitlements.plist")" == true ]]
+[[ "$("$plist" -c 'Print :application-identifier' "$signing/app-entitlements.plist")" == "$IOS_DEVELOPMENT_TEAM_ID.dev.codexops.client.ios" ]]
+[[ "$("$plist" -c 'Print :com.apple.developer.team-identifier' "$signing/app-entitlements.plist")" == "$IOS_DEVELOPMENT_TEAM_ID" ]]
+security cms -D -i "$app/embedded.mobileprovision" > "$signing/exported-profile.plist" 2>/dev/null
+swift scripts/ios-profile.swift "$signing/exported-profile.plist" "$IOS_DEVELOPMENT_TEAM_ID" "$signing/exported-uuid"
+[[ "$(cat "$signing/exported-uuid")" == "$profile_uuid" ]]
+(cd "$output/package" && shasum -a 256 RemoteCodex.ipa > SHA256SUMS)
+checksum="$(cut -d' ' -f1 "$output/package/SHA256SUMS")"
+jq -n --arg revision "$GITHUB_SHA" --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+    --arg version "$IOS_VERSION" --arg build_number "$build_number" --arg sha256 "$checksum" \
+    '{schema_version:1, repository:"denta-codex/remote-codex", revision:$revision, run_id:$run_id,
+      run_attempt:$run_attempt, artifact:"RemoteCodex.ipa", sha256:$sha256,
+      bundle_id:"dev.codexops.client.ios", version:$version, build_number:$build_number,
+      signing:"development", minimum_ios:"18.0", fixture_launch_argument:"--fixture"}' > "$output/package/metadata.json"
+{
+    echo 'Development IPA exported and verified (no publication).'
+    echo "Revision: $GITHUB_SHA; run $GITHUB_RUN_ID attempt $GITHUB_RUN_ATTEMPT; build $build_number"
+    echo "SHA256: $checksum"
+} >> "$GITHUB_STEP_SUMMARY"
