@@ -135,3 +135,44 @@ logs or inject access history. History contains only operation, opaque request
 ID, and fixed outcome/reason. Terminal records hold metadata only. Operational
 errors contain fixed codes, never payloads. The existing same-UID/host-admin trust
 boundary remains; this is not end-to-end encryption against the execution host.
+
+## Foreground credential alerts
+
+Op-bridge can publish a metadata invalidation to the forwarder's private Unix
+socket, configured with `desktops.phone.event_socket`. On Grace this is
+`/run/user/UID/remote-codex/events.sock`. Each publication uses a fresh local
+connection; no request, callback endpoint, reference, or selected value is sent:
+
+```json
+{"version":1,"event":"credential_requests_changed"}
+```
+
+The NDJSON exchange is bounded to 1 KiB and one second. The response is
+`{"accepted":true}` followed by newline. Acceptance means the forwarder received
+the hint, not that Android displayed an alert. Both ends verify the peer UID;
+the directory is owner-only and the socket is mode 0600. The listener refuses
+unsafe paths and recovers a verified stale socket. The publisher does not retry.
+The optional setting leaves op-bridge usable independently of Remote Codex.
+
+Rust coalesces hints and sends this server-generated notification to each active
+`/codex/rpc` connection using its existing WebSocket:
+
+```json
+{"method":"remoteCodex/credentialRequestsChanged","params":{}}
+```
+
+Stock JSON messages keep their payloads and Android uses its normal dispatcher.
+The forwarder reserves `remoteCodex/` for server events and rejects client
+attempts to send this namespace to stock Codex. Writes are serialized with a
+bounded deadline; text/binary messages are limited to 100 MiB. WebSocket frames
+and masks are regenerated for each hop. Credential approval traffic retains its
+separate byte tunnel.
+
+Android performs read-only list discovery on this hint and foreground/reconnect,
+then shows a grouped snackbar with **Review**. A single request opens directly;
+multiple requests open the inbox. Expiry triggers one read at the deadline.
+Repeated hints coalesce; dismissed request IDs remain silent for their lifetime.
+No periodic polling, background push, durable queue, or automatic mutation replay
+is added. Hints are best effort: foreground reconnect or manual refresh recovers
+missed discovery. Secrets, release/deny commands, caller delivery and receipts
+remain exclusively on the existing credential path.

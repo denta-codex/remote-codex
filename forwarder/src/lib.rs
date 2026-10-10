@@ -1,4 +1,6 @@
 pub mod accounting;
+pub mod events;
+mod relay;
 mod todo;
 use sha2::{Digest, Sha256};
 use std::fs::OpenOptions;
@@ -35,6 +37,8 @@ pub struct Config {
     expected_authorization: [u8; 32],
     update_root: Option<PathBuf>,
     approval_socket: Option<PathBuf>,
+    event_socket: Option<PathBuf>,
+    event_signals: tokio::sync::watch::Sender<u64>,
     todo_database: PathBuf,
     todo_workers: Arc<Semaphore>,
 }
@@ -53,6 +57,8 @@ impl Config {
             expected_authorization,
             update_root: None,
             approval_socket: None,
+            event_socket: None,
+            event_signals: tokio::sync::watch::channel(0).0,
             todo_database: remote_codex_todo::DEFAULT_DATABASE.into(),
             todo_workers: Arc::new(Semaphore::new(2)),
         })
@@ -91,6 +97,15 @@ impl Config {
             ));
         }
         self.approval_socket = Some(socket);
+        Ok(self)
+    }
+
+    pub fn with_event_socket(mut self, socket: impl Into<PathBuf>) -> io::Result<Self> {
+        let socket = socket.into();
+        if !socket.is_absolute() {
+            return Err(io::Error::other("event socket must be absolute"));
+        }
+        self.event_socket = Some(socket);
         Ok(self)
     }
 }
@@ -179,12 +194,30 @@ where
     F: Future<Output = ()>,
 {
     let config = Arc::new(config);
+    let events = match &config.event_socket {
+        Some(path) => Some(events::Listener::bind(path).await?),
+        None => None,
+    };
+    let event_slots = Arc::new(Semaphore::new(8));
     let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     let mut tasks = JoinSet::new();
     tokio::pin!(shutdown);
     loop {
         tokio::select! {
             _ = &mut shutdown => break,
+            accepted = async { match &events {
+                Some(listener) => listener.accept().await,
+                None => std::future::pending().await,
+            }} => {
+                let stream = accepted?;
+                if let Ok(permit) = event_slots.clone().try_acquire_owned() {
+                    let signals = config.event_signals.clone();
+                    tasks.spawn(async move {
+                        let _permit = permit;
+                        let _ = events::receive(stream, signals).await;
+                    });
+                }
+            }
             accepted = listener.accept() => {
                 let (stream, _) = accepted?;
                 let config = Arc::clone(&config);
@@ -350,6 +383,16 @@ async fn handle_client(
         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\nCache-Control: no-store\r\n\r\n"
     );
     client.write_all(response.as_bytes()).await?;
+    if !request.approval {
+        return relay::forward(
+            client,
+            client_tail,
+            upstream,
+            upstream_tail,
+            config.event_signals.subscribe(),
+        )
+        .await;
+    }
     if !client_tail.is_empty() {
         upstream.write_all(&client_tail).await?;
     }
@@ -860,7 +903,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn validates_socket_and_forwards_upgraded_bytes_unchanged() {
+    async fn validates_socket_and_forwards_fragmented_payloads_unchanged() {
         let directory = tempdir().unwrap();
         let socket = directory.path().join("stock.sock");
         let listener = UnixListener::bind(&socket).unwrap();
@@ -887,10 +930,16 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            let mut frame = [0_u8; 8];
-            stream.read_exact(&mut frame).await.unwrap();
-            stream.write_all(&frame).await.unwrap();
-            frame
+            use futures_util::{SinkExt, StreamExt};
+            use tokio_tungstenite::{WebSocketStream, tungstenite::protocol::Role};
+            let mut ws = WebSocketStream::from_raw_socket(stream, Role::Server, None).await;
+            let message = ws.next().await.unwrap().unwrap();
+            assert_eq!(
+                message.to_text().unwrap(),
+                r#"{"id":1,"method":"fixture","params":{}}"#
+            );
+            ws.send(message.clone()).await.unwrap();
+            message.into_text().unwrap().to_string()
         });
 
         let tcp = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -901,23 +950,80 @@ mod tests {
             let (stream, _) = tcp.accept().await.unwrap();
             handle_client(stream, config, slots).await.unwrap();
         });
-        let mut client = TcpStream::connect(address).await.unwrap();
-        client.write_all(valid_request().as_bytes()).await.unwrap();
-        let (head, tail) = read_head(&mut client).await.unwrap();
-        assert!(
-            String::from_utf8(head)
-                .unwrap()
-                .starts_with("HTTP/1.1 101 ")
+        let mut client = RawWebSocket::connect(address).await.unwrap();
+        let message = serde_json::json!({"id":1,"method":"fixture","params":{}});
+        client.send_json(&message, 3).await.unwrap();
+        let reply = client.read_text().await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&reply).unwrap(),
+            message
         );
-        assert!(tail.is_empty());
-        let frame = [0x01, 0x02, 0x03, 0x04, 0x80, 0x7f, 0x00, 0xff];
-        client.write_all(&frame).await.unwrap();
-        let mut reply = [0_u8; 8];
-        client.read_exact(&mut reply).await.unwrap();
-        assert_eq!(reply, frame);
         drop(client);
-        assert_eq!(upstream.await.unwrap(), frame);
+        assert_eq!(upstream.await.unwrap().as_bytes(), reply);
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn local_events_fan_out_without_reaching_stock() {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::{WebSocketStream, tungstenite::protocol::Role};
+        let directory = tempdir().unwrap();
+        let socket = directory.path().join("stock.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let backend = tokio::spawn(async move {
+            let mut peers = Vec::new();
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                read_head(&mut stream).await.unwrap();
+                stream.write_all(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: fixture\r\n\r\n").await.unwrap();
+                peers.push(WebSocketStream::from_raw_socket(stream, Role::Server, None).await);
+            }
+            // Each stock peer sees only its original RPC, never the application event.
+            for mut peer in peers {
+                let message = peer.next().await.unwrap().unwrap();
+                assert_eq!(
+                    message.to_text().unwrap(),
+                    r#"{"method":"fixture","params":{}}"#
+                );
+                peer.send(message).await.unwrap();
+            }
+        });
+        let events = directory.path().join("events/events.sock");
+        let config = Config::new(&socket, TOKEN)
+            .unwrap()
+            .with_event_socket(&events)
+            .unwrap();
+        let tcp = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = tcp.local_addr().unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(serve(tcp, config, async {
+            let _ = stopped.await;
+        }));
+        let mut first = RawWebSocket::connect(address).await.unwrap();
+        let mut second = RawWebSocket::connect(address).await.unwrap();
+        events::publish(&events).await.unwrap();
+        for client in [&mut first, &mut second] {
+            let notice = timeout(Duration::from_secs(2), client.read_text())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(notice, events::NOTICE.as_bytes());
+            client
+                .send_json(&serde_json::json!({"method":"fixture","params":{}}), 4)
+                .await
+                .unwrap();
+        }
+        for client in [&mut first, &mut second] {
+            assert_eq!(
+                client.read_text().await.unwrap(),
+                br#"{"method":"fixture","params":{}}"#
+            );
+        }
+        backend.await.unwrap();
+        drop(first);
+        drop(second);
+        stop.send(()).unwrap();
+        server.await.unwrap().unwrap();
     }
 
     #[tokio::test]

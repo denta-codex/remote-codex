@@ -75,6 +75,13 @@
     backup: true
   register: installed_forwarder
   notify: Restart forwarder
+- name: Install metadata event CLI
+  ansible.builtin.copy:
+    src: "{{ repo }}/dist/remote-codex"
+    dest: /home/agent/.local/bin/remote-codex
+    mode: '0700'
+    backup: true
+  register: installed_event_cli
 - name: Install user service
   ansible.builtin.template:
     src: remote-codex-forwarder.service.j2
@@ -132,6 +139,13 @@
   changed_when: false
   no_log: true
   when: not ansible_check_mode
+- name: Verify metadata event publication
+  ansible.builtin.command:
+    argv: [/home/agent/.local/bin/remote-codex, notify, credential-requests-changed]
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ user_id.stdout }}"
+  changed_when: false
+  when: not ansible_check_mode
 - name: Report Todo cutover recovery files
   ansible.builtin.debug:
     msg:
@@ -142,5 +156,5 @@
   ansible.builtin.file:
     path: "{{ item }}"
     state: absent
-  loop: "{{ [installed_forwarder.backup_file | default(''), installed_service.backup_file | default('')] | reject('equalto', '') | list }}"
+  loop: "{{ [installed_forwarder.backup_file | default(''), installed_service.backup_file | default(''), installed_event_cli.backup_file | default('')] | reject('equalto', '') | list }}"
   when: not ansible_check_mode

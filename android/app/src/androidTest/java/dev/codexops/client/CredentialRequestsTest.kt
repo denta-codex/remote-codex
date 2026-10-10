@@ -1,10 +1,12 @@
 package dev.codexops.client
 
 import android.content.Intent
+import android.text.method.PasswordTransformationMethod
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.TextView
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -44,6 +46,92 @@ class CredentialRequestsTest {
     private fun buttons(view: View, name: String): List<Button> = buildList {
         if (view is Button && view.text.toString() == name) add(view)
         if (view is ViewGroup) for (i in 0 until view.childCount) addAll(buttons(view.getChildAt(i), name))
+    }
+    private fun text(view: View, value: String): TextView? {
+        if (view is TextView && view.text.toString() == value && view.isShown) return view
+        if (view is ViewGroup) for (i in 0 until view.childCount) text(view.getChildAt(i), value)?.let { return it }
+        return null
+    }
+
+    @Test fun soleRequestOpensFocusedCardWithoutAnotherSelection() {
+        MockWebServer().use { server ->
+            val reads = AtomicInteger()
+            val writes = AtomicInteger()
+            val listener = object : WebSocketListener() {
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(1000, "") }
+                override fun onMessage(webSocket: WebSocket, value: String) {
+                    val message = wire.parseToJsonElement(value).jsonObject
+                    if (message.str("method") in listOf("get", "list")) reads.incrementAndGet() else writes.incrementAndGet()
+                    webSocket.send(obj("version" to JsonPrimitive(1), "id" to message["id"], "requests" to JsonArray(listOf(request()))).toString())
+                }
+            }
+            repeat(6) { server.enqueue(MockResponse().withWebSocketUpgrade(listener)) }
+            server.start()
+            ActivityScenario.launch<CredentialRequestsActivity>(fixture(server)).use { scenario ->
+                awaitUi(scenario) { it.secret.isEnabled && reads.get() >= 2 }
+                scenario.onActivity { activity ->
+                    val root = activity.window.decorView
+                    assertNotNull(text(root, "Credential request"))
+                    assertNotNull(text(root, "Fake token"))
+                    assertNotNull(text(root, "Requested field"))
+                    assertNotNull(text(root, "agent on fixture"))
+                    assertNotNull(text(root, "test.1password.com"))
+                    assertNotNull(text(root, "Expires in"))
+                    assertTrue(root.findViewWithTag<View>("credential-request-card").isShown)
+                    assertFalse(button(root, "Release once")!!.isEnabled)
+                    assertNull(button(root, "Choose in 1Password"))
+                    activity.secret.requestFocus()
+                    assertTrue(activity.secret.hasFocus())
+                    activity.secret.autofill(android.view.autofill.AutofillValue.forText("HARMLESS_CARD_VALUE"))
+                    assertTrue(activity.secret.transformationMethod is PasswordTransformationMethod)
+                    val peek = (activity.secret.parent as ViewGroup).getChildAt(1)
+                    assertEquals("Show password", peek.contentDescription)
+                    peek.performClick()
+                    assertNull(activity.secret.transformationMethod)
+                    assertEquals("Hide password", peek.contentDescription)
+                    peek.performClick()
+                    assertTrue(activity.secret.transformationMethod is PasswordTransformationMethod)
+                    peek.performClick()
+                    activity.secret.text.clear()
+                    assertTrue(activity.secret.transformationMethod is PasswordTransformationMethod)
+                    assertEquals("Show password", peek.contentDescription)
+                    activity.secret.setText("HARMLESS_CARD_VALUE")
+                    assertTrue(button(root, "Release once")!!.isEnabled)
+                    assertEquals(0, writes.get()) // Selecting a value is never approval.
+                }
+            }
+        }
+    }
+
+    @Test fun multipleRequestsKeepSelectionAndBackNavigationClearsValues() {
+        MockWebServer().use { server ->
+            val first = request()
+            val second = JsonObject(first + ("id" to s("second-request")) + ("item" to s("Second token")))
+            val listener = object : WebSocketListener() {
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(1000, "") }
+                override fun onMessage(webSocket: WebSocket, value: String) {
+                    val message = wire.parseToJsonElement(value).jsonObject
+                    val entries = if (message.str("method") == "get") listOf(if (message.str("request_id") == "second-request") second else first)
+                        else listOf(first, second)
+                    webSocket.send(obj("version" to JsonPrimitive(1), "id" to message["id"], "requests" to JsonArray(entries)).toString())
+                }
+            }
+            repeat(6) { server.enqueue(MockResponse().withWebSocketUpgrade(listener)) }
+            server.start()
+            ActivityScenario.launch<CredentialRequestsActivity>(fixture(server)).use { scenario ->
+                awaitUi(scenario) { button(it.window.decorView, "Second token / password")?.isShown == true }
+                scenario.onActivity {
+                    assertFalse(it.secret.isEnabled)
+                    button(it.window.decorView, "Second token / password")!!.performClick()
+                    assertNotNull(text(it.window.decorView, "Second token"))
+                    it.secret.setText("TRANSIENT_CARD_VALUE")
+                    button(it.window.decorView, "Back to requests")!!.performClick()
+                    assertTrue(it.secret.text.isNullOrEmpty())
+                }
+                awaitUi(scenario) { button(it.window.decorView, "Fake token / password")?.isShown == true }
+                scenario.onActivity { assertFalse(it.secret.isEnabled) }
+            }
+        }
     }
     private class BatchFixture : AutoCloseable {
         val server = MockWebServer()
@@ -123,7 +211,11 @@ class CredentialRequestsTest {
                     buttons(it.window.decorView, "Use empty value").last().performClick()
                     assertTrue(submit.isEnabled)
                     assertTrue(it.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
-                    it.batchSecrets.values.forEach { input -> assertFalse(input.isSaveEnabled); assertFalse(input.isSaveFromParentEnabled) }
+                    assertTrue(buttons(it.window.decorView, "Choose in 1Password").isEmpty())
+                    it.batchSecrets.values.forEach { input ->
+                        assertFalse(input.isSaveEnabled); assertFalse(input.isSaveFromParentEnabled)
+                        assertTrue(input.transformationMethod is PasswordTransformationMethod)
+                    }
                     submit.performClick(); submit.performClick()
                     assertTrue(it.batchSecrets.values.all { input -> input.text.isNullOrEmpty() })
                     assertFalse(submit.isEnabled)
@@ -145,10 +237,12 @@ class CredentialRequestsTest {
                 assertTrue(backend.connected.await(10, TimeUnit.SECONDS))
                 scenario.onActivity {
                     it.selectRequest(backend.request())
-                    buttons(it.window.decorView, "Choose in 1Password").last().performClick()
+                    it.batchSecrets.getValue("f2").requestFocus()
                     assertTrue(it.batchSecrets.getValue("f2").hasFocus())
                     assertFalse(it.batchSecrets.getValue("f2").showSoftInputOnFocus)
                     it.batchSecrets.getValue("f2").setText("PICKER_FIXTURE")
+                    (it.batchSecrets.getValue("f2").parent as ViewGroup).getChildAt(1).performClick()
+                    assertNull(it.batchSecrets.getValue("f2").transformationMethod)
                     buttons(it.window.decorView, "Use empty value").first().performClick()
                     assertTrue(button(it.window.decorView, "Release all once")!!.isEnabled)
                     runBlocking {
@@ -158,7 +252,11 @@ class CredentialRequestsTest {
                 scenario.moveToState(Lifecycle.State.CREATED)
                 scenario.moveToState(Lifecycle.State.RESUMED)
                 awaitUi(scenario) { button(it.window.decorView, "Release all once")?.isEnabled == true }
-                scenario.onActivity { assertEquals("PICKER_FIXTURE", it.batchSecrets.getValue("f2").text.toString()) }
+                scenario.onActivity {
+                    assertEquals("PICKER_FIXTURE", it.batchSecrets.getValue("f2").text.toString())
+                    assertTrue(it.batchSecrets.getValue("f2").transformationMethod is PasswordTransformationMethod)
+                    assertEquals("Show password", (it.batchSecrets.getValue("f2").parent as ViewGroup).getChildAt(1).contentDescription)
+                }
                 scenario.recreate()
                 scenario.onActivity {
                     it.selectRequest(backend.request())

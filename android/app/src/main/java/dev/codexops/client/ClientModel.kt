@@ -69,6 +69,19 @@ constructor(
     private val chatCosts = ChatCostController(viewModelScope, StockChatAccounting(rpc),
         { rpc.generation }, { _state.value }, { modelEnrichment.catalogModels },
         { cost -> _state.update { it.copy(chatCost = cost) } })
+    private val credentialAlerts = CredentialAlertController(viewModelScope,
+        { rpc.generation }, { foreground && _state.value.ready },
+        {
+            val connection = ApprovalConnection(allowLoopbackTest)
+            try {
+                connection.connect(host.endpoint, local.token())
+                connection.call("list")
+            } catch (error: ApprovalFailure) {
+                if (error.kind == "no_session") obj("requests" to JsonArray(emptyList())) else throw error
+            } finally { connection.close() }
+        }, { notice -> _state.update { it.copy(credentialNotice = notice) } })
+    internal fun dismissCredentialNotice(id: Long) = credentialAlerts.dismiss(id)
+    internal fun refreshCredentialRequests() = credentialAlerts.refresh()
     private val weeklyUsage = WeeklyUsageController(viewModelScope, rpc, { _state.value },
         { usage -> _state.update { it.copy(weeklyUsage = usage) } })
     override fun refreshWeeklyUsage() = weeklyUsage.refresh()
@@ -389,16 +402,22 @@ constructor(
         val reopening = value && !foreground
         if (!value) cancelStreamingHaptics()
         foreground = value
+        if (!value) credentialAlerts.stopped()
         _state.update { it.copy(appForeground = value) }
         if (value) UpdateInstallResults.consume(getApplication())?.let(::applyInstallResult)
         if (value && !_state.value.ready && !automaticReconnectBlocked) connect()
         if (reopening && _state.value.ready && !_state.value.busy) followUps.opened()
+        if (reopening && _state.value.ready) credentialAlerts.refresh()
     }
 
     override fun connect() {
         reports.actions.add("connect")
         if (connectionJob?.isActive == true || _state.value.busy) return
         automaticReconnectBlocked = false
+        // Restore only the selection owned by this connection attempt. A reader
+        // can open another thread after ready becomes true during project setup.
+        val reconnectThread = _state.value.thread
+        val reconnectSelection = selection
         cancelStreamingHaptics()
         connectionJob =
             viewModelScope.launch {
@@ -466,14 +485,16 @@ constructor(
                             )
                         }
                         refreshProjects()
+                        credentialAlerts.refresh()
                         viewModelScope.launch { refreshModelCatalog() }
                         cancelList()
                         launchList()
-                        val id = _state.value.thread
-                        if (id != null && _state.value.page == "chat") launchHistory {
+                        val id = reconnectThread
+                        if (id != null && _state.value.thread == id && selection == reconnectSelection &&
+                            _state.value.page == "chat") launchHistory {
                             if (recoveryHistory?.thread == id) resumeRecovery(id) else loadTask(id)
                         }.join()
-                        else if (_state.value.page == "chat") recoverNew()
+                        else if (id == null && _state.value.thread == null && _state.value.page == "chat") recoverNew()
                         return@launch
                     } catch (e: Exception) {
                         if (e is CancellationException) throw e
@@ -2685,6 +2706,7 @@ constructor(
         if (event.str("_epoch").toLongOrNull()?.let { it != rpc.generation } == true) return
         if (event.str("method") == "connection/lost") {
             chatCosts.cancel()
+            credentialAlerts.stopped()
             val oversized = event.str("reason") == "messageTooLarge"
             if (oversized) historySizeRejected()
             weeklyUsage.disconnected()
@@ -2712,6 +2734,10 @@ constructor(
             if (foreground && !automaticReconnectBlocked && connectionJob?.isActive != true) {
                 connect()
             }
+            return
+        }
+        if (event.str("method") == CREDENTIAL_REQUESTS_CHANGED) {
+            credentialAlerts.refresh()
             return
         }
         if (event.str("method") == "project/changed") {

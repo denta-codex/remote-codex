@@ -4,8 +4,10 @@ An op-bridge `remote-codex` destination runs a transient phone session on the
 execution host, started by the first caller and stopped after inactivity. The
 existing Rust forwarder authenticates and relays a dedicated WSS route to that
 session's approval socket. It does not own pending requests or launch sessions.
-The app connects only while Settings → Credential requests is open. There are no
-notifications and no enabled phone-session daemon.
+The app reads pending requests while foregrounded when the forwarder sends a
+credential hint over the existing chat WebSocket, and on reconnect. A snackbar
+with **Review** opens Credential requests. The approval connection remains
+separate; there is no enabled phone-session daemon or background push.
 
 The phone destination initially supports single-field `read` and `item get`.
 Desktop destinations continue to provide vault/item listing, complete-item JSON,
@@ -22,7 +24,9 @@ to match; Autofill cannot independently prove item identity.
    `remote_codex_action=build` and an explicit prerelease version. This runs the
    required checks once.
 3. Deploy the prepared forwarder with `remote_codex_action=deploy`. Its service
-   template selects `/run/user/UID/op-bridge-phone/approval.sock` for approvals.
+   template selects `/run/user/UID/op-bridge-phone/approval.sock` for approvals
+   and `/run/user/UID/remote-codex/events.sock` for local metadata hints. Configure
+   the same path as the phone destination’s `event_socket` in op-bridge.
 4. Publish the prepared APK with `remote_codex_action=publish`. Installation stays
    user initiated. No phone remote control is required.
 5. Request a harmless value using
@@ -65,3 +69,13 @@ shell lacked user-bus environment variables. It made no installation changes;
 explicit bus addressing was added, revalidated, and the corrected deployment
 succeeded. Its staging and recovery data were cleaned by the deployment workflow.
 Actual 1Password selection and approval on the phone remains a manual user test.
+
+The approval page uses a focused request card with the requested item/field,
+caller, account and remaining time above the 1Password selection. Selected values
+stay masked. Release and Deny remain explicit separate actions; choosing a value
+never approves it. One live request opens directly after a read-only status
+check. Multiple requests retain a selection list, and Back to requests clears
+all selected values. Batch fields remain grouped by vault/item within the card.
+The page supports system light/dark appearance and scrolls for smaller screens
+and enlarged text. The protected native Autofill fields and submission state
+machine are unchanged.

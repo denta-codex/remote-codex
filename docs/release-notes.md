@@ -2,3 +2,9 @@
 - Simplify conversation loading to full-turn baseline
 - Add explicit smaller-history recovery
 - Integrate history recovery with bounded cost snapshots
+- Use focused cards for credential approvals
+- Improve socket probe diagnostics and stress recovery validation
+- Preserve reading position when sending or queuing
+- Allow discarding stuck bug reports and capture fresh report context
+- Load older history automatically with guarded retry and connection restoration
+- Mask credential fields by default with visibility toggles

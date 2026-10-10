@@ -161,7 +161,8 @@ internal fun ColumnScope.ConversationScreen(st: ScreenState, actions: Conversati
     LaunchedEffect(initiallyPositioned, st.ready, st.busy, st.historyLoading,
         st.historyFailed, st.historyRecovery, st.historyCursor, st.recoveryHasMore, upwardMotion, movingUp, nearHistory) {
         val freshMotion = upwardMotion > consumedMotion
-        if (st.historyLoading || !movingUp) consumedMotion = upwardMotion
+        // Input while paused must not become a queued fetch after explicit retry.
+        if (st.historyLoading || st.historyFailed || !movingUp) consumedMotion = upwardMotion
         if (!initiallyPositioned || !st.ready || st.busy || st.historyLoading ||
             st.historyFailed || st.historyRecovery != null ||
             (st.historyCursor == null && !st.recoveryHasMore)) return@LaunchedEffect

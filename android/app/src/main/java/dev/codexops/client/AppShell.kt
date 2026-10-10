@@ -3,6 +3,7 @@ package dev.codexops.client
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -12,6 +13,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -70,6 +73,21 @@ private fun AppContent(model: ClientModel) {
     val st by model.state.collectAsStateWithLifecycle()
     val report by model.reports.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
+    val context = LocalContext.current
+    LaunchedEffect(st.credentialNotice?.id) {
+        val notice = st.credentialNotice ?: return@LaunchedEffect
+        try {
+            val result = snackbar.showSnackbar(notice.message, actionLabel = "Review",
+                withDismissAction = true, duration = SnackbarDuration.Long)
+            if (result == SnackbarResult.ActionPerformed && model.state.value.credentialNotice?.id == notice.id) {
+                val intent = Intent(context, CredentialRequestsActivity::class.java)
+                notice.requestIds.singleOrNull()?.let { intent.putExtra("request_id", it) }
+                if (BuildConfig.DEBUG && st.host.endpoint.startsWith("ws://127.0.0.1:"))
+                    intent.putExtra("fixture_endpoint", st.host.endpoint)
+                context.startActivity(intent)
+            }
+        } finally { model.dismissCredentialNotice(notice.id) }
+    }
     BackHandler(st.page != "home") { model.back() }
     AdaptiveWindow {
         Scaffold(
@@ -92,6 +110,9 @@ private fun AppContent(model: ClientModel) {
                                 ) { Text(label) }
                             }
                             Text(data.visuals.message, Modifier.weight(1f))
+                            if (data.visuals.withDismissAction) {
+                                IconButton(onClick = data::dismiss) { Glyph(R.drawable.ic_close, "Dismiss notification") }
+                            }
                         }
                     }
                 }

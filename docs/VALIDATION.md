@@ -1,5 +1,52 @@
 # Validation
 
+## 2026-10-10 — Reviewed main integration, unreleased
+
+- Preserved sending/queuing reading position from thread
+  `01a125fd-d632-7e21-b7f2-5adf64a8d293` and stuck-report discard from
+  `01a125fd-71e2-7532-87e7-a6a94bef9b49` in main commit `6891b07`.
+  Both source threads completed their three focused emulator checks.
+- Integrated automatic upward history loading from thread
+  `01a12365-ef6b-77b3-9b7a-8a3522a2a00a` in `1bd06ba`. Committed the exact
+  reviewed source snapshot as `141cf45` on `codex/explicit-history-recovery`
+  to preserve its provenance and leave that source worktree clean.
+  Retention eviction remains disabled by the source user's explicit decision.
+- Integrated `codex/credential-request-alerts` through `d25b2f7`, from thread
+  `01a112ef-1488-7ce3-9376-3252b7f3f83d`: foreground metadata hints, focused
+  approval cards, password masking and visibility toggles. Preserved current
+  bounded cost accounting, oversized-response recovery, and version 0.4.15 (47).
+  Removed a duplicate serde declaration introduced by the automatic merge.
+- Imported catalog ownership documentation and historical validation from
+  `3396c1b` and `41bcbfc`. The branch's old whole-rollout cost fixture was
+  superseded by current bounded accounting and was not restored.
+- Integration found two races. Upward input while history loading is paused is
+  now consumed rather than becoming another fetch after explicit retry. A
+  connection attempt restores only the thread and selection it captured at
+  startup; selecting a thread during project discovery no longer starts a
+  second opening when connection setup finishes. Regression assertions cover
+  exact retry cursors and a deliberately held project lookup.
+- `scripts/check` passed: Rust format, Clippy and workspace/transport/accounting
+  fixtures; 83 core and 166 app unit tests; Android app/test compilation and lint.
+  App unit tests and lint passed again after the connection-selection fix.
+- Eleven distinct focused emulator scenarios passed across bounded runs:
+  automatic history/retry, sending while reading, queuing while reading,
+  stuck-report discard/fresh capture, credential notification, masked single
+  credential card, explicit batch release without replay, bounded cost snapshot,
+  oversized opening, explicit batch/single-item/skip recovery, and selecting a
+  conversation during connection setup. The initial history retry failure was
+  fixed; the new connection fixture was corrected to supply an opening page.
+  XML reports and build/test logs are retained under
+  `artifacts/main-integration-20261010/`.
+- Excluded superseded web Todo work (native service cutover is already on main),
+  the intentionally unmerged September machine-profile migration, and the old
+  uncommitted visualization/report snapshot based on `526912a`. Those would need
+  fresh integration and validation against the current architecture. The old
+  report-default, cover-screen and metadata-RPC changes already exist on main
+  as `3991f75`, `c101098`, and `75ef645` respectively.
+- The thread-link and iOS investigations produced no ready implementation to
+  integrate. No release, push, deployment, live mutation, phone installation,
+  authentication change, or shared toolchain configuration change was performed.
+
 ## 2026-10-10 — Automatic conversation scrollback, unreleased
 
 - Based on `f49f535` / Android 0.4.15 (47); no version bump or publication.
@@ -175,6 +222,32 @@
 - Loaded history remains in memory while the chat is open. Pagination limits
   turns rather than bytes, so an exceptionally large turn can still be costly.
 
+## 2026-10-07 — Android 0.4.13 (45)
+
+- Source revision: `06a6bce971fcac20a4e97d2184196868ad8a949c`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `98fd89434cc29b78d317dedd3331f21acddd876a28d44e7e0f0785a9e332d053`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/home/agent/.codex/worktrees/0508/remote-codex/artifacts/releases/run-20261007T153630Z-blaQ1M.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
+## 2026-10-07 — Android 0.4.12 (44)
+
+- Source revision: `9de4b1c823c749738ae501444ae3bd6a0ab637cc`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `15ddd5c93bc2c6678e57075b0e9d1dfbe9dce3dc73ce28ce2cdc8a271bb52a61`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/home/agent/.codex/worktrees/0508/remote-codex/artifacts/releases/run-20261007T150824Z-ZXt0Dq.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
+## 2026-10-07 — Android 0.4.11 (43)
+
+- Source revision: `f69892373e483f80f29bf99ff2cd463cbf950080`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `1e2353a1def350befad3a5f3f6d292a949c8c776276c031e39739a63d18b46e3`.
+- Outcome: Built and signed locally; not published.
+- Build log: `/home/agent/.codex/worktrees/0508/remote-codex/artifacts/releases/run-20261007T145847Z-DIEIkh.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
 
 ## 2026-10-06 — Android 0.4.9 (41)
 
@@ -1727,3 +1800,119 @@ gesture are still pending user-authorized live deployment and delivery.
   helper-capable forwarder must be deployed separately before distributing the
   Android change. Missing helper support shows unavailable cost without a
   whole-file fallback.
+
+### Foreground credential request alerts — 2026-10-07
+
+- Local metadata publication, permission/path rejection, stale socket recovery,
+  fanout to two chat clients, and unchanged fragmented stock payloads pass.
+- The official build caught oversized upstream frames after message reassembly.
+  Regenerating 256 KiB fragments fixed it; all 18 forwarder tests, including the
+  isolated stock Codex 20 MiB attachment round trip, pass.
+- Alert controller fixtures cover coalescing, lifetime deduplication, grouped
+  expiration, cancelled/obsolete reads, connection changes, and discovery errors.
+- Focused managed-emulator validation passed Review navigation, visible Dismiss,
+  chat streaming/reopen, protected picker handoff/recreation, and credential
+  release without replay. Initial alert fixtures needed explicit foreground
+  activation and their test-specific chat route; corrected and rerun successfully.
+- Op-bridge change `1b20930` passed Go tests, race tests, vet, package checks and
+  a Darwin cross-build. All secret interactions used disposable fixtures.
+
+### Credential alert deployment — Android 0.4.11 (43), 2026-10-07
+
+- Signed build completed with all required Rust, Kotlin, Android unit, compile,
+  lint, signing and artifact checks through the repository workflow.
+- Rust forwarder and `remote-codex notify credential-requests-changed` deployed
+  successfully on Grace. Authenticated WSS initialization/listing, shared Todo
+  access, and local metadata publication passed the deployment acceptance checks.
+- Grace op-bridge `dev-20261007-1b20930` deployed with the phone event socket at
+  `/run/user/1001/remote-codex/events.sock`. Existing default route remains `mac`.
+  Installed version/route verified; staging and recovery files removed. No other
+  op-bridge host was deployed.
+- Android 0.4.11 (43) published to the private stable channel. Authenticated HTTPS
+  manifest and full APK verification passed. Installation remains user initiated.
+- Build: `artifacts/releases/run-20261007T145847Z-DIEIkh.log`.
+  Forwarder: `artifacts/releases/run-20261007T150344Z-Zq7C4A.log`.
+  Publication: `artifacts/releases/run-20261007T150549Z-o70jWR.log`.
+
+### Focused credential request cards — 2026-10-07
+
+- Implemented the selected focused-card design with item/field, requester,
+  account, countdown, masked native Autofill selection and explicit Release/Deny.
+  Single pending requests open after a read-only get; multiple requests retain
+  a picker. Returning to the picker clears transient values.
+- Eight targeted managed-emulator cases passed across the implementation runs:
+  single-card opening, multi-request navigation, single release without replay,
+  protected picker/recreation, complete batch release, disconnect/expiry clearing,
+  malformed/oversized batch protection, and snackbar Review navigation.
+- Native password fields retain FLAG_SECURE and disabled state saving. The bridge
+  protocols, one-time submission guards, caller receipts and secret route remain
+  unchanged. No live credential request or phone installation was performed.
+
+- Initial 0.4.13 release preparation stopped on a single stale event-socket probe
+  failure before building or publishing artifacts. The failure did not reproduce
+  in isolation or the concurrent transport suite. Added fixed error categories
+  and 256 recovery cycles to the fixture; all 18 transport checks passed. No
+  endpoint protection or timeout was relaxed. Recovered only that unused version
+  reservation after confirming the private stable channel remained 0.4.12 (44)
+  and no candidate build-45 artifact existed.
+
+## Canonical catalog ownership correction — October 5, 2026
+
+- Reverted the mistaken server enrichment additions on both affected legacy
+  branches with ordinary revert commits (`b5a7609` and `90c72e2`), preserving
+  unrelated work. Removed the temporary release worktree and unused package.
+  No controller package was installed or bootstrapped.
+- Implemented enrichment in LiteLLM's shared model-refresh transaction. Runtime
+  identities use `litellm` and exact route names; upstream pricing identities are
+  separate provenance. Pricing sources cannot add models. Missing rates remain
+  unknown, and free local routes require an explicit zero-rate policy.
+- The LiteLLM offline suite ran 160 tests successfully (one optional stock error
+  presentation test skipped). Coverage includes aliases, stale retention, unknown
+  and explicit zero prices, ambiguous/malformed data, historical records,
+  concurrent edits and transaction ownership, and pricing-only publication with
+  no inference probes. Explicit pricing policies survive Claude/Modal inventory
+  generation. Official pricing table headings select tiers; unsupported tables
+  cannot inherit the preceding tier.
+- Pinned stock Codex 0.159.2 accepted enriched fixtures with identical
+  `debug models` and multi-page `model/list` results. `config/read` discovered
+  the catalog path and stock `fs/readFile` returned the exact published bytes in
+  an isolated app server. No inference or account reads were used.
+- An isolated enriched copy of the current 26-row catalog, using fetched public
+  source copies, preserved every stock field. It had 19 priced records and seven
+  unknown records; the active catalog was not modified.
+- Focused managed Android 16 tests passed for stock file reads/stale cache and
+  the cost badge. The badge fixture now uses provider `litellm`, the actual
+  `chatgpt/` route namespace, and separate upstream provenance, and verifies
+  history updates, stale estimates, unknown pricing, and unchanged stock reads.
+- Ansible syntax checks passed for deploy, subscription refresh, Claude, and
+  Modal workflows. The Rust forwarder and Android application identity are
+  unchanged. The feature has no active legacy-tool dependency.
+- Rollout is paused at the user's request. Deployment, live model refresh,
+  active-catalog enrichment, and the installed phone's badge acceptance remain
+  pending. No release, service restart, or phone installation was performed.
+
+### Catalog rollout completed — October 5, 2026
+
+- Deployed LiteLLM through its existing Ansible workflow and ran the explicit
+  subscription refresh. Stock model availability/capabilities were unchanged and
+  no inference probes were required for that pricing-only publication.
+- The first public models.dev fetch returned HTTP 403 for urllib's default
+  client identifier. An explicit `litellm-deploy-model-refresh/1` User-Agent
+  succeeded; the fix and bounded-fetch regression passed the 12 focused pricing
+  and stock-RPC tests, then were committed and deployed.
+- Deployment's snapshot guard detected pre-existing Claude Fast-tier metadata
+  drift after installing the committed provider source. Reconciled that entry
+  through `deploy/claude.yml`; its live Claude and shared-search validation
+  passed before publication. No routes changed. Final deployment and liveness
+  checks passed; no refresh recovery remains pending.
+- Read the active catalog through the actual Grace stock `config/read` and
+  `fs/readFile` RPCs and paged `model/list`. Verified 19 priced records, both
+  public sources, zero stale records, exact `litellm` identities, and the active
+  `chatgpt/gpt-6.1-sol` route's price. Seven records remain explicitly unknown.
+- Android 0.4.5 (37) was published to the private stable update channel. The
+  release workflow verified its authenticated served manifest and full APK and
+  recorded release commit `1205e38`. Installation remains user initiated.
+- Grace requires a restart/reconnect through the owning Codex desktop to load
+  the reconciled Claude Fast-tier metadata. An OS reboot is unnecessary. No
+  legacy controller was installed or bootstrapped, and the forwarder was not
+  modified or redeployed.

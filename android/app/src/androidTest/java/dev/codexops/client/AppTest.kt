@@ -1000,6 +1000,44 @@ class AppTest {
     @Volatile private var fastModelAvailable = true
     @Volatile private var rejectModelList = false
     @Volatile private var peer: WebSocket? = null
+    @Volatile private var credentialPending = false
+    private val credentialReads = java.util.concurrent.atomic.AtomicInteger()
+    private val credentialWrites = java.util.concurrent.atomic.AtomicInteger()
+
+    @Test fun credentialEventShowsReviewAndOpensPendingRequest() {
+        compose.runOnUiThread { model.foreground(true) }
+        compose.waitUntil(15000) { model.state.value.ready && peer != null && credentialReads.get() > 0 }
+        compose.onNodeWithText("Credential approval needed").assertDoesNotExist()
+        credentialPending = true
+        emit(peer!!, CREDENTIAL_REQUESTS_CHANGED, obj())
+        compose.waitUntil(10000) { model.state.value.credentialNotice != null }
+        compose.onNodeWithText("Credential approval needed").assertIsDisplayed()
+        val instrumentation = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
+        val monitor = instrumentation.addMonitor(CredentialRequestsActivity::class.java.name, null, false)
+        try {
+            compose.onNodeWithText("Review").performClick()
+            val activity = instrumentation.waitForMonitorWithTimeout(monitor, 10000)
+            org.junit.Assert.assertNotNull(activity)
+            org.junit.Assert.assertEquals("fixture-credential", activity.intent.getStringExtra("request_id"))
+            instrumentation.runOnMainSync { activity.finish() }
+            org.junit.Assert.assertEquals(0, credentialWrites.get())
+        } finally { instrumentation.removeMonitor(monitor) }
+    }
+
+    @Test fun credentialHintsCoalesceAndDismissedRequestStaysQuiet() {
+        compose.runOnUiThread { model.foreground(true) }
+        compose.waitUntil(15000) { model.state.value.ready && peer != null && credentialReads.get() > 0 }
+        credentialPending = true
+        repeat(20) { emit(peer!!, CREDENTIAL_REQUESTS_CHANGED, obj()) }
+        compose.waitUntil(10000) { model.state.value.credentialNotice != null }
+        compose.onNodeWithContentDescription("Dismiss notification").performClick()
+        val baseline = credentialReads.get()
+        emit(peer!!, CREDENTIAL_REQUESTS_CHANGED, obj())
+        compose.waitUntil(10000) { credentialReads.get() > baseline }
+        compose.waitForIdle()
+        org.junit.Assert.assertNull(model.state.value.credentialNotice)
+        org.junit.Assert.assertEquals(0, credentialWrites.get())
+    }
     @Volatile private var acceptedText = ""
     @Volatile private var acceptedInput = JsonArray(emptyList())
     private val remoteFiles = ConcurrentHashMap<String, String>()
@@ -1043,6 +1081,8 @@ class AppTest {
     @Volatile private var rejectQueueRead = false
     private val userInputResponses = CopyOnWriteArrayList<JsonObject>()
     private val serverRequestResponses = CopyOnWriteArrayList<JsonObject>()
+    @Volatile private var holdProjectReply = false
+    private val heldProjectRequests = CopyOnWriteArrayList<JsonElement>()
     @Volatile private var holdHistoryReply = false
     @Volatile private var historyReplyExemption: String? = null
     private val heldHistoryRequests = CopyOnWriteArrayList<JsonElement>()
@@ -1142,7 +1182,7 @@ class AppTest {
                         .withWebSocketUpgrade(
                             object : WebSocketListener() {
                                 override fun onOpen(webSocket: WebSocket, response: Response) {
-                                    if (request.path != "/remote-codex/v1/todo") peer = webSocket
+                                    if (request.path in setOf("/rpc", "/codex/rpc")) peer = webSocket
                                 }
 
                                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -1153,6 +1193,16 @@ class AppTest {
                                     val m = wire.parseToJsonElement(text).jsonObject
                                     val method = m.str("method")
                                     val params = m.map("params")
+                                    if (request.path == "/remote-codex/v1/credentials") {
+                                        if (method in listOf("list", "get")) credentialReads.incrementAndGet()
+                                        else credentialWrites.incrementAndGet()
+                                        val pending = obj("id" to s("fixture-credential"), "state" to s("pending"),
+                                            "deadline" to JsonPrimitive(System.currentTimeMillis() + 60000),
+                                            "label" to s("Fixture credential request"), "items" to JsonArray(emptyList()))
+                                        ws.send(obj("version" to JsonPrimitive(1), "id" to m["id"],
+                                            "requests" to JsonArray(if (credentialPending) listOf(pending) else emptyList())).toString())
+                                        return
+                                    }
                                     if (request.path == "/remote-codex/v1/todo") {
                                         val result = browserResponse?.invoke(method, params) ?: obj("tasks" to JsonArray(emptyList()))
                                         ws.send(obj("jsonrpc" to s("2.0"), "id" to m["id"], "result" to result).toString())
@@ -1224,6 +1274,10 @@ class AppTest {
                                             heldFollowUpRequests.add(m)
                                             return
                                         }
+                                    }
+                                    if (method == "project/list" && holdProjectReply) {
+                                        heldProjectRequests.add(m["id"]!!)
+                                        return
                                     }
                                     if (method == "thread/turns/list" && holdHistoryReply && params.str("threadId") != historyReplyExemption) {
                                         heldHistoryRequests.add(m.getValue("id"))
@@ -2734,6 +2788,27 @@ class AppTest {
     }
 
     @Test
+    fun openingDuringConnectionSetupResumesSelectedThreadOnlyOnce() {
+        approvalResumePage = obj("data" to JsonArray(longHistory().list("data").take(1)))
+        val before = threadResumes.get()
+        val listCalls = browserCalls.count { it.first == "thread/list" }
+        holdProjectReply = true
+        compose.runOnUiThread { model.connect() }
+        compose.waitUntil(5000) { heldProjectRequests.isNotEmpty() && model.state.value.ready }
+        compose.runOnUiThread { model.openTask("task-test") }
+        compose.waitUntil(10000) { !model.state.value.historyLoading && model.state.value.entries.isNotEmpty() }
+        assertEquals(before + 1, threadResumes.get())
+        holdProjectReply = false
+        peer!!.send(obj("id" to heldProjectRequests.single(), "result" to obj(
+            "data" to JsonArray(emptyList()))).toString())
+        compose.waitUntil(5000) { browserCalls.count { it.first == "thread/list" } > listCalls }
+        compose.waitForIdle()
+        assertEquals("Finishing connection setup must not open the new selection again",
+            before + 1, threadResumes.get())
+        assertEquals("task-test", model.state.value.thread)
+    }
+
+    @Test
     fun conversationOpensFromResumePageWithoutWaitingForOlderHistory() {
         historyOverride = obj("data" to JsonArray(listOf(obj(
             "id" to s("earlier-turn"), "status" to s("completed"),
@@ -2805,7 +2880,10 @@ class AppTest {
         compose.onNodeWithText("Retry loading earlier messages").performScrollTo().assertIsDisplayed()
         holdHistoryReply = false
         compose.onNodeWithText("Retry loading earlier messages").performClick()
-        compose.waitUntil(5000) { cursors.size == 3 && !model.state.value.historyLoading }
+        compose.waitUntil(5000) { cursors.size >= 3 && !model.state.value.historyLoading }
+        compose.waitForIdle()
+        assertEquals("Retry must not replay upward input received while loading was paused",
+            listOf("page-1", "page-2", "page-3"), cursors.toList())
         compose.runOnUiThread { model.home() }
         compose.waitUntil(5000) { model.state.value.page == "home" }
         assertTrue(model.state.value.entries.isEmpty())
@@ -2953,7 +3031,10 @@ class AppTest {
             assertEquals("live-model", model.state.value.threadModel)
             val staleApproval = model.state.value.decisions.single()
             assertTrue(model.state.value.fileApprovalContexts.getValue(staleApproval.key).text.isBlank())
-            assertEquals(2, resumeParams.size)
+            assertEquals("Recovery must resume once without repeating the full opening",
+                listOf("full", "metadata"), resumeParams.map {
+                    if (it.containsKey("initialTurnsPage")) "full" else "metadata"
+                })
             assertFalse(resumeParams.last().containsKey("initialTurnsPage"))
             assertEquals("true", resumeParams.last().str("excludeTurns"))
             if (oversizedOpening) {

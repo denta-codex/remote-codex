@@ -10,8 +10,10 @@ a dedicated SQLite database.
 The forwarder also removes WebSocket extension offers: the stock control socket
 closes handshakes offering `permessage-deflate`. Android does not offer extensions,
 and the forwarder strips them defensively before the stock handshake. After the
-upgrade, Rust copies bytes without decoding WebSocket messages, preserving client
-fragment boundaries and backpressure.
+upgrade, Rust relays complete WebSocket messages with unchanged stock payloads
+and bounded writes. It also inserts metadata-only credential invalidations on
+this connection; stock Codex remains unchanged. See
+`protocol/credential-approvals.md` for the local event socket and alert contract.
 
 Android owns presentation, encrypted connection credentials, drafts, and submission
 records. Stock Codex owns execution, configuration, task IDs and durable history.
@@ -487,9 +489,19 @@ Model enrichment deliberately happens in Android. Stock `model/list` remains the
 authority for the active runtime's model inventory, ordering, and capabilities.
 Codex ignores custom catalog fields when constructing that response. Enriching
 `model/list` on the server would require the Rust forwarder to decode and rewrite
-RPC; its byte-copy transport remains unchanged. After publishing the stock list,
+RPC; the forwarder preserves stock RPC payloads. After publishing the stock list,
 Android discovers `model_catalog_json` through `config/read`, then reads the
 enriched catalog with stock `fs/readFile` over WSS. No host command is executed.
+
+LiteLLM's existing model-refresh workflow owns the canonical server catalog at
+`~/.config/litellm/codex-models.json`. Pricing is embedded in that document;
+there is no controller command or separate pricing snapshot. Enrichment records
+use provider `litellm` and actual route names (`chatgpt/...`, `claude/...`,
+`modal/...`); upstream pricing identities are separate provenance, never client
+matching keys. Official OpenAI rates and models.dev supply pricing only, while
+validated inventories continue to own availability and capabilities. Explicit
+server refresh publishes stock-validated candidates through LiteLLM's existing
+transaction; pricing-only changes require no inference probes or service restart.
 
 The server catalog embeds versioned `remote_codex` metadata with a content revision,
 provider-qualified model identities, explicit aliases, and optional USD pricing
@@ -571,7 +583,7 @@ recovery; remove them once recovery and verification are complete.
 The Todo destination is a Compose board, independent of Codex chat tasks. It
 connects over authenticated WSS to `/remote-codex/v1/todo` on the existing Rust
 service. This route terminates WebSockets and handles application-owned JSON-RPC;
-`/codex/rpc` remains transparent stock forwarding. Todo does not initialize a
+`/codex/rpc` preserves stock payloads and also carries server-generated credential hints. Todo does not initialize a
 Codex session or execute commands through Codex. Its connection availability is
 independent of the stock connection. There is no temporary board server or preview.
 
