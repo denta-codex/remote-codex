@@ -28,7 +28,10 @@ stage() {
     printf '%s\t%s\t%s\n' "$name" "$((SECONDS-start))" "$status" >> "$output/report/durations.tsv"
     # Only unsigned fixture jobs expose diagnostics. Signed logs can name identities/profiles.
     if [[ "$status" != 0 && "$action" == check ]]; then
-        tail -n 100 "$output/$name.log" > "$output/report/$name-failure.log"
+        {
+            awk '/error:|fatal error:|XCTAssert.*failed/ {print substr($0,1,600); count++; if(count>=30) exit}' "$output/$name.log"
+            tail -n 50 "$output/$name.log" | awk '{print substr($0,1,600)}'
+        } > "$output/report/$name-failure.log"
         cat "$output/report/$name-failure.log"
     fi
     return "$status"
@@ -61,7 +64,7 @@ sim="$(xcrun simctl create "RemoteCodex-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" 
 stage simulator-boot xcrun simctl bootstatus "$sim" -b
 args=(-project ios/RemoteCodex.xcodeproj -scheme RemoteCodex -configuration Debug
     -destination "platform=iOS Simulator,id=$sim" -destination-timeout 60
-    -derivedDataPath "$output/DerivedData" CODE_SIGNING_ALLOWED=NO)
+    -derivedDataPath "$output/DerivedData" CODE_SIGNING_ALLOWED=NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES)
 stage simulator-build xcodebuild "${args[@]}" build-for-testing
 stage fixture-ui-tests xcodebuild "${args[@]}" test-without-building \
     -resultBundlePath "$output/Tests.xcresult" \
