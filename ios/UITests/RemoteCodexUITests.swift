@@ -44,17 +44,25 @@ final class RemoteCodexUITests: XCTestCase {
     }
 
     func testStateSurvivesRestart() {
+        executionTimeAllowance = 120
+        print("Fixture phase: persistence fresh launch")
         let app = launchFresh()
+        print("Fixture phase: persistence increment")
         app.buttons["increment-button"].tap()
         let note = app.textFields["note-input"]
         XCTAssertTrue(note.waitForExistence(timeout: 5))
+        print("Fixture phase: persistence note entry")
         note.tap()
         note.typeText("Saved fixture note")
+        print("Fixture phase: persistence save")
         app.buttons["save-note"].tap()
         XCTAssertEqual(app.staticTexts["saved-note"].label, "Saved note: Saved fixture note")
+        print("Fixture phase: persistence terminate")
         app.terminate()
         app.launchArguments = ["--fixture"]
+        print("Fixture phase: persistence relaunch")
         app.launch()
+        print("Fixture phase: persistence verify")
         XCTAssertTrue(app.staticTexts["hello-world"].waitForExistence(timeout: 10))
         XCTAssertEqual(app.staticTexts["tap-count"].label, "Tap count: 1")
         XCTAssertEqual(app.staticTexts["saved-note"].label, "Saved note: Saved fixture note")

@@ -38,7 +38,8 @@ file. All three flags are required. The persistence test relaunches with
 `--fixture` alone, retaining its data. Physical acceptance must use `--fixture`
 alone; never reset or uninstall between restart/upgrade checks.
 
-Tests run serially with 60-second normal and 90-second maximum per-test allowances;
+Tests run serially with a 60-second default allowance. The restart test explicitly
+allows 120 seconds for two launches, with a 120-second maximum for any test;
 the GitHub job has a 25-minute limit. The owned simulator is deleted on exit.
 Each run records its source SHA, attempt, runner image, test counts, stage timings,
 and three selected synthetic screenshots: `fixture-launch.png`,
@@ -50,6 +51,14 @@ tests passing with no skips, and all three screenshots. Missing evidence fails
 the job rather than producing a false success. Inspect the screenshots before
 accepting the exact revision. One passing run proves that run; repeatability and
 physical automation remain separate acceptance checks.
+
+On UI failure, the report also retains a bounded 500-line fixture-only timeline
+and up to 128 KiB of each known fixture case's watchdog spindump. Persistence
+phase markers identify the action in progress when a timeout occurs. The first
+two unsigned runs established compilation, all six storage tests, launch, taps,
+and text entry/save; the second run's restart case exceeded its original
+60-second allowance. Keep that failure as historical evidence; the revised
+source requires its own passing bounded restart test and all three screenshots.
 
 ## Signed physical testing: next gate
 

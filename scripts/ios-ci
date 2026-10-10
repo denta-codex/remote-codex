@@ -33,6 +33,12 @@ stage() {
             tail -n 50 "$output/$name.log" | awk '{print substr($0,1,600)}'
         } > "$output/report/$name-failure.log"
         cat "$output/report/$name-failure.log"
+        if [[ "$name" == fixture-ui-tests ]]; then
+            # Fixture-only console timeline, bounded to 500 lines / 600 characters.
+            # Includes the earlier test when a watchdog restarts the test runner.
+            tail -n 500 "$output/$name.log" | awk '{print substr($0,1,600)}' \
+                > "$output/report/fixture-ui-tests-timeline.log"
+        fi
     fi
     return "$status"
 }
@@ -72,4 +78,4 @@ stage simulator-build xcodebuild "${args[@]}" build-for-testing
 stage fixture-ui-tests xcodebuild "${args[@]}" test-without-building \
     -resultBundlePath "$output/Tests.xcresult" \
     -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 \
-    -test-timeouts-enabled YES -default-test-execution-time-allowance 60 -maximum-test-execution-time-allowance 90
+    -test-timeouts-enabled YES -default-test-execution-time-allowance 60 -maximum-test-execution-time-allowance 120

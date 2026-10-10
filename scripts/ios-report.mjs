@@ -52,6 +52,11 @@ if (existsSync(result)) {
       for (const attachment of attachments) {
       const name = attachment.suggestedHumanReadableName ?? attachment.name ?? '';
       attachmentNames.push({name, file: attachment.exportedFileName});
+      if (identity.status === 'failure' && kind && /spindump/i.test(name) &&
+          /\.txt$/i.test(attachment.exportedFileName ?? '')) {
+        const diagnostic = readFileSync(path.join(output, 'attachments', path.basename(attachment.exportedFileName)), 'utf8');
+        writeFileSync(path.join(report, 'fixture-' + kind + '-spindump.txt'), diagnostic.slice(0, 128 * 1024));
+      }
       const match = name.match(/fixture-(launch|interaction|persistence)(?=[^a-z]|$)/);
       if (!match || !attachment.exportedFileName) continue;
       const {copyFileSync} = await import('node:fs');
