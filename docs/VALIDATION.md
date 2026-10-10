@@ -1,5 +1,17 @@
 # Validation
 
+## History recovery and cost snapshot integration
+
+- Integrated recovery commit `1808b2e` and cleanup baseline `2940ea8`
+  with bounded cost snapshot commit `9193c47`.
+- Resolved shared lifecycle changes by retaining the cancellable recovery
+  loader and the new cost controller, without restoring the retired loader.
+  Metadata-only recovery supplies the rollout path to the bounded cost
+  controller after opening; conversation loading never waits for accounting.
+- The focused managed-emulator tests for explicit recovery, navigation/late
+  replies, and bounded opening-time accounting all passed after the merge.
+  Results are under `artifacts/history-recovery-validation/merge-*.xml`.
+
 ## Explicit smaller-history recovery — unreleased
 
 - Cleanup baseline committed as `2940ea8` (Android remains 0.4.14 / build 46).
@@ -1653,3 +1665,33 @@ gesture are still pending user-authorized live deployment and delivery.
   uncertain submission was replayed. Saved-report recreation and a full-size
   file transfer were deferred when integration requested stopping further
   validation. No release was published, forwarder deployed, or phone app installed.
+
+## October 9, 2026 — bounded cost snapshots on thread open
+
+- Replaced automatic cost rollout downloads from 0.4.14 (`d6ce9ee`) with the
+  existing Rust executable's read-only `accounting` subcommand through stock
+  `command/exec`. No new endpoint or stock RPC rewriting. Cost snapshots do not
+  refresh on usage, settings or completion notifications.
+- Rust accounting tests cover synthetic rollouts of 54,944,707 and 114,965,362
+  bytes, bounded batches/responses, mixed model/provider/tier attribution,
+  per-request context bands, cumulative deduplication, partial appends, snapshot
+  boundaries, invalid counters, gaps, replacement/truncation/rewrite detection,
+  oversized accounting and bucket limits. No live rollout was read by these tests.
+- Rust workspace tests and Clippy passed. The executable integration tests passed
+  without forwarder credentials and through an unchanged forwarder attached to a
+  disposable stock Codex 0.159.2 fixture. Fixture provider/network access is
+  disabled; no live account session or inference turn was used.
+- Android unit tests, debug instrumentation assembly and lint passed. The focused
+  managed-emulator test
+  `AppTest#chatCostSnapshotUsesBoundedHelperOnlyOnOpenAndShowsUnavailableIcon`
+  passed: spinner, estimate labelled at open, no rollout download, no extra cost
+  requests after repeated notifications, red unavailable/retry icon, catalog
+  repricing without scans, and new-chat cleanup. Controller unit tests cover
+  cancellation and late results across thread/connection changes.
+- Initial Gradle cache and Rust fixture socket checks required sandbox access;
+  those checks passed after retrying with the necessary access. Existing managed
+  toolchains were used without changing shared configuration.
+- No commit, release, deployment or phone installation was performed. The
+  helper-capable forwarder must be deployed separately before distributing the
+  Android change. Missing helper support shows unavailable cost without a
+  whole-file fallback.

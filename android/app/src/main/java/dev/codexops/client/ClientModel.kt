@@ -47,8 +47,6 @@ constructor(
     override fun returnSnoozedTask(id: String) = snoozeController.restore(id)
     override fun refreshSnoozes() = snoozeController.refresh()
     private val modelEnrichment = ModelEnrichmentRepository(rpc, local)
-    private var chatCostJob: Job? = null
-    private var chatUsage: ChatUsage? = null
     private var chatUsagePath: String? = null
     @Volatile private var verifiedTaskGeneration: Long? = null
     private val taskTools = TaskToolRequests(viewModelScope, { rpc.generation },
@@ -68,6 +66,9 @@ constructor(
     private val remoteFileRepository = RemoteFileRepository(app)
     private val _state = MutableStateFlow(ScreenState(host = host))
     val state = _state.asStateFlow()
+    private val chatCosts = ChatCostController(viewModelScope, StockChatAccounting(rpc),
+        { rpc.generation }, { _state.value }, { modelEnrichment.catalogModels },
+        { cost -> _state.update { it.copy(chatCost = cost) } })
     private val weeklyUsage = WeeklyUsageController(viewModelScope, rpc, { _state.value },
         { usage -> _state.update { it.copy(weeklyUsage = usage) } })
     override fun refreshWeeklyUsage() = weeklyUsage.refresh()
@@ -119,6 +120,7 @@ constructor(
     private val todoController = TodoController(viewModelScope, local, ServiceTodoOperations(todoConnection),
         { _state.value }, { todo -> _state.update { it.copy(todo = todo) } })
     override fun openTodo() {
+        chatCosts.cancel()
         cancelStreamingHaptics()
         cancelList(); saveList()
         _state.update { it.copy(page = "todo", error = null) }
@@ -220,6 +222,7 @@ constructor(
 
     private fun showList(archive: Boolean) {
         if (_state.value.historyLoading) cancelHistory()
+        chatCosts.cancel()
         cancelStreamingHaptics()
         cancelList()
         saveList()
@@ -415,6 +418,7 @@ constructor(
                         )
                     }
                     weeklyUsage.disconnected()
+                    chatCosts.cancel()
                     resetApprovalContexts()
                     verifiedTaskGeneration = null
                     taskTools.cancelAll()
@@ -642,6 +646,7 @@ constructor(
 
     override fun settings() {
         cancelHistory()
+        chatCosts.cancel()
         cancelStreamingHaptics()
         reports.actions.add("settings")
         settingsOrigin = _state.value.page
@@ -663,7 +668,10 @@ constructor(
             "chat" -> if (chatOrigin == "archives") showList(true) else home()
             else -> home()
         }
-        if (_state.value.page == "chat") followUps.opened()
+        if (_state.value.page == "chat") {
+            chatCosts.opened(chatUsagePath)
+            followUps.opened()
+        }
     }
 
     override fun home() {
@@ -677,6 +685,7 @@ constructor(
 
     override fun openArchives() { showList(true) }
     override fun openSnoozed() {
+        chatCosts.cancel()
         cancelStreamingHaptics(); cancelList(); saveList()
         _state.update { it.copy(page = "snoozed", error = null) }
         snoozeController.refresh()
@@ -960,8 +969,7 @@ constructor(
             try {
                 selection++
                 resetApprovalContexts()
-                chatCostJob?.cancel()
-                chatUsage = null
+                chatCosts.cancel()
                 chatUsagePath = null
                 timeline.clear()
                 hapticTurn = null
@@ -1129,6 +1137,7 @@ constructor(
             // Metadata-only resume cannot recover unfinished patch details.
             fileApprovalContexts.resumed(response, epoch)
             val thread = response.map("thread")
+            chatUsagePath = thread.str("path").takeIf { it.startsWith('/') && !it.contains('\u0000') }
             _state.update { it.copy(
                 title = thread.str("name").ifBlank { thread.str("preview").take(80).ifBlank { it.title } },
                 threadCwd = thread.str("cwd").takeIf(String::isNotBlank),
@@ -1155,7 +1164,10 @@ constructor(
                 publish()
             }
         }
-        if (current() && _state.value.ready) readQueue(id)
+        if (current() && _state.value.ready) {
+            readQueue(id)
+            if (current()) refreshChatCost()
+        }
     }
 
     private suspend fun readRecoveryPage(recovery: RecoveryHistory, n: Int, epoch: Long) {
@@ -1199,8 +1211,7 @@ constructor(
     private suspend fun loadTask(id: String) {
         olderCursors.clear()
         cancelStreamingHaptics()
-        chatCostJob?.cancel()
-        chatUsage = null
+        chatCosts.cancel()
         chatUsagePath = null
         val n = ++selection
         val epoch = rpc.generation
@@ -1571,7 +1582,7 @@ constructor(
             }
             if (n == modelCatalogSelection && _state.value.ready && rpc.generation == generation) {
                 _state.update { it.copy(models = enriched) }
-                repriceChatCost()
+                chatCosts.reprice()
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -2127,8 +2138,7 @@ constructor(
                         ),
                     )
                 val thread = result.map("thread")
-                chatCostJob?.cancel()
-                chatUsage = null
+                chatCosts.cancel()
                 chatUsagePath = thread.str("path").takeIf { it.startsWith('/') && !it.contains('\u0000') }
                 val createdId = thread.str("id")
                 if (createdId.isEmpty())
@@ -2653,6 +2663,7 @@ constructor(
     private fun handle(event: JsonObject) {
         if (event.str("_epoch").toLongOrNull()?.let { it != rpc.generation } == true) return
         if (event.str("method") == "connection/lost") {
+            chatCosts.cancel()
             val oversized = event.str("reason") == "messageTooLarge"
             if (oversized) historySizeRejected()
             weeklyUsage.disconnected()
@@ -2804,7 +2815,6 @@ constructor(
             _state.update {
                 it.copy(attention = p.map("status")["activeFlags"].toString().contains("waiting"))
             }
-        if (method == "thread/tokenUsage/updated" || method == "turn/completed") refreshChatCost()
         if (method == "turn/completed" || method == "turn/diff/updated" ||
             method == "item/completed" && p.map("item").str("type") in setOf("fileChange", "commandExecution"))
             refreshWorktreeChanges()
@@ -2812,36 +2822,7 @@ constructor(
         publish()
     }
 
-    private fun repriceChatCost() {
-        val usage = chatUsage ?: return
-        _state.update { st -> st.copy(chatCost = estimateChatCost(usage, modelEnrichment.catalogModels)
-            .copy(staleUsage = st.chatCost.staleUsage)) }
-    }
-
-    private fun refreshChatCost() {
-        val path = chatUsagePath ?: return
-        val thread = _state.value.thread ?: return
-        val selected = selection
-        val generation = rpc.generation
-        fun current() = selection == selected && _state.value.thread == thread && rpc.generation == generation && _state.value.ready
-        chatCostJob?.cancel()
-        chatCostJob = viewModelScope.launch {
-            // Coalesce token notifications. Full stock fs/readFile is the available
-            // read adapter; retain only parsed usage, never rollout message text.
-            delay(500)
-            try {
-                val bytes = withTimeout(5_000) { rpc.readFile(path) }
-                val usage = withContext(Dispatchers.Default) { parseChatUsage(bytes, thread) }
-                if (current()) {
-                    chatUsage = usage
-                    _state.update { it.copy(chatCost = estimateChatCost(usage, modelEnrichment.catalogModels)) }
-                }
-            } catch (e: Exception) {
-                if (e is CancellationException && e !is TimeoutCancellationException) throw e
-                if (current()) _state.update { it.copy(chatCost = it.chatCost.copy(staleUsage = true)) }
-            }
-        }
-    }
+    override fun refreshChatCost() = chatCosts.opened(chatUsagePath)
 
     private fun publish() {
         _state.update { st ->
@@ -2998,6 +2979,7 @@ constructor(
     }
 
     override fun onCleared() {
+        chatCosts.cancel()
         taskTools.cancelAll()
         network.unregisterNetworkCallback(callback)
         todoConnection.close()

@@ -1,3 +1,4 @@
+pub mod accounting;
 mod todo;
 use sha2::{Digest, Sha256};
 use std::fs::OpenOptions;
