@@ -33,7 +33,7 @@ final class RemoteCodexUITests: XCTestCase {
         app.buttons["increment-button"].tap()
         app.buttons["increment-button"].tap()
         XCTAssertEqual(app.staticTexts["tap-count"].label, "Tap count: 2")
-        let note = app.textViews["note-input"]
+        let note = app.textFields["note-input"]
         XCTAssertTrue(note.waitForExistence(timeout: 5))
         note.tap()
         note.typeText("Hello iPhone")
@@ -46,7 +46,7 @@ final class RemoteCodexUITests: XCTestCase {
     func testStateSurvivesRestart() {
         let app = launchFresh()
         app.buttons["increment-button"].tap()
-        let note = app.textViews["note-input"]
+        let note = app.textFields["note-input"]
         XCTAssertTrue(note.waitForExistence(timeout: 5))
         note.tap()
         note.typeText("Saved fixture note")
