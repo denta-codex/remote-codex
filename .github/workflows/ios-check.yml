@@ -1,9 +1,9 @@
 name: iOS checks
 on:
   push:
-    paths: ['ios/**', 'scripts/ios', 'scripts/ios-*', '.github/workflows/ios-*.yml']
+    paths: ['ios/**', 'scripts/ios', 'scripts/ios-*', 'scripts/tests/ios-*', '.github/workflows/ios-*.yml']
   pull_request:
-    paths: ['ios/**', 'scripts/ios', 'scripts/ios-*', '.github/workflows/ios-*.yml']
+    paths: ['ios/**', 'scripts/ios', 'scripts/ios-*', 'scripts/tests/ios-*', '.github/workflows/ios-*.yml']
 permissions:
   contents: read
 concurrency:

@@ -5,15 +5,78 @@ umask 077
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 repo=denta-codex/remote-codex
+usage() {
+    echo 'Usage: scripts/ios check | watch RUN_ID | build REF EXPECTED_FULL_SHA [VERSION] | download RUN_ID EXPECTED_FULL_SHA [DEST]' >&2
+    exit 2
+}
 case "${1:-}" in
     check)
+        [[ "$#" == 1 ]] || usage
         revision="$(git rev-parse HEAD)"
         gh run list --repo "$repo" --workflow ios-check.yml --commit "$revision" \
             --json databaseId,headSha,status,conclusion,url --limit 5
         ;;
     watch)
-        [[ "${2:-}" =~ ^[0-9]+$ ]] || { echo 'Usage: scripts/ios watch RUN_ID' >&2; exit 2; }
+        [[ "$#" == 2 && "$2" =~ ^[0-9]+$ ]] || usage
         gh run watch "$2" --repo "$repo" --interval 30 --exit-status
         ;;
-    *) echo 'Usage: scripts/ios check | watch RUN_ID' >&2; exit 2 ;;
+    build)
+        [[ "$#" -ge 3 && "$#" -le 4 && "$3" =~ ^[0-9a-f]{40}$ ]] || usage
+        ref="$2"; revision="$3"; version="${4:-0.1.0}"
+        [[ "$ref" != -* && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || usage
+        [[ -z "$(git status --porcelain)" && "$(git rev-parse HEAD)" == "$revision" ]] || {
+            echo 'Development build requires a clean checkout at the explicit expected revision.' >&2; exit 1;
+        }
+        [[ "$(gh api "repos/$repo/commits/$ref" --jq .sha)" == "$revision" ]] || {
+            echo 'Remote ref differs from expected revision. No dispatch attempted.' >&2; exit 1;
+        }
+        default_branch="$(gh api "repos/$repo" --jq .default_branch)"
+        gh api "repos/$repo/contents/.github/workflows/ios-development.yml?ref=$default_branch" >/dev/null 2>&1 || {
+            echo 'Development workflow is absent from the default branch. Review and integrate it before dispatch.' >&2; exit 1;
+        }
+        workflow="$(gh api "repos/$repo/actions/workflows/ios-development.yml")"
+        [[ "$(jq -r .state <<< "$workflow")" == active ]] || {
+            echo 'Development workflow needs default-branch registration and activation.' >&2; exit 1;
+        }
+        # Exactly one dispatch. A lost response is uncertain; inspect runs before another request.
+        gh workflow run ios-development.yml --repo "$repo" --ref "$ref" \
+            -f "expected_revision=$revision" -f "version=$version" || {
+            echo 'Dispatch outcome may be uncertain. Inspect authoritative workflow runs; do not replay automatically.' >&2; exit 1;
+        }
+        echo "Dispatch accepted for $revision. Find the exact run ID before watch/download:"
+        echo "gh run list --repo $repo --workflow ios-development.yml --commit $revision --json databaseId,headSha,status,conclusion,displayTitle,url"
+        ;;
+    download)
+        [[ "$#" -ge 3 && "$#" -le 4 && "$2" =~ ^[0-9]+$ && "$3" =~ ^[0-9a-f]{40}$ ]] || usage
+        run_id="$2"; revision="$3"
+        run="$(gh api "repos/$repo/actions/runs/$run_id")"
+        jq -e --arg revision "$revision" --arg repo "$repo" \
+            '.head_sha == $revision and .repository.full_name == $repo and
+             .path == ".github/workflows/ios-development.yml" and .event == "workflow_dispatch" and
+             .status == "completed" and .conclusion == "success"' <<< "$run" >/dev/null || {
+            echo 'Run identity, workflow, event, or successful completion mismatch.' >&2; exit 1;
+        }
+        attempt="$(jq -r .run_attempt <<< "$run")"
+        [[ "$attempt" =~ ^[0-9]+$ ]] || exit 1
+        artifact="ios-development-$run_id-$attempt"
+        artifacts="$(gh api "repos/$repo/actions/runs/$run_id/artifacts?per_page=100")"
+        jq -e --arg name "$artifact" '[.artifacts[] | select(.name == $name and .expired == false)] | length == 1' <<< "$artifacts" >/dev/null || {
+            echo 'The exact-run development artifact is absent, expired, or ambiguous.' >&2; exit 1;
+        }
+        destination="${4:-$root/artifacts/ios/downloads/$run_id-$attempt}"
+        [[ ! -e "$destination" ]] || { echo 'Destination exists; inspect it or choose an unused directory.' >&2; exit 1; }
+        mkdir -p "$(dirname "$destination")"
+        staging="$(mktemp -d "$(dirname "$destination")/.ios-download.XXXXXX")"
+        trap 'rm -rf "$staging"' EXIT
+        gh run download "$run_id" --repo "$repo" --name "$artifact" --dir "$staging"
+        node scripts/ios-artifact.mjs "$staging" "$revision" "$run_id" "$attempt"
+        # A rerun racing retrieval changes authoritative attempt identity; never accept it silently.
+        [[ "$(gh api "repos/$repo/actions/runs/$run_id" --jq .run_attempt)" == "$attempt" ]] || {
+            echo 'Run attempt changed during retrieval. No package accepted.' >&2; exit 1;
+        }
+        mv "$staging" "$destination"
+        trap - EXIT
+        echo "Package: $destination"
+        ;;
+    *) usage ;;
 esac

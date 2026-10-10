@@ -12,6 +12,12 @@ const identity = {
   xcode: '16.4 (16F6)', runtime: 'iOS 18.6', device: 'iPhone 16',
   status: Number(process.env.IOS_CHECK_STATUS) === 0 ? 'success' : 'failure',
 };
+const coreLog = path.join(output, 'core-tests.log');
+if (existsSync(coreLog)) {
+  const matches = [...readFileSync(coreLog,'utf8').matchAll(/\[(\d+)\/(\d+)\] Testing /g)];
+  const coreStatus = readFileSync(path.join(report,'durations.tsv'),'utf8').split('\n').find(row=>row.startsWith('core-tests\t'))?.split('\t')[2];
+  identity.core_tests = {scheduled: Number(matches.at(-1)?.[2] ?? 0), status: coreStatus === '0' ? 'success' : 'failure'};
+}
 const result = path.join(output, 'Tests.xcresult');
 if (existsSync(result)) {
   try {
@@ -41,6 +47,7 @@ const lines = [ `iOS checks: **${identity.status}**`, '', `Revision: \`${identit
   'Apple Silicon · Xcode 16.4 (16F6) · iOS 18.6 · iPhone 16', '',
   '| Stage | Seconds | Exit status |', '| --- | ---: | ---: |',
   ...durations.map(row => '| '+row.split('\t').join(' | ')+' |') ];
+if (identity.core_tests) lines.push('', `Core tests: ${identity.core_tests.scheduled} scheduled, ${identity.core_tests.status}.`);
 if (identity.tests) lines.push('', `Tests: ${identity.tests.passedTests} passed; ${identity.tests.failedTests} failed.`);
 if (identity.report_error) lines.push('', identity.report_error);
 const summary = lines.join('\n')+'\n';

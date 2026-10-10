@@ -97,3 +97,78 @@ The reference is the committed Android revision at worktree creation. New Androi
 capabilities enter the checklist after integration. Checked-in stock schemas
 predate some Android contracts; verify consumed methods against the installed
 schema without modifying the host/server.
+
+## Grace build interface
+
+Commit and push an iOS change to a development branch. Unsigned checks run on
+pushes/PRs affecting `ios/`, the iOS helpers, or the iOS workflows. From that
+checkout, `scripts/ios check` lists runs for its exact HEAD, and
+`scripts/ios watch RUN_ID` follows an explicit run with 30-second updates.
+
+After review and authorized default-branch integration, `ios-development.yml`
+becomes manually dispatchable. Until then, a branch push proves unsigned checks
+only; a branch-local workflow file does not establish manual dispatch readiness.
+The workflow requires successful completed unsigned push checks at the same SHA.
+
+Prepare the `ios-development` GitHub environment with:
+
+- `IOS_DEVELOPMENT_CERTIFICATE_P12_BASE64`: Apple Development certificate and private key in P12 form, base64 encoded.
+- `IOS_DEVELOPMENT_CERTIFICATE_PASSWORD`: its P12 password.
+- `IOS_DEVELOPMENT_PROFILE_BASE64`: development profile for exactly `dev.codexops.client.ios`, including the explicitly selected iPhone UDID, base64 encoded.
+- Variable `IOS_DEVELOPMENT_TEAM_ID`: matching 10-character team ID.
+
+No App Store Connect key or distribution certificate is used. The development
+profile must be current and contain `get-task-allow=true`, a device list, and the
+matching app/team identifiers. The app requests no special capabilities.
+Credentials enter only the environment-authorized manual job. A temporary
+keychain is unlocked for this job, the previous search list is restored, and
+certificate/profile/private build outputs are deleted on exit. An `always()`
+workflow cleanup covers cancellation. Signed raw logs are discarded; failures
+report the failed stage and status, never certificate identities or profile data.
+
+From a clean checkout at the intended full source SHA:
+
+```sh
+scripts/ios build codex/ios-github-builds EXPECTED_FULL_SHA 0.1.0
+```
+
+This performs one dispatch. Inspect the authoritative run list if the request
+has an uncertain outcome; never dispatch again automatically. Find the returned
+revision's exact run ID, then wait for its completed success:
+
+```sh
+scripts/ios watch RUN_ID
+scripts/ios download RUN_ID EXPECTED_FULL_SHA
+```
+
+The optional third download argument selects an unused destination directory.
+Retrieval rejects another revision/workflow/event, incomplete or failed runs,
+expired or ambiguous artifacts, schema mismatch, extra package files, or a hash
+mismatch. It rechecks the authoritative attempt after retrieval. Default output
+is `artifacts/ios/downloads/RUN_ID-RUN_ATTEMPT/` and is private (`umask 077`).
+Artifacts expire after one day; download promptly. No `latest` lookup occurs.
+
+The GitHub artifact `ios-development-RUN_ID-RUN_ATTEMPT` contains exactly:
+
+- `RemoteCodex.ipa`
+- `metadata.json`
+- `SHA256SUMS` (SHA256 of `RemoteCodex.ipa`)
+
+Manifest keys (no old aliases): `schema_version=1`,
+`repository=denta-codex/remote-codex`, `revision` (full SHA), `run_id`,
+`run_attempt`, `artifact=RemoteCodex.ipa`, `sha256`,
+`bundle_id=dev.codexops.client.ios`, `version`, `build_number`,
+`signing=development`, `minimum_ios=18.0`, and
+`fixture_launch_argument=--fixture`. IDs/build/version are strings. Build numbers
+use `GITHUB_RUN_NUMBER.GITHUB_RUN_ATTEMPT`; a later run or explicit rerun gets a
+higher build number without shared counter state. Rebuilds remain explicit.
+
+Before upload, the job verifies the exported app signature, embedded profile,
+bundle, version, and build number. It retains only the IPA and small manifest,
+with measured stage durations in the run summary. Device-specific profile and
+installed-state checks belong to the USB tooling helper. Development IPAs embed
+the provisioning profile; the repository owner should account for registered
+UDIDs in that artifact's access policy.
+
+Signed export, physical installation, fixture launch, and upgrade retention
+remain unverified until signing material and the selected phone are ready.

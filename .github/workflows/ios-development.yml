@@ -1,0 +1,68 @@
+name: iOS development IPA
+run-name: iOS development ${{ inputs.expected_revision }}
+on:
+  workflow_dispatch:
+    inputs:
+      expected_revision:
+        description: Expected full source SHA (must match the selected workflow ref)
+        required: true
+        type: string
+      version:
+        description: Development app version
+        required: true
+        default: '0.1.0'
+        type: string
+permissions:
+  contents: read
+  actions: read
+jobs:
+  development:
+    runs-on: macos-15
+    timeout-minutes: 25
+    environment: ios-development
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Confirm immutable source and version
+        env:
+          EXPECTED_REVISION: ${{ inputs.expected_revision }}
+          IOS_VERSION: ${{ inputs.version }}
+        run: |
+          [[ "$EXPECTED_REVISION" =~ ^[0-9a-f]{40}$ && "$EXPECTED_REVISION" == "$GITHUB_SHA" ]]
+          [[ "$IOS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+      - name: Require completed unsigned checks for this exact revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$GITHUB_SHA&per_page=100" \
+            --jq '.workflow_runs | map(select(.path == ".github/workflows/ios-check.yml" and .event == "push")) | sort_by(.run_number) | last' > "$RUNNER_TEMP/ios-unsigned-gate.json"
+          jq -e --arg revision "$GITHUB_SHA" '.head_sha == $revision and .status == "completed" and .conclusion == "success"' "$RUNNER_TEMP/ios-unsigned-gate.json" >/dev/null
+      - name: Archive and export development IPA
+        env:
+          IOS_DEVELOPMENT_CERTIFICATE_P12_BASE64: ${{ secrets.IOS_DEVELOPMENT_CERTIFICATE_P12_BASE64 }}
+          IOS_DEVELOPMENT_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DEVELOPMENT_CERTIFICATE_PASSWORD }}
+          IOS_DEVELOPMENT_PROFILE_BASE64: ${{ secrets.IOS_DEVELOPMENT_PROFILE_BASE64 }}
+          IOS_DEVELOPMENT_TEAM_ID: ${{ vars.IOS_DEVELOPMENT_TEAM_ID }}
+          IOS_VERSION: ${{ inputs.version }}
+        run: scripts/ios-ci development
+      - name: Remove temporary signing material
+        if: always()
+        run: |
+          signing="$RUNNER_TEMP/remote-codex-ios-signing-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          if [[ -f "$signing/profile-path" ]]; then
+            profile="$(cat "$signing/profile-path")"
+            [[ "$profile" == "$HOME/Library/MobileDevice/Provisioning Profiles/"*.mobileprovision ]] && rm -f "$profile"
+          fi
+          security delete-keychain "$signing/development.keychain-db" >/dev/null 2>&1 || true
+          rm -rf "$signing" artifacts/ios/development/ArchiveDerivedData artifacts/ios/development/RemoteCodex.xcarchive
+          rm -f artifacts/ios/development/*.log
+      - name: Exact-run IPA and manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ios-development-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/ios/development/package/
+          retention-days: 1
+          if-no-files-found: error

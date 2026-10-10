@@ -47,6 +47,13 @@ finish() {
 }
 trap finish EXIT
 core_tests() { (cd ios && swift test --parallel); }
+helper_tests() {
+    node scripts/tests/ios-artifact.test.mjs || return
+    node scripts/tests/ios-cli.test.mjs || return
+    swiftc scripts/ios-profile.swift -o "$output/profile-validator" || return
+    swift scripts/tests/ios-profile.test.swift "$output/profile-validator"
+}
+stage helper-tests helper_tests
 stage core-tests core_tests
 runtime=com.apple.CoreSimulator.SimRuntime.iOS-18-6
 device=com.apple.CoreSimulator.SimDeviceType.iPhone-16
