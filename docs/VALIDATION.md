@@ -1,5 +1,14 @@
 # Validation
 
+## 2026-10-10 — Android 0.4.15 (47)
+
+- Source revision: `54fb7613b004b70165745abf52a822f4013df71a`.
+- Required checks, signed build, lint, package and signing verification passed.
+- APK SHA-256: `e72b4b9a2d9c1b74a4afd38783c58f4e8993f855f249f140674ffd837db27e3e`.
+- Outcome: Published to the private stable channel; authenticated HTTPS manifest and full APK verified.
+- Build log: `/home/agent/workspaces/remote-codex/artifacts/releases/run-20261010T023406Z-Lrbl8n.log.build.log`.
+- Installation remains user initiated. No forwarder deployment or phone installation was performed.
+
 ## History recovery and cost snapshot integration
 
 - Integrated recovery commit `1808b2e` and cleanup baseline `2940ea8`

@@ -1,12 +1,4 @@
-- Support multiple project scopes in chat search
-- Merge multi-project chat search
-- Render Markdown documents in file previews
-- Merge Markdown file preview rendering
-- Give connection hints based on Android VPN availability
-- Simplify connection banners around Tailscale guidance
-- Show live chat activity summaries and tool progress
-- Merge live chat activity summaries and tool progress
-- Load older conversation history automatically while scrolling
-- Merge automatic conversation scrollback
-- Bound Android transport and load large task history by item
-- Integrate live activity and scrollback with bounded Android history
+- Calculate bounded session cost snapshots on thread open
+- Simplify conversation loading to full-turn baseline
+- Add explicit smaller-history recovery
+- Integrate history recovery with bounded cost snapshots
