@@ -1,10 +1,17 @@
-- Calculate bounded session cost snapshots on thread open
-- Simplify conversation loading to full-turn baseline
-- Add explicit smaller-history recovery
-- Integrate history recovery with bounded cost snapshots
+- Codex worktree snapshot: archive-cleanup
+- Merge main into credential alert worktree
+- Notify foreground Android of credential requests over the existing WebSocket
+- Preserve stock frame limits while relaying large messages
+- Build Android 0.4.11 (43)
+- Record credential alert deployment and verified Android publication
+- Publish Android 0.4.12 (44)
 - Use focused cards for credential approvals
 - Improve socket probe diagnostics and stress recovery validation
-- Preserve reading position when sending or queuing
-- Allow discarding stuck bug reports and capture fresh report context
-- Load older history automatically with guarded retry and connection restoration
-- Mask credential fields by default with visibility toggles
+- Publish Android 0.4.13 (45)
+- Mask credential fields and replace redundant Autofill buttons with visibility toggle
+- Hide unavailable summary numbers and keep pill spacing consistent
+- Preserve reading position and allow discarding stuck bug reports
+- Load older history automatically and retain pages until navigation
+- Load history automatically and release retained pages on navigation
+- Integrate credential alerts and cards with current history and accounting
+- Merge reviewed automatic history source branch and preserve provenance
