@@ -3864,58 +3864,84 @@ class AppTest {
     }
 
     @Test
-    fun chatCostBadgeReadsHistoryUpdatesAndExplainsStaleAndUnknownPrices() {
-        compose.waitUntil(10000) { model.state.value.ready }
+    fun chatCostSnapshotUsesBoundedHelperOnlyOnOpenAndShowsUnavailableIcon() {
+        compose.waitUntil(10000) { model.state.value.ready && model.state.value.modelCatalogStatus != ModelCatalogStatus.Loading }
+        val reads = AtomicInteger()
+        val rolloutReads = AtomicInteger()
+        val opened = java.util.concurrent.CountDownLatch(1)
+        val finish = java.util.concurrent.CountDownLatch(1)
         var unavailable = false
-        val count = """{"input_tokens":1000000,"cached_input_tokens":200000,"output_tokens":100000,"reasoning_output_tokens":50000,"total_tokens":1100000}"""
-        val doubled = """{"input_tokens":2000000,"cached_input_tokens":400000,"output_tokens":200000,"reasoning_output_tokens":100000,"total_tokens":2200000}"""
-        val header = """{"type":"session_meta","payload":{"id":"task-test","model_provider":"openai"}}
-{"type":"turn_context","payload":{"model":"gpt-fixture","service_tier":"default"}}
-"""
-        fun event(total: String) = """{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":$total,"last_token_usage":$count}}}
-"""
-        var rollout = header + event(count)
-        var catalog = """{"models":[],"remote_codex":{"schema_version":1,"revision":"${"a".repeat(64)}","models":[{"provider":"openai","model":"gpt-fixture","pricing":{"currency":"USD","source_url":"https://models.dev/api.json","fetched_at":"2026-10-05T00:00:00Z","status":"fresh","rates":[{"tier":"standard","context":"short","input_per_million":4,"output_per_million":20,"cached_input_per_million":0.4}]}}]}}"""
+        var unknownPrices = false
+        val catalog = """{"models":[],"remote_codex":{"schema_version":1,"revision":"${"a".repeat(64)}","models":[{"provider":"openai","model":"gpt-fixture","pricing":{"currency":"USD","source_url":"https://models.dev/api.json","fetched_at":"2026-10-05T00:00:00Z","status":"fresh","rates":[{"tier":"standard","context":"short","input_per_million":4,"output_per_million":20,"cached_input_per_million":0.4}]}}]}}"""
         browserResponse = { method, params -> when {
             method == "config/read" -> obj("config" to obj("model_provider" to s("openai"),
                 "model_catalog_json" to s("/fixture/cost-catalog.json")))
             method == "thread/resume" -> obj("model" to s("gpt-fixture"), "thread" to obj(
                 "id" to params["threadId"], "name" to s(fixtureTitle), "cwd" to s("/fixture/remote-codex"),
                 "path" to s("/fixture/cost-rollout.jsonl")))
-            method == "fs/readFile" && params.str("path") in setOf("/fixture/cost-catalog.json", "/fixture/cost-rollout.jsonl") -> {
-                if (unavailable) obj("_fixtureError" to obj("code" to JsonPrimitive(-32603), "message" to s("Unavailable")))
-                else obj("dataBase64" to s(Base64.getEncoder().encodeToString(
-                    (if (params.str("path").endsWith("jsonl")) rollout else catalog).toByteArray())))
+            method == "fs/readFile" && params.str("path") == "/fixture/cost-rollout.jsonl" -> {
+                rolloutReads.incrementAndGet()
+                obj("_fixtureError" to obj("code" to JsonPrimitive(-32603), "message" to s("Whole rollout read forbidden")))
+            }
+            method == "fs/readFile" && params.str("path") == "/fixture/cost-catalog.json" ->
+                obj("dataBase64" to s(Base64.getEncoder().encodeToString((if (unknownPrices)
+                    """{"models":[],"remote_codex":{"schema_version":1,"revision":"${"b".repeat(64)}","models":[]}}"""
+                    else catalog).toByteArray())))
+            method == "command/exec" && params["command"]?.jsonArray?.firstOrNull()?.jsonPrimitive?.content == StockChatAccounting.EXECUTABLE -> {
+                reads.incrementAndGet()
+                val command = params["command"]!!.jsonArray
+                assertEquals("accounting", command[1].jsonPrimitive.content)
+                assertEquals("readOnly", params.map("sandboxPolicy").str("type"))
+                assertEquals(JsonPrimitive(false), params.map("sandboxPolicy")["networkAccess"])
+                assertEquals(JsonPrimitive(65536), params["outputBytesCap"])
+                val input = wire.parseToJsonElement(command[2].jsonPrimitive.content).jsonObject
+                opened.countDown()
+                finish.await(2, java.util.concurrent.TimeUnit.SECONDS)
+                val more = input["continuation"] !is JsonObject
+                val page = if (unavailable) obj("version" to JsonPrimitive(1), "status" to s("unavailable")) else obj(
+                    "version" to JsonPrimitive(1), "status" to s(if (more) "more" else "caughtUp"),
+                    "thread" to input["thread"], "boundary" to JsonPrimitive(114965362),
+                    "offset" to JsonPrimitive(if (more) 8388608 else 114965362),
+                    "continuation" to obj("fixture" to JsonPrimitive(true)),
+                    "buckets" to if (more) JsonArray(emptyList()) else wire.parseToJsonElement(
+                        """[{"provider":"openai","model":"gpt-fixture","tier":"default","context":"long","requests":1,"tokens":{"input_tokens":1000000,"cached_input_tokens":200000,"output_tokens":100000,"reasoning_output_tokens":50000,"total_tokens":1100000}}]"""))
+                obj("exitCode" to JsonPrimitive(0), "stdout" to s(page.toString()))
             }
             else -> null
         } }
         compose.runOnUiThread { model.refreshModels() }
         compose.waitUntil(10000) { model.state.value.models.any { it.enrichment != null } }
         compose.onNodeWithText(fixtureTitle).performClick()
-        compose.waitUntil(10000) { model.state.value.chatCost.usd != null }
-        compose.onNodeWithTag("chat-cost").assertIsDisplayed().assertTextContains("~\$5.28")
+        compose.waitUntil(10000) { opened.count == 0L && model.state.value.chatCost.status == ChatCostStatus.Calculating }
+        compose.onNodeWithContentDescription("Calculating cost at opening").assertIsDisplayed()
+        finish.countDown()
+        compose.waitUntil(10000) { model.state.value.chatCost.status == ChatCostStatus.Ready }
+        compose.onNodeWithTag("chat-cost").assertIsDisplayed().assertTextContains("~\$5.28 at open")
+        assertEquals(2, reads.get())
         captureComposer("floating-summary-cost.png")
-        compose.onNodeWithTag("chat-cost").performClick()
-        compose.onNodeWithText("Estimated chat cost").assertIsDisplayed()
-        compose.onNodeWithText("Subscription usage is not an extra charge.", substring = true).assertIsDisplayed()
-        compose.onNodeWithText("Done").performClick()
+        repeat(20) { emit(peer!!, "thread/tokenUsage/updated", obj("turnId" to s("turn-test"))) }
+        emit(peer!!, "turn/completed", obj("turn" to obj("id" to s("turn-test"), "status" to s("completed"))))
+        emit(peer!!, "thread/settings/updated", obj("threadSettings" to obj("model" to s("gpt-fixture"), "effort" to s("high"))))
+        compose.waitUntil(5000) { model.state.value.threadReasoningEffort == "high" }
+        android.os.SystemClock.sleep(800)
+        assertEquals(2, reads.get())
+        compose.onNodeWithTag("chat-cost").assertTextContains("~\$5.28 at open")
 
-        rollout += event(doubled)
-        emit(peer!!, "thread/tokenUsage/updated", obj("turnId" to s("turn-test")))
-        compose.waitUntil(10000) { model.state.value.chatCost.requests == 2 }
-        compose.onNodeWithTag("chat-cost").assertTextContains("~\$10.56")
         unavailable = true
-        emit(peer!!, "thread/tokenUsage/updated", obj("turnId" to s("turn-test")))
-        compose.runOnUiThread { model.refreshModels() }
-        compose.waitUntil(10000) { model.state.value.chatCost.staleUsage && model.state.value.chatCost.staleRates }
-        compose.onNodeWithTag("chat-cost").assertTextContains("~\$10.56*")
-
+        compose.runOnUiThread { model.settings(); model.back() }
+        compose.waitUntil(10000) { model.state.value.chatCost.status == ChatCostStatus.Unavailable && reads.get() == 3 }
+        compose.onNodeWithContentDescription("Cost unavailable. Retry calculation").assertIsDisplayed()
         unavailable = false
-        catalog = """{"models":[],"remote_codex":{"schema_version":1,"revision":"${"b".repeat(64)}","models":[]}}"""
+        compose.onNodeWithTag("chat-cost").performClick()
+        compose.waitUntil(10000) { model.state.value.chatCost.status == ChatCostStatus.Ready && reads.get() == 5 }
+        unknownPrices = true
         compose.runOnUiThread { model.refreshModels() }
-        compose.waitUntil(10000) { model.state.value.chatCost.usd == null }
-        compose.onNodeWithTag("chat-cost").assertTextContains("\$—*")
+        compose.waitUntil(10000) { model.state.value.chatCost.status == ChatCostStatus.Unavailable }
+        compose.onNodeWithContentDescription("Cost unavailable. Retry calculation").assertIsDisplayed()
+        assertEquals(5, reads.get())
+        assertEquals(0, rolloutReads.get())
         assertEquals(0, sent.get())
+        assertTrue(model.state.value.ready)
         compose.runOnUiThread { model.newChat() }
         compose.waitUntil(10000) { model.state.value.thread == null }
         compose.onNodeWithTag("chat-cost").assertDoesNotExist()

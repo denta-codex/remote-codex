@@ -318,6 +318,7 @@ interface ConversationActions {
     fun chooseMatchingProject(id: String)
     fun viewedReply(thread: String, signature: String) {}
     fun refreshModels() {}
+    fun refreshChatCost() {}
     fun selectSpeed(fast: Boolean) {}
     fun updateNewTaskOptions(options: NewTaskOptions)
 

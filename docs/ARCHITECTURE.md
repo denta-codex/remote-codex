@@ -475,25 +475,33 @@ separate pricing authority. Failed or malformed reads retain validated cached
 metadata marked stale; missing enrichment leaves stock model selection working.
 Refresh and connection-generation guards discard late results. Android model
 refresh fetches published data; it never refreshes server inventories or pricing.
-The chat header shows a compact API-equivalent cost estimate using this metadata.
-Android reads the stock thread response's rollout path with `fs/readFile` on open
-and after coalesced usage/completion notifications. It parses only accounting
-envelopes in memory, retaining request token counts and their recorded provider,
-model, and service tier; it never persists rollout text or a separate price table.
-The current model selection is never applied retroactively to earlier requests.
-Duplicate cumulative usage notifications are ignored, cached input and cache
-writes are priced separately, and reasoning tokens remain part of output.
-Exact catalog identities and explicit aliases also price historical models no
-longer present in the runtime picker. Price refresh reprices the retained usage.
+The chat header shows an API-equivalent cost snapshot calculated when a thread
+opens or reopens, including after reconnect. Token, completion, and settings
+notifications do not refresh cost; foregrounding the same page does not refresh
+it either. Explicit retry is available on the unavailable icon.
 
-The badge's details identify this as an estimate rather than a subscription
-charge. Unknown prices, malformed or missing usage, and incomplete histories
-produce unavailable or partial amounts, never assumed zero. Retained stale rates
-and failed usage reads are marked. Selection and connection guards discard late
-reads. This version uses full stock file reads with a five-second timeout and a
-16 MiB parsing limit; unavailable, oversized, or unsupported rollout paths leave
-the chat usable and the estimate unavailable/stale. Hosting, tool charges, and
-separate subagent chats are excluded. Whole-chat history includes inherited turns.
+Android invokes the installed Rust forwarder's read-only `accounting` subcommand
+through stock `command/exec` on its existing WSS connection. Each command scans a
+bounded local batch and returns only accounting buckets and continuation state.
+The first batch fixes the rollout byte boundary for this opening snapshot;
+subsequent appends cannot extend the calculation. No whole-rollout `fs/readFile`
+is performed for cost, and the forwarder does not decode or rewrite stock RPC.
+
+Accounting retains historical provider, model, service tier, and per-request
+context pricing band. Android prices aggregated input, cached reads, cache writes,
+and output using exact catalog identities and explicit aliases. Reasoning remains
+part of output. Duplicate cumulative counters are ignored; gaps, resets, unknown
+attribution, or unsupported records never become a complete dollar estimate.
+Price refresh can reprice retained accounting without rescanning the rollout.
+
+The badge shows a spinner while computing, an estimate labelled "at open" when
+complete, or a red unavailable/retry icon. Missing accounting, unavailable helper,
+unknown or stale-only prices, and failed reads show no partial dollar amount.
+Selection and connection guards discard late results. Calculation is limited to
+30 seconds overall; each stock command has a two-second deadline and 64 KiB
+output cap. Cost failure cannot initiate reconnection. There is no persistent
+accounting cache or transcript log. Hosting, tool charges, and separate subagent
+chats are excluded. See `docs/COST-ACCOUNTING.md` for the helper contract.
 
 Limits: no push notifications, directory attachments, terminal emulator, or interactive
 command previews. Activity text is bounded for phone rendering; full output

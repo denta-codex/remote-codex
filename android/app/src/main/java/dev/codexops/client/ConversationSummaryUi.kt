@@ -59,7 +59,7 @@ internal fun ConversationSummary(st: ScreenState, actions: ConversationActions) 
                     }
                     VerticalDivider(Modifier.height(18.dp), color = MaterialTheme.colorScheme.outlineVariant)
                 }
-                ChatCostBadge(st.chatCost.copy(staleUsage = st.chatCost.staleUsage || !st.ready))
+                ChatCostBadge(if (st.ready) st.chatCost else ChatCost(), actions::refreshChatCost)
             }
         }
     }

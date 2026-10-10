@@ -4,8 +4,22 @@ use std::net::SocketAddr;
 use std::path::Path;
 use tokio::net::TcpListener;
 
+fn main() -> io::Result<()> {
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if !arguments.is_empty() {
+        let response = if arguments.len() == 2 && arguments[0] == "accounting" {
+            remote_codex_forwarder::accounting::run(&arguments[1])
+        } else {
+            serde_json::json!({"version": 1, "status": "unavailable"})
+        };
+        println!("{response}");
+        return Ok(());
+    }
+    serve_main()
+}
+
 #[tokio::main]
-async fn main() -> io::Result<()> {
+async fn serve_main() -> io::Result<()> {
     let address = std::env::var("REMOTE_CODEX_LISTEN")
         .unwrap_or_else(|_| "127.0.0.1:8787".to_owned())
         .parse::<SocketAddr>()

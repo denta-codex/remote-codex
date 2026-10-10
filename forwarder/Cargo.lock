@@ -491,6 +491,7 @@ dependencies = [
  "httparse",
  "libc",
  "remote-codex-todo",
+ "serde",
  "serde_json",
  "sha2",
  "subtle",
