@@ -49,45 +49,22 @@ class ReadOnlyTaskTools(
         val metadata = call("thread/read", obj("threadId" to s(id), "includeTurns" to JsonPrimitive(false)))
         val info = metadata["thread"] as? JsonObject ?: invalid("The server omitted task metadata.")
         if (info.str("id") != id) invalid("The server returned a different task.")
+        val page = call("thread/turns/list", obj("threadId" to s(id), "cursor" to cursor?.let(::s),
+            "limit" to JsonPrimitive(limit), "sortDirection" to s("desc"), "itemsView" to s("full")))
+        val turns = page.objects("data")
+        if (turns.size > limit || turns.any { it["itemsView"] != null && it["itemsView"] != s("full") })
+            invalid("The server returned incomplete task history.")
+        val next = page.string("nextCursor", nullable = true)
+        if (next != null && next == cursor) invalid("The server repeated the history cursor.")
         val budget = OutputBudget(if (outputs) 20000 else 0)
-        var retained = 0
-        val historyLimit = 2 * 1024 * 1024
-        val page = try {
-            HistoryPages.read(id, cursor, turnLimit = limit, call = call,
-                normalize = { raw, _ ->
-                    val projected = item(raw, outputs, maxChars, budget)
-                    val size = retainedChars(projected, historyLimit)
-                    if (size > historyLimit) invalid("This history item is too large for the phone's task reader. Read it on the host; the original is retained.")
-                    if (retained + size > historyLimit) throw HistoryPageFull()
-                    retained += size
-                    projected
-                })
-        } catch (_: IllegalArgumentException) { invalid("Invalid or incomplete task history page or cursor.") }
-        val turns = page.turns
-        val next = page.nextCursor
         return obj("schemaVersion" to JsonPrimitive(1), "thread" to thread(info, detailed = true),
             "page" to obj("order" to s("newest_first"), "limit" to JsonPrimitive(limit),
-                "nextCursor" to next?.let(::s), "hasMore" to JsonPrimitive(next != null),
-                "partial" to JsonPrimitive(page.partial)),
+                "nextCursor" to next?.let(::s), "hasMore" to JsonPrimitive(next != null)),
             "turns" to JsonArray(turns.map { turn ->
                 if (turn.str("id").isBlank()) invalid("The server omitted a turn identity.")
                 JsonObject(turn.pick("id", "status", "error", "startedAt", "completedAt", "durationMs") +
-                    ("items" to JsonArray(turn.objects("items"))))
+                    ("items" to JsonArray(turn.objects("items").map { item(it, outputs, maxChars, budget) })))
             }))
-    }
-
-    private fun retainedChars(value: JsonElement, limit: Int): Int {
-        var size = 0L
-        fun count(element: JsonElement) {
-            if (size > limit) return
-            when (element) {
-                is JsonPrimitive -> size += element.content.length + 2
-                is JsonArray -> { size += 2; element.forEach { size++; count(it) } }
-                is JsonObject -> { size += 2; element.forEach { (key, field) -> size += key.length + 4; count(field) } }
-            }
-        }
-        count(value)
-        return size.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
     }
 
     private fun thread(value: JsonObject, detailed: Boolean): JsonObject {
@@ -103,11 +80,7 @@ class ReadOnlyTaskTools(
         val budget = OutputBudget(allowance)
         val base = value.pick("id", "type")
         val fields = when (value.str("type")) {
-            "userMessage" -> obj("content" to JsonArray(value.objects("content").map { part ->
-                if (part.str("type") == "image" && part.str("url").startsWith("data:"))
-                    obj("type" to s("image"), "omitted" to JsonPrimitive(true), "reason" to s("Inline image bytes omitted from task history tools."))
-                else part
-            }))
+            "userMessage" -> obj("content" to value["content"])
             "agentMessage" -> value.pick("text", "phase")
             "plan" -> value.pick("text")
             "hookPrompt" -> obj("fragmentCount" to JsonPrimitive((value["fragments"] as? JsonArray)?.size ?: 0))

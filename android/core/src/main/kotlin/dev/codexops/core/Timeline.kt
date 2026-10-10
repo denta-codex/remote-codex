@@ -3,7 +3,6 @@ package dev.codexops.core
 import kotlinx.serialization.json.*
 
 enum class MediaLocation {
-    CACHE,
     DATA_URL,
     HOST_PATH,
     BASE64,
@@ -73,9 +72,7 @@ data class Entry(
                     raw.list("content").mapIndexedNotNull { index, item ->
                         when (item.str("type")) {
                             "image" ->
-                                (item.str("cacheKey").takeIf(String::isNotBlank)?.let {
-                                    MediaRef("$key/image/$index", MediaLocation.CACHE, it)
-                                }) ?: item.str("url").takeIf { it.isNotBlank() }?.let {
+                                item.str("url").takeIf { it.isNotBlank() }?.let {
                                     MediaRef(
                                         "$key/image/$index",
                                         if (it.startsWith("data:image/")) MediaLocation.DATA_URL
@@ -99,7 +96,6 @@ data class Entry(
                     val result = raw.str("result")
                     val saved = raw.str("savedPath")
                     when {
-                        raw.str("cacheKey").isNotBlank() -> listOf(MediaRef("$key/generated", MediaLocation.CACHE, raw.str("cacheKey"), status))
                         result.isNotBlank() ->
                             listOf(
                                 MediaRef(
@@ -167,8 +163,7 @@ data class Entry(
                                 "text" ->
                                     parseAttachmentContext(it.str("text"))?.request
                                         ?: it.str("text")
-                                "image" -> if (it["_mediaUnavailable"] == JsonPrimitive(true)) "[Image unavailable; reopen the conversation to retry.]" else null
-                                "localImage" -> null
+                                "image", "localImage" -> null
                                 else -> "[${it.str("type")}]"
                             }
                         }
@@ -190,30 +185,6 @@ data class Entry(
                 "reasoning" -> "Working…"
                 else -> raw.str("text").ifEmpty { raw.toString() }
             }
-}
-
-/** Retain a bounded tool preview, never the entire output or unknown tool payload. */
-const val TOOL_PREVIEW_CHARS = 65536
-fun boundedToolItem(item: JsonObject, cursor: String? = null): JsonObject {
-    if (item.str("type") in setOf("userMessage", "agentMessage", "plan", "imageView", "imageGeneration")) return item
-    var remaining = TOOL_PREVIEW_CHARS
-    var omitted = false
-    fun bounded(value: JsonElement): JsonElement = when (value) {
-        is JsonPrimitive -> if (value.isString) {
-            val text = value.content
-            val take = minOf(text.length, remaining)
-            remaining -= take
-            if (take < text.length) omitted = true
-            s(text.take(take))
-        } else value
-        is JsonArray -> JsonArray(value.map(::bounded))
-        is JsonObject -> JsonObject(value.mapValues { bounded(it.value) })
-    }
-    // Identities must remain intact even when an output exhausts the preview budget.
-    val fields = item.filterKeys { it !in setOf("id", "type", "status", "_detailsCursor", "_detailsOmitted") }
-    val safe = bounded(JsonObject(fields)).jsonObject
-    return JsonObject(safe + item.filterKeys { it in setOf("id", "type", "status") } +
-        if (omitted || item["_detailsOmitted"] == JsonPrimitive(true)) obj("_detailsOmitted" to JsonPrimitive(true), "_detailsCursor" to (cursor?.let(::s) ?: item["_detailsCursor"])) else emptyMap())
 }
 
 /** Updated only on the owning UI coroutine. Snapshots replace, deltas append. */
@@ -345,7 +316,7 @@ class Timeline {
                         },
                     )))
                 } else item
-                val e = Entry(turn, boundedToolItem(raw), progress[key].orEmpty(), item.str("type") == "reasoning" && method == "item/completed")
+                val e = Entry(turn, raw, progress[key].orEmpty(), item.str("type") == "reasoning" && method == "item/completed")
                 entries[e.key] = e
             }
             "item/reasoning/summaryPartAdded",
@@ -385,9 +356,7 @@ class Timeline {
                     Entry(
                         turn,
                         JsonObject(
-                            if (kind == "commandExecution") boundedToolItem(JsonObject(old +
-                                (field to s(old.str(field) + p.str("delta")))))
-                            else old + (field to s((old.str(field) + p.str("delta")).takeLast(100000)))
+                            old + (field to s((old.str(field) + p.str("delta")).takeLast(100000)))
                         ),
                     )
             }

@@ -1042,12 +1042,7 @@ class AppTest {
     @Volatile private var rejectQueueRead = false
     private val userInputResponses = CopyOnWriteArrayList<JsonObject>()
     private val serverRequestResponses = CopyOnWriteArrayList<JsonObject>()
-    private val historyRequests = CopyOnWriteArrayList<JsonObject>()
-    @Volatile private var rejectHistory = false
     @Volatile private var holdHistoryReply = false
-    @Volatile private var holdItemHistoryReply = false
-    private val itemHistoryRequests = CopyOnWriteArrayList<JsonObject>()
-    private val scrollbackTurns = CopyOnWriteArrayList<JsonObject>()
     @Volatile private var historyReplyExemption: String? = null
     private val heldHistoryRequests = CopyOnWriteArrayList<JsonElement>()
     private val app
@@ -1229,23 +1224,9 @@ class AppTest {
                                             return
                                         }
                                     }
-                                    if (method == "thread/turns/list") {
-                                        historyRequests.add(params)
-                                        if (rejectHistory) {
-                                            ws.send(obj("id" to m["id"], "error" to obj(
-                                                "code" to JsonPrimitive(-32000), "message" to s("Fixture history failure"))).toString())
-                                            return
-                                        }
-                                    }
                                     if (method == "thread/turns/list" && holdHistoryReply && params.str("threadId") != historyReplyExemption) {
                                         heldHistoryRequests.add(m.getValue("id"))
                                         return
-                                    }
-                                    if (method == "thread/items/list") {
-                                        itemHistoryRequests.add(params)
-                                        if (holdItemHistoryReply && params.str("threadId") != historyReplyExemption) {
-                                            heldHistoryRequests.add(m.getValue("id")); return
-                                        }
                                     }
                                     if (method == "thread/settings/update") {
                                         speedMutations.add(params)
@@ -1604,8 +1585,8 @@ class AppTest {
                                                     )
                                                 }
                                             }
-                                            "thread/turns/list" -> summaryHistory(params)
-                                            "thread/items/list" -> itemHistory(params)
+                                            "thread/turns/list" -> history()
+                                            "thread/items/list" -> historyItems(params)
                                             "thread/queue/list" ->
                                                 if (rejectQueueRead)
                                                     obj("_fixtureError" to obj("code" to JsonPrimitive(-32601), "message" to s("Queue unavailable")))
@@ -2011,6 +1992,20 @@ class AppTest {
         return obj("data" to JsonArray(listOf(turn)))
     }
 
+    // Report submission recovery still uses stock item reads independently of conversation loading.
+    private fun historyItems(params: JsonObject): JsonObject {
+        val turns = history().list("data").filter {
+            params.str("turnId").isBlank() || it.str("id") == params.str("turnId")
+        }
+        val rows = turns.flatMap { turn -> turn.list("items").map { item ->
+            obj("turnId" to turn["id"], "item" to item)
+        } }.let { if (params.str("sortDirection") == "desc") it.asReversed() else it }
+        val index = params.str("cursor").removePrefix("item-").ifBlank { "0" }.toInt()
+        val selected = rows.drop(index).take(params.str("limit").toIntOrNull() ?: 100)
+        return obj("data" to JsonArray(selected),
+            "nextCursor" to if (index + selected.size < rows.size) s("item-${index + selected.size}") else null)
+    }
+
     private fun emit(ws: WebSocket, method: String, params: JsonObject) {
         ws.send(
             obj(
@@ -2019,27 +2014,6 @@ class AppTest {
                 )
                 .toString()
         )
-    }
-
-    private fun summaryHistory(params: JsonObject): JsonObject {
-        val turns = history().list("data")
-        val index = params.str("cursor").removePrefix("turn-").ifBlank { "0" }.toInt()
-        val limit = params.str("limit").toIntOrNull() ?: 1
-        val selected = turns.drop(index).take(limit).map { turn ->
-            JsonObject(turn + ("itemsView" to s("summary")) + ("items" to JsonArray(turn.list("items").filter {
-                it.str("type") in setOf("agentMessage", "plan")
-            })))
-        }
-        return obj("data" to JsonArray(selected), "nextCursor" to if (index + selected.size < turns.size) s("turn-${index + selected.size}") else null)
-    }
-
-    private fun itemHistory(params: JsonObject): JsonObject {
-        val turns = scrollbackTurns.toList() + history().list("data") + approvalResumePage?.list("data").orEmpty()
-        val source = turns.distinctBy { it.str("id") }.filter { params.str("turnId").isBlank() || it.str("id") == params.str("turnId") }
-        val rows = source.flatMap { turn -> turn.list("items").asReversed().map { item -> obj("turnId" to turn["id"], "item" to item) } }
-        val index = params.str("cursor").removePrefix("item-").ifBlank { "0" }.toInt()
-        val selected = rows.drop(index).take(1)
-        return obj("data" to JsonArray(selected), "nextCursor" to if (index + selected.size < rows.size) s("item-${index + selected.size}") else null)
     }
 
     private fun fixtureImage(name: String = "fixture.png"): File =
@@ -2080,13 +2054,7 @@ class AppTest {
         compose.waitUntil(5000) { model.state.value.tasks.first().str("name") == fixtureTitle }
         demoPause(2000)
         compose.onNodeWithText(fixtureTitle).performClick()
-        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.entries.isNotEmpty() }
-        while (model.state.value.historyCursor != null) {
-            val before = model.state.value.historyCursor
-            compose.runOnUiThread { model.older() }
-            compose.waitUntil(5000) { model.state.value.historyCursor != before && !model.state.value.historyLoading }
-        }
-        compose.waitUntil(10000) { model.state.value.entries.size >= 40 }
+        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.entries.size >= 40 }
         compose.waitForIdle()
         compose.waitUntil(5000) {
             if (tallLastMessage) compose.onNodeWithText("Review note 1: Keep the layout clear and comfortable to read.").isDisplayed()
@@ -2718,6 +2686,11 @@ class AppTest {
 
     @Test
     fun conversationOpensFromResumePageWithoutWaitingForOlderHistory() {
+        historyOverride = obj("data" to JsonArray(listOf(obj(
+            "id" to s("earlier-turn"), "status" to s("completed"),
+            "items" to JsonArray(listOf(obj("id" to s("earlier-reply"),
+                "type" to s("agentMessage"), "text" to s("Earlier reply")))),
+        ))))
         approvalResumePage = obj("data" to JsonArray(listOf(obj(
             "id" to s("latest-turn"), "status" to s("completed"),
             "items" to JsonArray(listOf(obj("id" to s("latest-reply"),
@@ -2726,174 +2699,21 @@ class AppTest {
         holdHistoryReply = true
         compose.runOnUiThread { model.openTask("task-test") }
         compose.waitUntil(5000) { !model.state.value.busy && model.state.value.entries.any { it.text == "Latest reply" } }
-        assertNotNull(model.state.value.historyCursor)
+        assertEquals("older-turns", model.state.value.historyCursor)
         assertTrue(heldHistoryRequests.isEmpty())
-        compose.waitUntil(5000) { compose.onNodeWithText("Latest reply").isDisplayed() }
+        assertEquals("full", approvalResumeRequests.single().map("initialTurnsPage").str("itemsView"))
         compose.onNodeWithText("Latest reply").assertIsDisplayed()
-        compose.runOnUiThread { model.older() }
+        compose.onNodeWithText("Load earlier messages").performScrollTo().assertIsDisplayed()
+        compose.waitForIdle()
+        assertTrue("Scrolling alone must not fetch history", heldHistoryRequests.isEmpty())
+        compose.onNodeWithText("Load earlier messages").performClick()
         compose.waitUntil(5000) { heldHistoryRequests.isNotEmpty() }
         holdHistoryReply = false
         heldHistoryRequests.forEach { peer!!.send(obj("id" to it, "result" to history()).toString()) }
-    }
-
-    private fun scrollbackPage(index: Int, cursor: String? = null, tall: Boolean = false): JsonObject =
-        obj("data" to JsonArray(listOf(obj("id" to s("back-$index"), "status" to s("completed"),
-            "items" to JsonArray(listOf(
-                obj("id" to s("user"), "type" to s("userMessage"), "content" to JsonArray(listOf(
-                    obj("type" to s("text"), "text" to s("Scrollback question $index"))))),
-                obj("id" to s("command"), "type" to s("commandExecution"),
-                    "command" to s("fixture-check"), "status" to s("completed"),
-                    "aggregatedOutput" to s("Large fixture output\n".repeat(10000))),
-                obj("id" to s("reply"), "type" to s("agentMessage"), "text" to s(
-                    if (tall) (1..35).joinToString("\n\n") { "Scrollback paragraph $index.$it: Keep this paragraph steady while loading." }
-                    else "Scrollback reply $index")),
-            ))))), "nextCursor" to cursor?.let(::s))
-
-    private fun openScrollback(tall: Boolean = false) {
-        approvalResumePage = scrollbackPage(3, "before-3", tall)
-        holdHistoryReply = true
-        compose.runOnUiThread { model.openTask("task-test") }
-        compose.waitUntil(5000) { !model.state.value.busy && model.state.value.entries.any { it.turn == "back-3" } }
-        compose.waitForIdle()
-        assertTrue("Opening must not crawl history", historyRequests.isEmpty())
-    }
-
-    private fun finishScrollback(page: JsonObject) {
-        scrollbackTurns.addAll(page.list("data"))
-        val request = heldHistoryRequests.last()
-        peer!!.send(obj("id" to request, "result" to page).toString())
-        compose.waitUntil(5000) { !model.state.value.historyLoading }
-        compose.waitForIdle()
-    }
-
-    @Test
-    fun upwardScrollLoadsHistoryWithoutDuplicateRequestsAndPreservesAnchor() {
-        openScrollback(tall = true)
-        compose.onNodeWithTag("timeline").performTouchInput { swipeDown() }
-        compose.waitUntil(5000) { heldHistoryRequests.size == 1 }
-        assertTrue(model.state.value.historyLoading)
-        assertFalse(model.state.value.busy)
-        compose.onNodeWithTag("composer").performTextInput("Draft survives history loading")
-        compose.runOnUiThread { repeat(5) { model.older() } }
-        compose.waitForIdle()
-        assertEquals(1, historyRequests.size)
-        assertEquals(1, historyRequests.single()["limit"]?.jsonPrimitive?.int)
-        assertEquals("summary", historyRequests.single().str("itemsView"))
-        val paragraph = compose.onNodeWithText("Scrollback paragraph 3.1: Keep this paragraph steady while loading.")
-        paragraph.assertIsDisplayed()
-        val before = paragraph.getUnclippedBoundsInRoot().top
-        finishScrollback(scrollbackPage(2, tall = true))
-        paragraph.assertIsDisplayed()
-        assertTrue("Prepending Markdown moved the reader", kotlin.math.abs(
-            paragraph.getUnclippedBoundsInRoot().top.value - before.value) < 2f)
-        assertEquals("Draft survives history loading", model.state.value.draft)
-        assertNull(model.state.value.historyCursor)
-        emit(peer!!, "item/agentMessage/delta", obj("turnId" to s("back-3"),
-            "itemId" to s("reply"), "delta" to s("\n\nLive update while reading")))
-        compose.waitUntil(5000) { model.state.value.entries.last().text.endsWith("Live update while reading") }
-        compose.waitForIdle()
-        assertTrue(kotlin.math.abs(paragraph.getUnclippedBoundsInRoot().top.value - before.value) < 2f)
-    }
-
-    @Test
-    fun historyFailurePausesAutomaticLoadingUntilRetryAndStopsAtRepeatedCursor() {
-        openScrollback()
-        rejectHistory = true
-        holdHistoryReply = false
-        compose.onNodeWithTag("timeline").performTouchInput { swipeDown() }
-        compose.waitUntil(5000) { model.state.value.historyError }
-        compose.onNodeWithTag("history-retry").assertIsDisplayed()
-        compose.onNodeWithTag("timeline").performTouchInput { swipeDown() }
-        compose.waitForIdle()
-        assertEquals(1, historyRequests.size)
-        assertNull(model.state.value.error)
-        assertFalse(model.state.value.busy)
-        rejectHistory = false
-        holdHistoryReply = true
-        compose.onNodeWithTag("history-retry").performClick()
-        compose.waitUntil(5000) { heldHistoryRequests.size == 1 }
-        finishScrollback(scrollbackPage(2, "before-3"))
-        assertNull(model.state.value.historyCursor)
-        assertFalse(model.state.value.historyError)
-        assertEquals(2, historyRequests.size)
-    }
-
-    @Test
-    fun historyContinuesNearBeginningAndIgnoresRepliesAfterSwitchingChats() {
-        openScrollback()
-        compose.onNodeWithTag("timeline").performTouchInput { swipeDown() }
-        compose.waitUntil(5000) { heldHistoryRequests.size == 1 }
-        peer!!.send(obj("id" to heldHistoryRequests[0], "result" to
-            obj("data" to JsonArray(emptyList()), "nextCursor" to s("before-2"))).toString())
-        compose.waitUntil(5000) { heldHistoryRequests.size == 2 }
-        assertEquals("before-2", historyRequests.last().str("cursor"))
-        compose.runOnUiThread { model.newChat() }
-        compose.waitUntil(5000) { model.state.value.thread == null }
-        peer!!.send(obj("id" to heldHistoryRequests[1], "result" to scrollbackPage(1)).toString())
-        compose.waitForIdle()
-        assertTrue(model.state.value.entries.isEmpty())
-        assertFalse(model.state.value.historyLoading)
-        assertFalse(model.state.value.historyError)
-    }
-
-    @Test
-    fun historyReconnectDropsPendingPageAndAllowsFreshPagination() {
-        openScrollback()
-        compose.runOnUiThread { model.older() }
-        compose.waitUntil(5000) { heldHistoryRequests.size == 1 }
-        val oldRequest = heldHistoryRequests[0]
-        val previousResumes = approvalResumeRequests.size
-        compose.runOnUiThread { model.connect() }
-        compose.waitUntil(10000) {
-            approvalResumeRequests.size > previousResumes && model.state.value.ready && !model.state.value.busy
-        }
-        assertFalse(model.state.value.historyLoading)
-        peer!!.send(obj("id" to oldRequest, "result" to scrollbackPage(1)).toString())
-        compose.waitForIdle()
-        assertFalse(model.state.value.entries.any { it.turn == "back-1" })
-        compose.runOnUiThread { model.older() }
-        compose.waitUntil(5000) { heldHistoryRequests.size == 2 }
-        finishScrollback(scrollbackPage(2))
-        assertTrue(model.state.value.entries.any { it.turn == "back-2" })
-    }
-
-    @Test
-    fun historyDoesNotPrefetchWhenReadingFarFromBeginning() {
-        val source = longHistory(tallLastMessage = true).list("data")
-        approvalResumePage = obj("data" to JsonArray(listOf(JsonObject(source.first() +
-            ("items" to JsonArray(source.asReversed().flatMap { it.list("items") }))))),
-            "nextCursor" to s("older-than-checkpoints"))
-        holdHistoryReply = true
-        compose.runOnUiThread { model.openTask("task-test") }
-        compose.waitUntil(5000) { !model.state.value.busy && model.state.value.entries.size >= 20 }
-        compose.waitForIdle()
-        assertTrue(historyRequests.isEmpty())
         compose.waitUntil(5000) {
-            compose.onNodeWithText("Review note 1: Keep the layout clear and comfortable to read.").isDisplayed()
+            model.state.value.historyCursor == null && model.state.value.entries.any { it.text == "Earlier reply" }
         }
-        compose.waitForIdle()
-        compose.onNodeWithTag("jump-to-latest").performClick()
-        compose.waitUntil(5000) { latestReply().isDisplayed() }
-        compose.onNodeWithTag("timeline").performTouchInput {
-            swipe(center, center.copy(y = height * .85f), durationMillis = 1200)
-        }
-        compose.waitForIdle()
-        assertTrue("Reading within a tall recent reply must not crawl older history", historyRequests.isEmpty())
-    }
-
-    @Test
-    fun emptyRecentPageStillAllowsUpwardScrollback() {
-        approvalResumePage = obj("data" to JsonArray(emptyList()), "nextCursor" to s("older-empty"))
-        holdHistoryReply = true
-        compose.runOnUiThread { model.openTask("task-test") }
-        compose.waitUntil(5000) { !model.state.value.busy && model.state.value.historyCursor != null }
-        compose.waitForIdle()
-        assertTrue(historyRequests.isEmpty())
-        compose.onNodeWithTag("timeline").performTouchInput { swipeDown() }
-        compose.waitUntil(5000) { heldHistoryRequests.size == 1 }
-        finishScrollback(scrollbackPage(2))
-        compose.waitUntil(5000) { compose.onNodeWithText("Scrollback reply 2").isDisplayed() }
-        assertNull(model.state.value.historyCursor)
+        assertTrue(model.state.value.entries.any { it.text == "Latest reply" })
     }
 
     @Test
@@ -2932,101 +2752,12 @@ class AppTest {
     }
 
     @Test
-    fun hundredMiBTurnLoadsByItemAndLargeDetailsArePagedOnDemand() {
-        val output = "fixture-output-" + "x".repeat(5 * 1024 * 1024)
-        val items = (0 until 20).map { index -> obj("id" to s("command-$index"), "type" to s("commandExecution"),
-            "command" to s("fixture-command-$index"), "status" to s("completed"), "aggregatedOutput" to s(output)) } +
-            obj("id" to s("latest"), "type" to s("agentMessage"), "text" to s("Ed cards are ready"))
-        historyOverride = obj("data" to JsonArray(listOf(obj("id" to s("large-turn"), "status" to s("completed"), "items" to JsonArray(items)))))
-        approvalResumePage = obj("data" to JsonArray(listOf(obj("id" to s("large-turn"), "status" to s("completed")))))
-        compose.runOnUiThread { model.openTask("task-test") }
-        compose.waitUntil(5000) { itemHistoryRequests.isNotEmpty() }
-        compose.waitUntil(30000) { !model.state.value.busy && model.state.value.entries.size == 20 }
-        assertTrue(model.state.value.entries.any { it.text == "Ed cards are ready" })
-        assertNotNull(model.state.value.historyCursor)
-        assertTrue(model.state.value.entries.filter { it.kind == "commandExecution" }.all {
-            it.raw.str("aggregatedOutput").length <= TOOL_PREVIEW_CHARS && it.raw["_detailsOmitted"] == JsonPrimitive(true)
-        })
-        compose.runOnUiThread { model.older() }
-        compose.waitUntil(10000) { model.state.value.historyCursor == null && model.state.value.entries.size == 21 }
-        assertEquals(21, itemHistoryRequests.size)
-        assertTrue(itemHistoryRequests.all { it.str("limit") == "1" && it.str("sortDirection") == "desc" })
-        val entry = model.state.value.entries.first { it.kind == "commandExecution" }
-        runBlocking {
-            val first = model.loadToolDetails(entry, 0)
-            assertEquals(TOOL_PREVIEW_CHARS, first.text.length)
-            assertNotNull(first.nextOffset)
-            val next = model.loadToolDetails(entry, first.nextOffset!!)
-            assertTrue(next.text.isNotEmpty())
-        }
-        assertTrue(model.state.value.ready)
-        assertNull(model.state.value.error)
-    }
-
-    @Test
-    fun inlineImagesMoveToPrivateCacheWithoutRetainingBase64() {
-        val bytes = fixtureImage("inline-cache.png").readBytes()
-        val encoded = Base64.getEncoder().encodeToString(bytes)
-        val items = listOf(
-            obj("id" to s("photo"), "type" to s("userMessage"), "content" to JsonArray(listOf(
-                obj("type" to s("image"), "url" to s("data:image/png;base64,$encoded"))))),
-            obj("id" to s("generated"), "type" to s("imageGeneration"), "result" to s(encoded), "status" to s("completed")),
-        )
-        historyOverride = obj("data" to JsonArray(listOf(obj("id" to s("images"), "status" to s("completed"), "items" to JsonArray(items)))))
-        compose.runOnUiThread { model.openTask("task-test") }
-        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.entries.size == 2 }
-        val entries = model.state.value.entries
-        assertTrue(entries.all { it.media.single().location == MediaLocation.CACHE })
-        assertFalse(entries.any { it.raw.toString().contains(encoded) })
-        runBlocking { entries.forEach { assertArrayEquals(bytes, model.loadMedia(it.media.single())) } }
-        compose.onAllNodesWithTag("message-image").assertCountEquals(2)
-    }
-
-    @Test
-    fun itemHistoryMergesBufferedCompletionWithoutDuplicatingText() {
-        historyOverride = obj("data" to JsonArray(listOf(obj("id" to s("live-turn"), "status" to s("inProgress"),
-            "items" to JsonArray(listOf(obj("id" to s("reply"), "type" to s("agentMessage"), "text" to s("Hello"))))))))
-        holdItemHistoryReply = true
-        compose.runOnUiThread { model.openTask("task-test") }
-        compose.waitUntil(5000) { itemHistoryRequests.size == 1 && heldHistoryRequests.isNotEmpty() }
-        emit(peer!!, "item/agentMessage/delta", obj("turnId" to s("live-turn"), "itemId" to s("reply"), "delta" to s(" world")))
-        emit(peer!!, "item/completed", obj("turnId" to s("live-turn"), "item" to obj("id" to s("reply"), "type" to s("agentMessage"), "text" to s("Hello world"))))
-        emit(peer!!, "turn/completed", obj("turn" to obj("id" to s("live-turn"), "status" to s("completed"))))
-        holdItemHistoryReply = false
-        peer!!.send(obj("id" to heldHistoryRequests.first(), "result" to itemHistory(itemHistoryRequests.first())).toString())
-        compose.waitUntil(10000) { !model.state.value.busy && model.state.value.entries.singleOrNull()?.text == "Hello world" }
-        assertNull(model.state.value.activeTurn)
-        assertEquals("completed", model.state.value.turnStatuses["live-turn"])
-        assertEquals(1, itemHistoryRequests.size)
-    }
-
-    @Test
-    fun switchingTasksDiscardsLateItemPageAndStopsFurtherReads() {
-        historyOverride = obj("data" to JsonArray(listOf(obj("id" to s("old-turn"), "status" to s("completed"),
-            "items" to JsonArray(listOf(obj("id" to s("old-reply"), "type" to s("agentMessage"), "text" to s("Old reply"))))))))
-        holdItemHistoryReply = true
-        compose.runOnUiThread { model.openTask("task-test") }
-        compose.waitUntil(5000) { itemHistoryRequests.size == 1 && heldHistoryRequests.isNotEmpty() }
-        val response = itemHistory(itemHistoryRequests.first())
-        holdItemHistoryReply = false
-        historyOverride = obj("data" to JsonArray(emptyList()))
-        compose.runOnUiThread { model.home(); model.openTask("project-task") }
-        compose.waitUntil(10000) { model.state.value.thread == "project-task" && !model.state.value.busy }
-        peer!!.send(obj("id" to heldHistoryRequests.first(), "result" to response).toString())
-        compose.waitForIdle()
-        assertTrue(model.state.value.entries.isEmpty())
-        assertEquals("project-task", model.state.value.thread)
-        assertEquals(1, itemHistoryRequests.size)
-        assertNull(model.state.value.error)
-    }
-
-    @Test
-    fun oversizedHistoryItemKeepsDraftAndContentWithoutReconnectLoop() {
+    fun oversizedOlderTurnKeepsDraftAndContentWithoutReconnectLoop() {
         val started = java.util.concurrent.CountDownLatch(1)
         val resumes = AtomicInteger()
         val oversized = AtomicInteger()
         val mutations = AtomicInteger()
-        var rejectLargeItem = true
+        var rejectLargeTurn = true
         val raw = object : org.java_websocket.server.WebSocketServer(java.net.InetSocketAddress("127.0.0.1", 0), 1) {
             override fun onStart() { started.countDown() }
             override fun onOpen(socket: org.java_websocket.WebSocket, handshake: org.java_websocket.handshake.ClientHandshake) {}
@@ -3036,7 +2767,7 @@ class AppTest {
                 val request = wire.parseToJsonElement(text).jsonObject
                 val id = request["id"] ?: return
                 val params = request.map("params")
-                if (request.str("method") == "thread/items/list" && params.str("cursor") == "too-large" && rejectLargeItem) {
+                if (request.str("method") == "thread/turns/list" && params.str("cursor") == "too-large" && rejectLargeTurn) {
                     oversized.incrementAndGet()
                     val bytes = ByteArray(256 * 1024) { 120 }
                     repeat(129) { index -> socket.sendFragmentedFrame(org.java_websocket.enums.Opcode.TEXT,
@@ -3049,11 +2780,13 @@ class AppTest {
                     "thread/resume" -> {
                         resumes.incrementAndGet()
                         obj("thread" to obj("id" to s("task-test"), "name" to s("Large history")),
-                            "initialTurnsPage" to obj("data" to JsonArray(listOf(obj("id" to s("turn"), "status" to s("completed"))))))
+                            "initialTurnsPage" to obj("data" to JsonArray(listOf(obj(
+                                "id" to s("turn"), "status" to s("completed"), "items" to JsonArray(listOf(
+                                    obj("id" to s("reply"), "type" to s("agentMessage"), "text" to s("Retained reply")),
+                                )),
+                            ))), "nextCursor" to s("too-large")))
                     }
-                    "thread/items/list" -> if (params.str("cursor").isEmpty()) obj("data" to JsonArray(listOf(obj("turnId" to s("turn"),
-                        "item" to obj("id" to s("reply"), "type" to s("agentMessage"), "text" to s("Retained reply"))))), "nextCursor" to s("too-large"))
-                        else obj("data" to JsonArray(emptyList()))
+                    "thread/turns/list" -> obj("data" to JsonArray(emptyList()))
                     "turn/start", "turn/steer", "thread/start", "fs/writeFile" -> { mutations.incrementAndGet(); obj() }
                     else -> obj("data" to JsonArray(emptyList()))
                 }
@@ -3073,6 +2806,8 @@ class AppTest {
             }
             compose.waitUntil(10000) { model.state.value.ready }
             compose.runOnUiThread { model.openTask("task-test") }
+            compose.waitUntil(10000) { !model.state.value.busy && model.state.value.entries.any { it.text == "Retained reply" } }
+            compose.runOnUiThread { model.older() }
             compose.waitUntil(20000) { !model.state.value.busy && model.state.value.error?.contains("32 MiB") == true }
             assertFalse(model.state.value.ready)
             assertEquals("Keep this unsent message", model.state.value.draft)
@@ -3083,7 +2818,7 @@ class AppTest {
             assertEquals(1, resumes.get())
             assertEquals(1, oversized.get())
             assertEquals(0, mutations.get())
-            rejectLargeItem = false
+            rejectLargeTurn = false
             compose.runOnUiThread { model.connect() }
             compose.waitUntil(10000) { model.state.value.ready && !model.state.value.busy && resumes.get() == 2 }
             assertEquals("Keep this unsent message", model.state.value.draft)
@@ -5548,9 +5283,6 @@ class AppTest {
                         "items" to JsonArray(listOf(obj("id" to s("inspect-reply"), "type" to s("agentMessage"),
                             "text" to s("Read-only fixture answer"), "phase" to s("final")))),
                     ))), "nextCursor" to s("inspect-older"))
-                    "thread/items/list" -> obj("data" to JsonArray(listOf(obj("turnId" to s("inspect-turn"),
-                        "item" to obj("id" to s("inspect-reply"), "type" to s("agentMessage"),
-                            "text" to s("Read-only fixture answer"), "phase" to s("final"))))))
                     else -> obj()
                 }
             } else null
@@ -5581,13 +5313,13 @@ class AppTest {
         compose.waitUntil(5000) { serverRequestResponses.any { it.str("id") == "native-read" } }
         val read = data("native-read")
         assertEquals("Read-only fixture answer", read.list("turns").single().list("items").single().str("text"))
-        assertTrue(read.map("page").str("nextCursor").isNotBlank())
+        assertEquals("inspect-older", read.map("page").str("nextCursor"))
         assertEquals("task-test", model.state.value.thread)
         assertTrue(model.state.value.busy)
         assertTrue(model.state.value.decisions.isEmpty())
-        assertEquals(listOf("thread/list", "thread/read", "thread/turns/list", "thread/items/list"), calls.map { it.first })
+        assertEquals(listOf("thread/list", "thread/read", "thread/turns/list"), calls.map { it.first })
         assertEquals(JsonPrimitive(false), calls[1].second["includeTurns"])
-        assertEquals("summary", calls[2].second.str("itemsView"))
+        assertEquals("full", calls[2].second.str("itemsView"))
         holdHistoryReply = false
         heldHistoryRequests.forEach { peer!!.send(obj("id" to it, "result" to history()).toString()) }
         compose.waitUntil(10000) { !model.state.value.busy }
@@ -5792,18 +5524,18 @@ class AppTest {
     }
 
     @Test
-    fun fileApprovalRecoversLiveSnapshotBeforeHistoryFinishes() {
+    fun fileApprovalRecoversLiveSnapshotWithoutReadingPersistedHistory() {
         historyOverride = obj("data" to JsonArray(emptyList()))
         holdHistoryReply = true
-        holdItemHistoryReply = true
         approvalResumePage = fileApprovalPage()
         approvalResumeRequest = fileApprovalRequest()
         compose.runOnUiThread { model.openTask("task-test") }
         compose.waitUntil(10000) {
-            heldHistoryRequests.isNotEmpty() && model.state.value.decisions.size == 1 &&
+            !model.state.value.busy && model.state.value.decisions.size == 1 &&
                 model.state.value.fileApprovalContexts["88"]?.text?.contains("new content") == true
         }
-        assertTrue(model.state.value.entries.isEmpty())
+        assertTrue("Unfinished patches come from resume, not persisted history", heldHistoryRequests.isEmpty())
+        assertTrue(model.state.value.entries.any { it.kind == "fileChange" })
         assertTrue(serverRequestResponses.isEmpty())
         compose.onNodeWithText("Approve once").assertIsEnabled().performScrollTo().performClick()
         compose.waitUntil(5000) { serverRequestResponses.size == 1 }
@@ -5811,10 +5543,6 @@ class AppTest {
         assertEquals(1, approvalResumeRequests.size)
         assertEquals(FileApprovalContexts.resumeParams("task-test"), approvalResumeRequests.single())
         approvalResumeRequest = null
-        holdHistoryReply = false
-        holdItemHistoryReply = false
-        heldHistoryRequests.forEach { peer!!.send(obj("id" to it, "result" to history()).toString()) }
-        compose.waitUntil(5000) { !model.state.value.busy }
         assertTrue(model.state.value.decisions.isEmpty())
         assertEquals(1, serverRequestResponses.size)
     }

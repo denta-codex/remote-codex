@@ -51,10 +51,6 @@ class FileApprovalContexts {
     private fun record(turn: String, item: JsonObject, replace: Boolean) {
         if (turn.isBlank() || item.str("id").isBlank() || item.str("type") != "fileChange") return
         val key = turn to item.str("id")
-        if (boundedToolItem(item)["_detailsOmitted"] == kotlinx.serialization.json.JsonPrimitive(true)) {
-            if (replace) items[key] = ""
-            return
-        }
         val changes = item.list("changes")
         val text = if (changes.isNotEmpty() && changes.all { it.str("path").isNotBlank() })
             Entry(turn, item).text else ""
@@ -65,7 +61,7 @@ class FileApprovalContexts {
         /** Stock resume overlays the live turn; persisted item reads omit unfinished patches. */
         fun resumeParams(thread: String) = obj(
             "threadId" to s(thread), "excludeTurns" to JsonPrimitive(true),
-            "initialTurnsPage" to obj("limit" to JsonPrimitive(1), "itemsView" to s("summary"), "sortDirection" to s("desc")),
+            "initialTurnsPage" to obj("limit" to JsonPrimitive(1), "itemsView" to s("full"), "sortDirection" to s("desc")),
         )
     }
 }

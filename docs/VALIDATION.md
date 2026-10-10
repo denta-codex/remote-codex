@@ -1,5 +1,43 @@
 # Validation
 
+## Conversation loading baseline cleanup — unreleased
+
+- Starting revision: `d6ce9ee` (Android 0.4.14). Restored the conversation
+  loading and explicit "Load earlier messages" behavior from `812d416`,
+  retaining the independent live activity summaries/tool progress from
+  `0743f98` and the existing inbound transport protection.
+- Removed the item-page wrapper/cursors, automatic scrollback jobs and layout
+  effects, tool-preview truncation markers, complete-details downloader/cache,
+  and inline-image history rewriting. The read-only task tool again uses full
+  turn pages and server cursors directly. Cost loading, report submission, and
+  background activity monitoring were left unchanged.
+- Opening consumes the full recent resume page without refetching its items.
+  The approval fixture leaves persisted history empty and verifies that the
+  live resume snapshot supplies unfinished patch context. The manual-history
+  check verifies that scrolling alone does not fetch another page.
+- All 77 core tests and 157 app unit tests passed. Debug app/test APK assembly
+  and Android lint passed (zero errors, 42 warnings).
+- Eleven selected managed Android 16 fixture tests passed in three bounded
+  runs through `scripts/emulator-test --tests`:
+  `conversationOpensFromResumePageWithoutWaitingForOlderHistory`,
+  `fileApprovalRecoversLiveSnapshotWithoutReadingPersistedHistory`,
+  `fileApprovalReconnectRequiresServerReissueAndNeverReplaysReply`,
+  `oversizedOlderTurnKeepsDraftAndContentWithoutReconnectLoop`,
+  `textChatStreamsAndCanReopen`,
+  `liveToolProgressSurvivesStreamingAndReconnectWithoutDuplicatingSummaries`,
+  `streamingTallReplyKeepsVisibleParagraphStillWhenReading`,
+  `nativeTaskToolsReadDuringHistoryLoadingWithoutOpeningTasks`,
+  `imageOnlyUploadsAndRendersThroughStockRpc`,
+  `fileApprovalMissingDetailsStaysDisabledAndCanRetry`, and
+  `bugReportCapturesScreenAndStartsIsolatedFixTask`.
+  XML results are retained under ignored `artifacts/history-cleanup-validation/`.
+- This is an intermediate baseline, not a large-history fix. Full turns can
+  exceed the retained 32 MiB inbound ceiling, and loaded turns still accumulate
+  in memory. The size-rejection test verifies retained content/drafts and no
+  automatic reconnect or mutation replay; it does not prove large-turn usability.
+- No replacement loader, automatic fallback, streaming transport, release,
+  deployment, phone installation, or shared configuration change was made.
+
 ## 2026-10-09 — Android 0.4.14 (46)
 
 - Source revision: `e136b56ba227fe3e37a05c41bb54927e5a07851d`.

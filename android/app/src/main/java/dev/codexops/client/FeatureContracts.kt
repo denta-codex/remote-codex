@@ -196,8 +196,6 @@ data class ScreenState(
     val followUps: FollowUpState = FollowUpState(),
     val turnStatuses: Map<String, String> = emptyMap(),
     val historyCursor: String? = null,
-    val historyLoading: Boolean = false,
-    val historyError: Boolean = false,
     val draft: String = "",
     val attachments: List<DraftAttachment> = emptyList(),
     val newTaskOptions: NewTaskOptions = NewTaskOptions(),
@@ -301,7 +299,6 @@ interface SettingsActions {
 }
 
 interface ConversationActions {
-    suspend fun loadToolDetails(entry: Entry, offset: Int = 0): ToolDetailsPage = error("Complete details unavailable")
     fun sendFollowUp(text: String) {}
     fun refreshWorktreeChanges() {}
     fun assistantTextRendered(update: LiveAssistantText, visible: Boolean): Float? = null
