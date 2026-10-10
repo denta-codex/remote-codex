@@ -30,7 +30,26 @@ if (existsSync(result)) {
     const manifest = JSON.parse(readFileSync(path.join(output, 'attachments', 'manifest.json')));
     const selected = [];
     const attachmentNames = [];
-    for (const test of manifest) for (const attachment of test.attachments ?? []) {
+    const fixtureCases = {
+      'testFixtureChatAndSend': 'chat',
+      'testFixtureSettingsNeverOffersLiveConnection': 'settings',
+      'testDraftSurvivesRestart': 'draft',
+    };
+    for (const test of manifest) {
+      const attachments = test.attachments ?? [];
+      // Xcode's exporter can replace attachment names with test-based names.
+      // Each case explicitly captures its final synthetic screen; select that
+      // final PNG if the named attachment is unavailable in this manifest.
+      const identifier = test.testIdentifier ?? test.testName ?? '';
+      const kind = Object.entries(fixtureCases).find(([name]) => identifier.includes(name))?.[1];
+      const finalPNG = attachments.filter(item => /\.png$/i.test(item.exportedFileName ?? '')).at(-1);
+      if (kind && finalPNG) {
+        const {copyFileSync} = await import('node:fs');
+        const file = 'fixture-' + kind + '.png';
+        copyFileSync(path.join(output,'attachments',finalPNG.exportedFileName), path.join(report,'screenshots',file));
+        selected.push(file);
+      }
+      for (const attachment of attachments) {
       const name = attachment.suggestedHumanReadableName ?? attachment.name ?? '';
       attachmentNames.push({name, file: attachment.exportedFileName});
       const match = name.match(/fixture-(chat|settings|draft)(?=[^a-z]|$)/);
@@ -39,6 +58,7 @@ if (existsSync(result)) {
       const file = 'fixture-' + match[1] + '.png';
       copyFileSync(path.join(output, 'attachments', attachment.exportedFileName), path.join(report, 'screenshots', file));
       selected.push(file);
+      }
     }
     writeFileSync(path.join(report, 'attachment-index.json'), JSON.stringify(attachmentNames, null, 2)+'\n');
     identity.screenshots = [...new Set(selected)];
