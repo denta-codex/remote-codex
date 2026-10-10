@@ -87,6 +87,17 @@ private final class SystemWebSocket: RPCWebSocketTransport, @unchecked Sendable 
     private func sanitized(_ error: Error) -> RPCFailure {
         if let status = (task.response as? HTTPURLResponse)?.statusCode, status == 401 || status == 403 { return .unauthorized }
         if task.closeCode == .messageTooBig || (error as? URLError)?.code == .dataLengthExceedsMaximum { return .messageTooLarge }
+        // URLSession may report a rejected continuation as POSIX EMSGSIZE, including
+        // through an underlying NSError. Preserve the size failure without exposing
+        // the error description, URL, bearer header, or WebSocket contents.
+        var systemError: NSError? = error as NSError
+        for _ in 0..<4 {
+            guard let current = systemError else { break }
+            if current.domain == NSPOSIXErrorDomain && current.code == POSIXError.Code.EMSGSIZE.rawValue {
+                return .messageTooLarge
+            }
+            systemError = current.userInfo[NSUnderlyingErrorKey] as? NSError
+        }
         return (error as? RPCFailure) ?? .transport
     }
 }

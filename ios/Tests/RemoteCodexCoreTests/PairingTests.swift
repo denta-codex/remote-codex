@@ -3,7 +3,7 @@ import XCTest
 
 final class PairingTests: XCTestCase {
     func testAcceptsExistingTokenOnlyQR() {
-        let token = String(repeating: "a0123456789bcdef0", count: 4)
+        let token = String(repeating: "0123456789abcdef", count: 4)
         XCTAssertEqual(Pairing.parseSetupQR("remote-codex-setup-v1:" + token), token)
         XCTAssertEqual(parseSetupQR("remote-codex-setup-v1:" + token), token)
     }
