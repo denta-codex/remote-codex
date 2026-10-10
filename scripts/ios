@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Grace interface; all Xcode work runs on GitHub-hosted macOS.
+set -euo pipefail
+umask 077
+root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$root"
+repo=denta-codex/remote-codex
+case "${1:-}" in
+    check)
+        revision="$(git rev-parse HEAD)"
+        gh run list --repo "$repo" --workflow ios-check.yml --commit "$revision" \
+            --json databaseId,headSha,status,conclusion,url --limit 5
+        ;;
+    watch)
+        [[ "${2:-}" =~ ^[0-9]+$ ]] || { echo 'Usage: scripts/ios watch RUN_ID' >&2; exit 2; }
+        gh run watch "$2" --repo "$repo" --interval 30 --exit-status
+        ;;
+    *) echo 'Usage: scripts/ios check | watch RUN_ID' >&2; exit 2 ;;
+esac

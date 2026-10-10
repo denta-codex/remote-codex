@@ -84,6 +84,10 @@ uncertain mutations are never replayed. The original chat draft stays intact.
 
 ## Project
 
+The native iPhone scaffold in `ios/` targets iOS 18 and later, using the existing
+stock Codex WSS connection. See [iOS validation and development builds](docs/IOS.md).
+`ios-check.yml` runs unsigned checks on GitHub-hosted Apple Silicon macOS.
+
 - `android/app`: Compose interface, assistant entry point, local storage.
 - `android/core`: stock RPC, event dispatch and conversation reconciliation.
 - `forwarder`: authenticated Rust loopback WebSocket proxy to the existing Unix socket.

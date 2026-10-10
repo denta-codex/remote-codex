@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# GitHub macOS runner entry point. No SSH, signing updates, or publication.
+set -euo pipefail
+umask 077
+root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$root"
+[[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] || { echo 'Requires a GitHub Apple Silicon macOS runner.' >&2; exit 1; }
+[[ "${GITHUB_ACTIONS:-}" == true ]] || { echo 'Use scripts/ios from Grace to request GitHub builds.' >&2; exit 1; }
+[[ "$(xcodebuild -version)" == $'Xcode 16.4\nBuild version 16F6' ]] || { echo 'Pinned Xcode 16.4 (16F6) is unavailable.' >&2; exit 1; }
+action="${1:-}"
+case "$action" in check|development) ;; *) echo 'Usage: scripts/ios-ci check|development' >&2; exit 2 ;; esac
+output="$root/artifacts/ios/$action"
+mkdir -p "$output/report"
+sim=""
+cleanup() {
+    if [[ -n "$sim" ]]; then
+        xcrun simctl shutdown "$sim" >/dev/null 2>&1 || true
+        xcrun simctl delete "$sim" >/dev/null 2>&1 || true
+    fi
+}
+trap cleanup EXIT
+printf 'stage\tseconds\tstatus\n' > "$output/report/durations.tsv"
+stage() {
+    local name="$1" start="$SECONDS" status=0
+    shift
+    echo "Stage: $name"
+    "$@" > "$output/$name.log" 2>&1 || status=$?
+    printf '%s\t%s\t%s\n' "$name" "$((SECONDS-start))" "$status" >> "$output/report/durations.tsv"
+    # Only unsigned fixture jobs expose diagnostics. Signed logs can name identities/profiles.
+    if [[ "$status" != 0 && "$action" == check ]]; then
+        tail -n 100 "$output/$name.log" > "$output/report/$name-failure.log"
+        cat "$output/report/$name-failure.log"
+    fi
+    return "$status"
+}
+if [[ "$action" == development ]]; then
+    scripts/ios-sign "$output"
+    exit
+fi
+finish() {
+    local status=$?
+    trap - EXIT
+    cleanup
+    export IOS_CHECK_STATUS="$status"
+    node scripts/ios-report.mjs "$output" || true
+    exit "$status"
+}
+trap finish EXIT
+core_tests() { (cd ios && swift test --parallel); }
+stage core-tests core_tests
+runtime=com.apple.CoreSimulator.SimRuntime.iOS-18-6
+device=com.apple.CoreSimulator.SimDeviceType.iPhone-16
+sim="$(xcrun simctl create "RemoteCodex-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" "$device" "$runtime")"
+stage simulator-boot xcrun simctl bootstatus "$sim" -b
+args=(-project ios/RemoteCodex.xcodeproj -scheme RemoteCodex -configuration Debug
+    -destination "platform=iOS Simulator,id=$sim" -destination-timeout 60
+    -derivedDataPath "$output/DerivedData" CODE_SIGNING_ALLOWED=NO)
+stage simulator-build xcodebuild "${args[@]}" build-for-testing
+stage fixture-ui-tests xcodebuild "${args[@]}" test-without-building \
+    -resultBundlePath "$output/Tests.xcresult" \
+    -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 \
+    -test-timeouts-enabled YES -default-test-execution-time-allowance 60 -maximum-test-execution-time-allowance 90

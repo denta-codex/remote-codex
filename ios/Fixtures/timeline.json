@@ -1,0 +1,18 @@
+[
+  {
+    "turns": [{
+      "id": "fixture-turn",
+      "status": "inProgress",
+      "items": [
+        {"id": "fixture-user", "type": "userMessage", "content": [{"type": "text", "text": "A synthetic question"}]},
+        {"id": "fixture-agent", "type": "agentMessage", "text": "Hello"}
+      ]
+    }],
+    "events": [
+      {"method": "item/agentMessage/delta", "params": {"threadId": "fixture-thread", "turnId": "fixture-turn", "itemId": "fixture-agent", "delta": " fixture"}},
+      {"method": "item/completed", "params": {"threadId": "fixture-thread", "turnId": "fixture-turn", "item": {"id": "fixture-agent", "type": "agentMessage", "text": "Hello fixture"}}},
+      {"method": "turn/completed", "params": {"threadId": "fixture-thread", "turn": {"id": "fixture-turn", "status": "completed"}}}
+    ],
+    "expected": {"entries": 2, "activeTurnID": null, "lastText": "Hello fixture"}
+  }
+]
