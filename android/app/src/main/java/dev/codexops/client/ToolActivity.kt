@@ -60,7 +60,8 @@ private fun JsonElement?.display(): String = when (this) {
 private val messageKinds = setOf("userMessage", "agentMessage", "plan", "imageView", "imageGeneration")
 
 internal fun conversationRows(entries: List<Entry>, activeTurn: String?, connected: Boolean,
-    turnStatuses: Map<String, String> = emptyMap(), waitingForUser: Boolean = false): List<ConversationRow> {
+    turnStatuses: Map<String, String> = emptyMap(), waitingForUser: Boolean = false,
+    groupStarts: Set<String> = emptySet()): List<ConversationRow> {
     val changes = completedTurnChanges(entries, turnStatuses)
     val representedEdits = changes.keys.let { turns ->
         entries.filter { it.turn in turns && it.isRecordedFileChange() }.map { it.key }.toSet()
@@ -116,6 +117,7 @@ internal fun conversationRows(entries: List<Entry>, activeTurn: String?, connect
         group = mutableListOf()
     }
     visible.forEach { entry ->
+        if (entry.key in groupStarts) flush(false)
         if (entry.key in representedEdits) {
             // Completed patches are presented once, through the changes row.
         } else if (entry.kind in messageKinds) {

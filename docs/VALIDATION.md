@@ -1,5 +1,28 @@
 # Validation
 
+## 2026-10-10 — Automatic conversation scrollback, unreleased
+
+- Based on `f49f535` / Android 0.4.15 (47); no version bump or publication.
+- One older page is prefetched after opening is positioned. Fresh upward input
+  near the loaded boundary fetches another page through the existing serialized
+  loader. Downward backtracking uses retained entries. Generic failures require
+  explicit retry; oversized responses retain the explicit recovery flow.
+- Retention has no eviction budget. Leaving the conversation for the list,
+  snoozed chats, or todo clears its timeline and selected entries; settings
+  temporarily retains them. This deliberately does not promise total-memory
+  safety or arbitrary large-item support.
+- Core unit tests: 83 passed; app unit tests: 161 passed, including recovery-page
+  group identity preservation. Android compilation and lint passed.
+- Eight focused managed-emulator tests passed across smaller runs: automatic
+  upward loading/backtracking/retry/cache release; opening independent of a held
+  prefetch; navigation and late replies; tall streaming reply reading position;
+  independent bounded cost snapshot; oversized older turn; explicit batched,
+  single-item and skip recovery; oversized opening without a full-resume loop.
+- Initial fixture failures were corrected for real user scrolling and asynchronous
+  disconnect timing. Two intermediate batches hit the three-minute deadline;
+  the corrected automatic test and the remaining smaller regression groups passed.
+- Retained regression reports: `artifacts/history-scroll-validation/`.
+
 ## 2026-10-10 — Android 0.4.15 (47)
 
 - Source revision: `54fb7613b004b70165745abf52a822f4013df71a`.
